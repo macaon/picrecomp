@@ -670,6 +670,7 @@ static struct {
     RtState rt;
     bool rt_dirty;
     NvnProgram *program;
+    NvnProgram bound_stages;
     uint8_t blend[8][8];
     uint32_t channel_mask;
     uint8_t color_state[4], ds[8], ms[0x18], poly[4];
@@ -680,6 +681,7 @@ static struct {
     int nstream;
     Range vbuf[16], ubuf[6][18], sbuf[6][16];
     uint64_t tex[6][32], img[6][8];
+    uint64_t separate_tex[6][128], separate_smp[6][128];
     NvnDescPool *tpool, *spool;
     float viewport[16][4];
     int32_t scissor[16][4];
@@ -1558,9 +1560,19 @@ typedef struct { NvnTexture *key; TexBackend copy; } Snap;
 static Snap snaps[16];
 static int nsnaps;
 
+static uint64_t shader_texture_handle(int stage, const ShaderTexture *tex) {
+    if (tex->bindless) {
+        unsigned texture = (tex->bindless_offset - 0x168) / 8;
+        unsigned sampler = (tex->separate_sampler_offset - 0x568) / 8;
+        if (texture >= 128 || sampler >= 128) return 0;
+        return st.separate_tex[stage][texture] | st.separate_smp[stage][sampler];
+    }
+    int slot = ((int)tex->handle_offset - 0x20) / 8;
+    return (slot >= 0 && slot < 32) ? st.tex[stage][slot] : 0;
+}
+
 static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
-    int slot = ((int)st_->handle_offset - 0x20) / 8;
-    uint64_t h = (slot >= 0 && slot < 32) ? st.tex[stage][slot] : 0;
+    uint64_t h = shader_texture_handle(stage, st_);
     uint32_t tic = h & 0xFFFFF;
     if (!h || !st.tpool || tic >= (uint32_t)st.tpool->count) return NULL;
     return ((NvnTexEntry *)st.tpool->entries)[tic].tex;
@@ -1651,7 +1663,7 @@ static void ct_draw(Prog *pr, const char *what) {
     for (int sg = 0; sg < 2; sg++)
         for (int i = 0; i < (infos[sg] ? infos[sg]->ntex : 0); i++) {
             NvnTexture *t = shader_texture_object(sg, &infos[sg]->tex[i]);
-            if (t) LOG(" %s%p/%#x", sg ? "" : "v:", (void *)t, t->format);
+            if (t) LOG(" %s%p/%#x/%ux%u", sg ? "" : "v:", (void *)t, t->format, t->width, t->height);
         }
     LOG("\n");
 }
@@ -2320,8 +2332,7 @@ void vk_exec_reset(void) {
 
 static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo *out, float sc[2], uint32_t wh[2]) {
     ShaderTexture *st_ = &si->tex[i];
-    int slot = ((int)st_->handle_offset - 0x20) / 8;  // 64-bit handles from offset 0x20
-    uint64_t h = (slot >= 0 && slot < 32) ? st.tex[stage][slot] : 0;
+    uint64_t h = shader_texture_handle(stage, st_);
     VkImageView view = VK_NULL_HANDLE;
     VkSampler smp = VK_NULL_HANDLE;
     uint32_t tic = h & 0xFFFFF, tsc = (uint32_t)(h >> 20) & 0xFFF;
@@ -3517,7 +3528,24 @@ static void exec_list(uint64_t handle, int depth) {
             for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) exec_list(h[i], depth + 1);
             break;
         }
-        case CMD_BIND_PROGRAM: st.program = (NvnProgram *)(uintptr_t)r->x[0]; break;
+        case CMD_BIND_PROGRAM: {
+            const NvnProgram *program = (const NvnProgram *)(uintptr_t)r->x[0];
+            uint32_t mask = (uint32_t)r->x[1] & 0x3f;
+            NvnProgram *bound = &st.bound_stages;
+            for (unsigned stage = 0; stage < 6; stage++) {
+                uint32_t bit = 1u << stage;
+                if (!(mask & bit)) continue;
+                if (program && (program->stage_mask & bit)) {
+                    bound->stages[stage] = program->stages[stage];
+                    bound->stage_mask |= bit;
+                } else {
+                    bound->stages[stage] = (NvnShaderStage){0};
+                    bound->stage_mask &= ~bit;
+                }
+            }
+            st.program = bound->stage_mask ? bound : NULL;
+            break;
+        }
         case CMD_BIND_BLEND: { uint8_t *b = x; memcpy(st.blend[b[0] & 7], b, 8); break; }
         case CMD_BIND_CHANNEL_MASK: memcpy(&st.channel_mask, x, 4); break;
         case CMD_BIND_COLOR: memcpy(st.color_state, x, 4); break;
@@ -3547,6 +3575,13 @@ static void exec_list(uint64_t handle, int depth) {
             for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 32 && r->x[0] < 6; i++)
                 memcpy(&st.tex[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
             break;
+        case CMD_BIND_SEPARATE_TEXTURES:
+        case CMD_BIND_SEPARATE_SAMPLERS: {
+            uint64_t (*bindings)[128] = r->op == CMD_BIND_SEPARATE_TEXTURES ? st.separate_tex : st.separate_smp;
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 128 && r->x[0] < 6; i++)
+                memcpy(&bindings[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
+            break;
+        }
         case CMD_BIND_IMAGES:
             for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 8 && r->x[0] < 6; i++)
                 memcpy(&st.img[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);

@@ -36,6 +36,8 @@ struct KThread {
     // in-place reboot (kernel_stop_threads): thread_main's setjmp point, where the thread unwinds to and ends
     jmp_buf unwind;
     bool started, finished;
+    bool paused;  // protected by g_klock
+    Cpu svc_context;  // latest syscall entry, protected by g_klock
     KThread *anext;        // every thread of this boot (g_klock)
 };
 

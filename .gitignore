@@ -58,3 +58,15 @@ android/app/.cxx/
 *.keystore
 *.apk
 *.aab
+
+# Local game inputs and generated recompilation output.
+/generated
+/extracted/
+/game-data/
+/.picrecomp/
+*.nsp
+*.nsz
+*.xci
+*.nca
+*.keys
+*.npdm

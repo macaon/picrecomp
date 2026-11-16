@@ -137,7 +137,22 @@ const char *loader_symbol_at(uint64_t addr, uint64_t *offset) {
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
-    if (s->shndx) return m->base + s->value;
+    if (s->shndx) {
+        // A default-visible weak definition can be overridden by a strong definition.
+        if ((s->info >> 4) == 2 && (s->other & 3) == 0) {
+            for (int im = 0; im < g_nmodules; im++) {
+                Module *candidate = &g_modules[im];
+                if (candidate == m) continue;
+                for (uint64_t i = 1; i < candidate->nsyms; i++) {
+                    Elf64Sym *export = sym(candidate, i);
+                    if (export->shndx && (export->info >> 4) == 1 &&
+                        (export->other & 3) == 0 && !strcmp(symname(candidate, export), name))
+                        return candidate->base + export->value;
+                }
+            }
+        }
+        return m->base + s->value;
+    }
     HostFn impl = hle_lookup_impl(name);
     if (impl) return hle_register(name, impl);  // host implementation wins over the guest SDK's
     uint64_t a = loader_find_symbol(name);

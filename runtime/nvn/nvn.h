@@ -28,7 +28,7 @@ typedef struct NvnTexture {
     uint64_t stride;
     uint64_t addr;  // guest address of texel storage
     NvnPool *pool;
-    uint64_t pool_offset;
+    uint64_t pool_guest, pool_offset;
     void *backend;  // renderer-side texture
     uint64_t debug_id;
     char label[64];
@@ -42,11 +42,14 @@ typedef struct {
 } NvnSamplerDesc;
 
 typedef struct {
-    uint32_t setmask;  // which fields are overridden
+    uint32_t setmask : 6;
+    uint32_t format : 10;
+    uint32_t target : 4;
+    uint32_t ds_mode : 2;
     uint16_t base_level, num_levels, min_layer, num_layers;
-    uint32_t format, target, ds_mode;
     uint8_t swizzle[4];
-} NvnTextureView;  // our layout of the guest NVNtextureView (0x28 bytes)
+} NvnTextureView;
+_Static_assert(sizeof(NvnTextureView) == 0x10, "guest NVNtextureView size");
 
 typedef struct {
     NvnTexture *tex;
@@ -122,6 +125,7 @@ enum {
     CMD_COPY_TEXTURE_TO_TEXTURE, CMD_DOWNSAMPLE, CMD_UPDATE_UNIFORM_BUFFER, CMD_FENCE_SYNC, CMD_WAIT_SYNC,
     CMD_BARRIER, CMD_SIGNAL_EVENT, CMD_WAIT_EVENT, CMD_REPORT_COUNTER, CMD_DISCARD_COLOR,
     CMD_DISCARD_DEPTH_STENCIL, CMD_SET_COPY_STRIDES, CMD_DRAW_TEXTURE, CMD_RESOLVE_DEPTH,
+    CMD_BIND_SEPARATE_TEXTURES, CMD_BIND_SEPARATE_SAMPLERS,
     CMD_COUNT
 };
 

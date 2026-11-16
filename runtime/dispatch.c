@@ -1,5 +1,7 @@
 // Guest address -> recompiled function lookup, and host (HLE) function registry.
 #include <pthread.h>
+#include <setjmp.h>
+#include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -293,3 +295,43 @@ void rt_fault_report(const char *what, uint64_t fa, uint64_t pc, uint64_t lr) {
 }
 
 void crash_handler_install(void) { plat_crash_handler_install(); }
+
+// Preserve the host continuation across a guest DWARF context restore.
+typedef struct Landing {
+    jmp_buf resume;
+    Cpu *cpu;
+    uint64_t pc, sp;
+    struct Landing *previous;
+} Landing;
+
+static _Thread_local Landing *active_landing;
+
+_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *)) {
+    Landing landing = {.cpu = c, .pc = pc, .sp = c->sp,
+                       .previous = active_landing};
+    active_landing = &landing;
+    if (setjmp(landing.resume) != 0) {
+        active_landing = landing.previous;
+        return 1;
+    }
+    call(c);
+    active_landing = landing.previous;
+    return 0;
+}
+
+_Bool rt_call_with_landing(Cpu *c, uint64_t pc) {
+    return rt_invoke_with_landing(c, pc, rt_dispatch);
+}
+
+_Noreturn void rt_resume_landing(Cpu *c) {
+    uint64_t pc = c->x[30];
+    for (Landing *landing = active_landing; landing; landing = landing->previous) {
+        if (landing->cpu == c && landing->pc == pc && landing->sp == c->sp) {
+            active_landing = landing;
+            longjmp(landing->resume, 1);
+        }
+    }
+    fprintf(stderr, "Guest unwind has no continuation at %#llx (sp=%#llx)\n",
+            (unsigned long long)pc, (unsigned long long)c->sp);
+    abort();
+}

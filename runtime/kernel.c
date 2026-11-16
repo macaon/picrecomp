@@ -112,6 +112,7 @@ static Region regions[1024];
 static int nregions;
 static uint64_t heap_size;
 static uint64_t tls_next = TLS_BASE;
+uint32_t g_system_resource_size;
 uint64_t kernel_heap_size(void) { return heap_size; }  // bytes from HEAP_BASE set by SetHeapSize
 // Writable guest data regions (heap, mapped/physical memory, module .data): for debug/runtime memory scans.
 int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
@@ -180,8 +181,34 @@ static uint64_t next_thread_id = 0x50;
 volatile int g_rt_unwind;
 static KThread *g_threads;  // every thread of this boot (g_klock)
 
+void kernel_trace_hang(pthread_t render_thread) {
+    if (pthread_mutex_trylock(&g_klock) != 0) {
+        LOG("[hang] guest kernel lock busy\n");
+        return;
+    }
+    for (KThread *t = g_threads; t; t = t->anext) {
+        if (!t->started || t->finished) continue;
+        bool render = pthread_equal(t->host, render_thread) != 0;
+        const Cpu *c = &t->svc_context;
+        LOG("[hang] %s thread=%llx handle=%x svc_pc=%llx lr=%llx wait=%d sync=%d paused=%d addr=%llx mutex=%llx args=%llx,%llx,%llx,%llx\n",
+            render ? "render" : "guest", (unsigned long long)t->id, t->handle,
+            (unsigned long long)c->pc, (unsigned long long)c->x[30], t->wait_kind,
+            t->in_sync_wait, t->paused, (unsigned long long)t->wait_addr,
+            (unsigned long long)t->wait_mutex, (unsigned long long)c->x[0],
+            (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3]);
+    }
+    pthread_mutex_unlock(&g_klock);
+}
+
+
 void rt_unwind_point(void) {
-    if (__builtin_expect(g_rt_unwind, 0) && t_cur) longjmp(t_cur->unwind, 1);
+    if (!t_cur) return;
+    pthread_mutex_lock(&g_klock);
+    while (t_cur->paused && !g_rt_unwind)
+        pthread_cond_wait(&t_cur->cond, &g_klock);
+    bool unwind = g_rt_unwind;
+    pthread_mutex_unlock(&g_klock);
+    if (unwind) longjmp(t_cur->unwind, 1);
 }
 
 static void *thread_main(void *arg) {
@@ -351,12 +378,14 @@ static uint32_t svc_arbitrate_unlock(uint64_t addr) {
 static uint32_t svc_wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64_t timeout) {
     pthread_mutex_lock(&g_klock);
     KThread *t = t_cur;
-    mutex_release(mutex);
     t->wait_kind = WAIT_CONDVAR;
     t->wait_addr = key;
     t->wait_mutex = mutex;
     t->wait_tag = tag;
+    // The SDK can lock and check this flag without entering the kernel.
+    // Publish it before handing off the mutex so the SDK cannot skip the wake.
     __atomic_store_n(u32p(key), 1, __ATOMIC_SEQ_CST);
+    mutex_release(mutex);
     uint32_t r = block_current(timeout);
     // Timed out / cancelled: the mutex is NOT held - as on Horizon (Atmosphere KConditionVariable::Wait; libnx
     // condvarWaitTimeout: "On timeout, we need to acquire it manually"). The SDK takes it again itself
@@ -515,6 +544,12 @@ static int prof_svc = -1;
 
 static void svc_entry(Cpu *c, uint32_t imm, uint64_t pc);
 void rt_svc(Cpu *c, uint32_t imm, uint64_t pc) {
+    if (t_cur) {
+        pthread_mutex_lock(&g_klock);
+        t_cur->svc_context = *c;
+        t_cur->svc_context.pc = pc;
+        pthread_mutex_unlock(&g_klock);
+    }
     rt_unwind_point();
     svc_entry(c, imm, pc);
     rt_unwind_point();
@@ -754,8 +789,9 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 13: v = GUEST_HI - GUEST_LO; break;
         case 14: v = STACK_BASE; break;
         case 15: v = STACK_SIZE; break;
-        case 16: case 17: v = 0; break;
-        case 18: v = 0x01008CF01BAAC000ull; break;  // program id: Echoes of Wisdom
+        case 16: v = g_system_resource_size; break;
+        case 17: v = 0; break;
+        case 18: v = 0x0100BA0003EEA000ull; break;  // program id: PICROSS S
         case 20: v = 0; break;
         // (Switchbrew SVC GetInfo: types newer SDKs may ask for)
         case 23: v = 1; break;            // IsApplication
@@ -778,6 +814,60 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         region_remove(x[0]);
         x[0] = R_OK;
         break;
+    case 0x32: {  // SetThreadActivity: cooperatively pause at guest safe points.
+        KObject *o = handle_get((uint32_t)x[0]);
+        if (!o || o->type != KOBJ_THREAD || o == &t_cur->obj) {
+            x[0] = R_INVALID_HANDLE;
+            break;
+        }
+        if (x[1] > 1) {
+            x[0] = R_INVALID_ENUM;
+            break;
+        }
+        KThread *thread = (KThread *)o;
+        pthread_mutex_lock(&g_klock);
+        thread->paused = x[1] == 1;
+        pthread_cond_signal(&thread->cond);
+        pthread_mutex_unlock(&g_klock);
+        x[0] = R_OK;
+        break;
+    }
+    case 0x33: {  // GetThreadContext3
+        typedef struct {
+            uint64_t x[31], sp, pc;
+            uint32_t psr;
+            __uint128_t v[32];
+            uint32_t fpcr, fpsr;
+            uint64_t tpidr;
+        } ThreadContext;
+        _Static_assert(sizeof(ThreadContext) == 0x320, "Horizon thread context size");
+        KObject *o = handle_get((uint32_t)x[1]);
+        if (!o || o->type != KOBJ_THREAD || o == &t_cur->obj) {
+            x[0] = R_INVALID_HANDLE;
+            break;
+        }
+        KThread *thread = (KThread *)o;
+        pthread_mutex_lock(&g_klock);
+        if (!thread->paused || !thread->svc_context.pc) {
+            pthread_mutex_unlock(&g_klock);
+            x[0] = R_INVALID_ENUM;
+            break;
+        }
+        Cpu snapshot = thread->svc_context;
+        pthread_mutex_unlock(&g_klock);
+        ThreadContext context = {0};
+        memcpy(context.x, snapshot.x, sizeof context.x);
+        memcpy(context.v, snapshot.v, sizeof context.v);
+        context.sp = snapshot.sp;
+        context.pc = snapshot.pc;
+        context.psr = (uint32_t)snapshot.nzcv;
+        context.fpcr = (uint32_t)snapshot.fpcr;
+        context.fpsr = (uint32_t)snapshot.fpsr;
+        context.tpidr = snapshot.tpidr;
+        memcpy((void *)x[0], &context, sizeof context);
+        x[0] = R_OK;
+        break;
+    }
     case 0x34: x[0] = svc_wait_for_address(x[0], (uint32_t)x[1], (int32_t)x[2], (int64_t)x[3]); break;
     case 0x35: x[0] = svc_signal_to_address(x[0], (uint32_t)x[1], (int32_t)x[2], (int32_t)x[3]); break;
     case 0x45: {  // CreateEvent -> w1 writable, w2 readable

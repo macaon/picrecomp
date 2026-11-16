@@ -74,6 +74,7 @@ typedef struct {
     int tex_slot[8192];           // texture index -> Metal slot + 1
     bool tex_weak[64];            // slot type only guessed (from a size query): the next sample decides
     bool fail;
+    uint32_t block_start;
     bool branchy;  // program uses the pc state machine
     char fwd_tail[2048];  // loop closings after the last block (structured mode)
     bool fwd;      // ... structured instead: blocks in pc order, loops as for (;;) (see FWD below)
@@ -767,21 +768,88 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
     write_tex_result(c, slot, call, mask, d0, d1, true, !bits(w, 59, 1));  // 0xd0/0xd2: .F16 results
 }
 
+// Resolve a static NVN driver c2 pair within the current basic block.
+static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned predicate, unsigned *tex, unsigned *sampler) {
+    if (!c->glsl || reg == RZ) return false;
+    unsigned offsets[2];
+    unsigned found = 0;
+    for (unsigned distance = 8; distance < pc; distance += 8) {
+        unsigned at = pc - distance;
+        if (at < c->block_start) break;
+        if ((at & 31) == 0) continue;  // scheduling word
+        uint64_t prev;
+        memcpy(&prev, c->code + at, sizeof prev);
+        unsigned pred = (unsigned)bits(prev, 16, 4);
+        uint64_t opcode = prev & 0xfff8000000000000ull;
+        if ((prev & 0xfff8000000000000ull) == 0xdeb8000000000000ull) {
+            unsigned dst = (unsigned)bits(prev, 0, 8);
+            unsigned count = (unsigned)__builtin_popcount((unsigned)bits(prev, 31, 4));
+            if (dst <= reg && reg < dst + count && (predicate == PT || pred != (predicate ^ 8)))
+                return false;
+            continue;
+        }
+        // These instructions preserve the predicate used by a predicated TEX.
+        if (predicate != PT && opcode != 0x4c98000000000000ull &&
+            (opcode != 0x4c40000000000000ull || bits(prev, 48, 3) != PT) &&
+            (prev & 0xfff0000000000000ull) != 0x49a0000000000000ull)
+            return false;
+        if (bits(prev, 0, 8) != reg) continue;
+        if (predicate != PT && pred == (predicate ^ 8)) continue;
+        if ((pred != PT && pred != predicate) || bits(prev, 34, 5) != 2) return false;
+        if (!found) {
+            if (opcode != 0x4c40000000000000ull || bits(prev, 39, 4) != 4) return false;
+            reg = (unsigned)bits(prev, 8, 8);
+            if (reg == RZ) return false;
+        } else if (opcode != 0x4c98000000000000ull) return false;
+        offsets[found++] = (unsigned)bits(prev, 20, 14) * 4;
+        if (found == 2) {
+            unsigned lo = offsets[0] < offsets[1] ? offsets[0] : offsets[1];
+            unsigned hi = offsets[0] < offsets[1] ? offsets[1] : offsets[0];
+            if (lo < 0x168 || lo >= 0x568 || hi < 0x568 || hi >= 0x968 ||
+                (lo - 0x168) % 8 || (hi - 0x568) % 8) return false;
+            *tex = lo;
+            *sampler = hi;
+            return true;
+        }
+    }
+    return false;
+}
+
 // TEX (full form): coordinates from consecutive registers at gpr8, extra parameters at gpr20.
-static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
+static void emit_tex(Ctx *c, uint64_t w, uint32_t pc, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = bindless ? 0 : (uint32_t)bits(w, 36, 13);
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = bits(w, 50, 1), aoffi = bindless ? bits(w, 36, 1) : bits(w, 54, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
     int lod_mode = bindless ? (int)bits(w, 37, 3) : (int)bits(w, 55, 3);  // 0 none, 1 lz, 2 lb, 3 ll, 6 lba, 7 lla
-    if (bindless) { fail(c, "bindless tex"); return; }
+    unsigned texture_offset = 0, sampler_offset = 0;
+    if (bindless) {
+        if (!separate_texture_pair(c, pc, b, (unsigned)bits(w, 16, 4), &texture_offset, &sampler_offset)) {
+            fail(c, "unresolved bindless tex at %#x", pc);
+            return;
+        }
+        // The handle occupies the first register in the second operand.
+        b++;
+        index = 4096 + (texture_offset - 0x168) / 8 * 32 + (sampler_offset - 0x568) / 8;
+        if (index >= 8192 || sampler_offset >= 0x568 + 32 * 8) {
+            fail(c, "separate texture pair outside available slots");
+            return;
+        }
+    }
     int type = target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D)
              : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D)
              : target == 2 ? TEXTYPE_3D
                            : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
     int ncoord = target == 0 ? 1 : target == 1 ? 2 : 3;
     int slot = tex_slot(c, index, type, dc, array);
+    if (bindless) {
+        ShaderTexture *t = &c->info->tex[slot];
+        t->bindless = true;
+        t->bindless_cbuf = 2;
+        t->bindless_offset = texture_offset;
+        t->separate_sampler_offset = sampler_offset;
+    }
     if (c->glsl) {  // same register layout as below
         char cs[3][40], lay[96], lodv[48], offv[96], drv[48], gcall[4096];
         const char *co[3], *layp = NULL, *lodp = NULL, *offp = NULL, *drp = NULL;
@@ -932,9 +1000,9 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xd200000000000000ull, 0xf600000000000000ull)) {  // TLDS
         emit_texs(c, w, true);
     } else if (OPM(0xc038000000000000ull, 0xfc38000000000000ull)) {  // TEX
-        emit_tex(c, w, false);
+        emit_tex(c, w, pc, false);
     } else if (OPM(0xdeb8000000000000ull, 0xfff8000000000000ull)) {  // TEX.B (bindless)
-        emit_tex(c, w, true);
+        emit_tex(c, w, pc, true);
     } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull)) {  // TXQ
         uint32_t index = (uint32_t)bits(w, 36, 13);
         int qt = (int)bits(w, 22, 6);
@@ -2056,6 +2124,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     // compute programs have no SPH. Older NVN (Link's Awakening): no header either, code starts at the blob. Newer NVN
     // (Echoes of Wisdom, SDK 16.2): a 0x100-byte header starting with the magic 0x12345679 (graphics: 0x12345678).
     if (stage == STAGE_COMPUTE) code = *(const uint32_t *)blob == 0x12345679u ? blob + 0x100 : blob;
+    c->code = code;
     if (stage == STAGE_FRAGMENT) {
         c->omap_target = *(const uint32_t *)(sph + 0x48);
         c->omap_depth = (*(const uint32_t *)(sph + 0x4C) >> 1) & 1;
@@ -2150,6 +2219,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     for (size_t i = 0; i < end && !c->fail; i++) {
         if (i % 4 == 0) continue;
         uint32_t pc = (uint32_t)(i * 8);
+        if (label[i]) c->block_start = pc;
         if (any_branch && label[i]) {
             if (!c->fwd) sp(&c->body, "  case %uu:\n", pc);
             else {

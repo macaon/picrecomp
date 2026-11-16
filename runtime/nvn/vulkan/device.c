@@ -1,3 +1,10 @@
+#if defined(__linux__) && !defined(__ANDROID__)
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <pthread.h>
+#include <signal.h>
+#include <ucontext.h>
+#endif
 // Vulkan device, window, swapchain and presentation (counterpart of the window/present half of metal.m).
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -18,7 +25,67 @@
 
 VkG g_vk;
 static SDL_Window *window;
-static atomic_bool ui_ready;
+static atomic_bool ui_ready, trace_on;
+static _Atomic uint64_t trace_frame, trace_ui;
+static _Atomic(const char *) trace_phase = "startup";
+
+static void mark_phase(const char *phase) {
+    if (trace_on) atomic_store(&trace_phase, phase);
+}
+
+#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+static _Atomic(pthread_t) trace_render_thread;
+static _Atomic uintptr_t trace_pc;
+static bool trace_sampling;
+
+static void sample_render_pc(int signal_number, siginfo_t *info, void *context) {
+    (void)signal_number;
+    (void)info;
+    ucontext_t *uc = context;
+    atomic_store(&trace_pc, (uintptr_t)uc->uc_mcontext.gregs[REG_RIP]);
+}
+
+static void request_render_sample(void) {
+    pthread_t thread = atomic_load(&trace_render_thread);
+    if (!thread) return;
+    extern void kernel_trace_hang(pthread_t render_thread);
+    kernel_trace_hang(thread);
+    atomic_store(&trace_pc, 0);
+    if (pthread_kill(thread, SIGUSR2) != 0) return;
+    SDL_Delay(20);
+    uintptr_t pc = atomic_load(&trace_pc);
+    if (!pc) return;
+    Dl_info info;
+    if (dladdr((void *)pc, &info)) {
+        const char *module = strrchr(info.dli_fname, '/');
+        LOG("[hang] render sample %s+%#llx %s\n", module ? module + 1 : info.dli_fname,
+            (unsigned long long)(pc - (uintptr_t)info.dli_fbase), info.dli_sname ? info.dli_sname : "");
+    } else {
+        LOG("[hang] render sample pc=%#llx\n", (unsigned long long)pc);
+    }
+}
+#endif
+
+static int SDLCALL hang_watchdog(void *unused) {
+    (void)unused;
+    uint64_t previous = 0, previous_ui = 0;
+    unsigned stalled = 0;
+    for (;;) {
+        SDL_Delay(1000);
+        uint64_t frame = atomic_load(&trace_frame), ui = atomic_load(&trace_ui);
+        stalled = frame == previous ? stalled + 1 : 0;
+        if (stalled == 3 || stalled == 10 || frame / 300 != previous / 300) {
+            LOG("[hang] frame=%llu stalled=%us phase=%s ui_ticks_delta=%llu\n",
+                (unsigned long long)frame, stalled, atomic_load(&trace_phase),
+                (unsigned long long)(ui - previous_ui));
+        }
+#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+        if (trace_sampling && (stalled == 3 || stalled == 10)) request_render_sample();
+#endif
+        previous = frame;
+        previous_ui = ui;
+    }
+}
 static VkDebugUtilsMessengerEXT messenger;
 
 // ================================================================== instance / device
@@ -458,7 +525,9 @@ bool vk_frame_begin(const float clear[4]) {
     if (trace) LOG("[vk] frame begin %dx%d (swapchain %ux%u)\n", w, h, g_vk.sc_extent.width, g_vk.sc_extent.height);
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
+    mark_phase("frame slot GPU wait");
     vk_wait_seq(slot_seq[slot]);
+    mark_phase("vkAcquireNextImageKHR");
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         recreate_swapchain();
@@ -531,9 +600,11 @@ void vk_frame_end(const char *shot_path) {
     uint32_t img = cur_frame.image;
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
+    mark_phase("Vulkan submit");
     vk_submit_extra(cur_frame.acquired, done_sem[img], VK_NULL_HANDLE);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
+    mark_phase("vkQueuePresentKHR");
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
     if (r == VK_ERROR_SURFACE_LOST_KHR) atomic_store(&g_surface_stale, true);
     // (a swapchain the system turns, IDENTITY on a rotated display, is "suboptimal" at every present: that's this,
@@ -600,7 +671,12 @@ void backend_present(NvnTexture *t) {
     vk_end_pass();
     static const float black[4] = {0, 0, 0, 1};
     uint64_t t0 = SDL_GetTicksNS();
+#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+    if (trace_on) atomic_store(&trace_render_thread, pthread_self());
+#endif
+    mark_phase("window or swapchain");
     bool have = vk_frame_begin(black);
+    mark_phase("compose frame");
     uint64_t nd = SDL_GetTicksNS() - t0;
     if (nd > 30000000) {
         static int warned;
@@ -647,7 +723,10 @@ void backend_present(NvnTexture *t) {
     extern void vk_pace_frame(void);
     vk_pace_frame();  // (exec.c: the game's 30 fps mode when frames don't fit 60)
     extern void input_frame(uint64_t frame);
+    if (trace_on) atomic_store(&trace_frame, total_frames);
+    mark_phase("input frame");
     input_frame(total_frames);
+    mark_phase("guest frame");
     static long slow_ms = -1;
     if (slow_ms < 0) slow_ms = getenv("EOWRECOMP_SLOW_FRAME_MS") ? atol(getenv("EOWRECOMP_SLOW_FRAME_MS")) : 0;
     static long slow_until = -1;  // EOWRECOMP_SLOW_FRAME_UNTIL=<frame>: the stall ends there (frame pacing recovery tests)
@@ -784,7 +863,7 @@ void ui_window_init(void) {
                                             getenv("EOWRECOMP_HOST_INPUT") || getenv("EOWRECOMP_BIND_TEST"));
         if (scripted) SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
     }
-    window = SDL_CreateWindow("EoWRecomp", win_w, win_h, wflags);
+    window = SDL_CreateWindow("PicRecomp", win_w, win_h, wflags);
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
     SDL_AddEventWatch(lifecycle_watch, NULL);
     rt_window_icon(window);
@@ -824,11 +903,30 @@ void backend_clear_window(void) {
 
 int ui_run(void) {
     ui_window_init();
+    if (getenv("PICROSS_HANG_TRACE")) {
+#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+        struct sigaction sample_action = {.sa_sigaction = sample_render_pc, .sa_flags = SA_SIGINFO | SA_RESTART};
+        sigemptyset(&sample_action.sa_mask);
+        if (sigaction(SIGUSR2, &sample_action, NULL) != 0)
+            LOG("[hang] render sampling unavailable\n");
+        else
+            trace_sampling = true;
+#endif
+        trace_on = true;
+        SDL_Thread *watchdog = SDL_CreateThread(hang_watchdog, "picross-watchdog", NULL);
+        if (watchdog) SDL_DetachThread(watchdog);
+        else LOG("[hang] watchdog startup failed: %s\n", SDL_GetError());
+        LOG("[hang] SDL driver=%s\n", SDL_GetCurrentVideoDriver());
+    }
     atomic_store(&ui_ready, true);
     for (;;) {
         if (rt_reboot_requested()) return rt_reboot_requested();  // (runtime/main.c tears the game down)
         SDL_Event e;
+        if (trace_on) atomic_fetch_add(&trace_ui, 1);
         while (SDL_WaitEventTimeout(&e, 16)) {
+            if (trace_on && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN))
+                LOG("[hang] SDL input type=%#x button=%u\n", (unsigned)e.type,
+                    e.type == SDL_EVENT_KEY_DOWN ? (unsigned)e.key.scancode : (unsigned)e.gbutton.button);
             if (e.type == SDL_EVENT_QUIT) {
                 LOG("window closed\n");
                 exit(0);

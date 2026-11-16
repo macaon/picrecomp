@@ -52,6 +52,7 @@ typedef struct {
     uint8_t type;            // TEXTYPE_*
     bool shadow, is_array, is_image, bindless;
     uint32_t bindless_cbuf, bindless_offset;
+    uint32_t separate_sampler_offset;
 } ShaderTexture;
 
 typedef struct {

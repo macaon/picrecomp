@@ -1115,6 +1115,9 @@ static void *audout_thread(void *arg) {
             dev_frames = 1024;
         target = 2 * dev_frames * 2 * (int)ch;  // bytes of s16 at the source rate (close enough at 48 kHz)
     }
+    const bool trace_queue = getenv("PICROSS_AUDIO_TRACE") != NULL;
+    uint64_t next_report = 0;
+    unsigned submissions = 0, empty_before_submit = 0, rejected = 0;
     while (!a->quit) {
         pthread_mutex_lock(&a->lock);
         uint64_t size = 0, tag = 0, data = 0;
@@ -1124,7 +1127,24 @@ static void *audout_thread(void *arg) {
         uint64_t frames = size / (2 * ch);
         if (a->stream) {
             apply_gain(a->stream);
-            if (data) SDL_PutAudioStreamData(a->stream, (const void *)(uintptr_t)data, (int)size);
+            if (data) {
+                if (trace_queue && SDL_GetAudioStreamQueued(a->stream) == 0) empty_before_submit++;
+                if (!SDL_PutAudioStreamData(a->stream, (const void *)(uintptr_t)data, (int)size)) {
+                    if (!rejected) LOG("[audout] SDL enqueue failed: %s\n", SDL_GetError());
+                    rejected++;
+                }
+                if (trace_queue) {
+                    uint64_t now = SDL_GetTicksNS();
+                    if (!next_report) next_report = now + 5000000000ull;
+                    submissions++;
+                    if (now >= next_report) {
+                        LOG("[audout] 5s queue: %u submissions, %u empty before submit, %u rejected, target %d bytes\n",
+                            submissions, empty_before_submit, rejected, target);
+                        submissions = empty_before_submit = rejected = 0;
+                        next_report = now + 5000000000ull;
+                    }
+                }
+            }
             while (SDL_GetAudioStreamQueued(a->stream) > target && !a->quit) { struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL); }
         } else {
             uint64_t ns = frames * 1000000000ull / (a->rate ? a->rate : 48000);
@@ -1227,12 +1247,23 @@ SERVICE("audout:u", audout_u) {
         pthread_mutex_init(&a->lock, NULL);
         a->event = kernel_create_event_pair(&a->ev_w, &a->ev_r);
         if (getenv("EOWRECOMP_AUDOUT_WAV")) a->wav = fopen(getenv("EOWRECOMP_AUDOUT_WAV"), "wb");
-        if (!(getenv("EOWRECOMP_NO_AUDIO") && strcmp(getenv("EOWRECOMP_NO_AUDIO"), "0")) && SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-            SDL_AudioSpec spec = {SDL_AUDIO_S16, (int)a->channels, (int)a->rate};
-            a->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-            if (a->stream) {
-                if (getenv("EOWRECOMP_AUDIO_GAIN")) SDL_SetAudioStreamGain(a->stream, (float)atof(getenv("EOWRECOMP_AUDIO_GAIN")));
-                SDL_ResumeAudioStreamDevice(a->stream);
+        const char *no_audio = getenv("EOWRECOMP_NO_AUDIO");
+        if (!no_audio || !strcmp(no_audio, "0")) {
+            if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+                LOG("[audout] SDL audio init failed: %s\n", SDL_GetError());
+            } else {
+                SDL_AudioSpec spec = {SDL_AUDIO_S16, (int)a->channels, (int)a->rate};
+                a->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+                if (!a->stream) {
+                    LOG("[audout] SDL audio open failed: %s\n", SDL_GetError());
+                } else {
+                    const char *gain = getenv("EOWRECOMP_AUDIO_GAIN");
+                    if (gain) SDL_SetAudioStreamGain(a->stream, (float)atof(gain));
+                    if (SDL_ResumeAudioStreamDevice(a->stream))
+                        LOG("[audout] SDL playback driver: %s\n", SDL_GetCurrentAudioDriver());
+                    else
+                        LOG("[audout] SDL audio resume failed: %s\n", SDL_GetError());
+                }
             }
         }
         pthread_create(&a->thread, NULL, audout_thread, a);

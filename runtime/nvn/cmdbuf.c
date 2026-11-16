@@ -164,7 +164,13 @@ static CmdRec *record_copy(Cpu *c, uint32_t op, int arg, uint32_t len) {
 NVN(nvnCommandBufferBindProgram) {
     Snap s = snap(c);
     CmdRec *r = record(c, CMD_BIND_PROGRAM, 0, &s);
-    r->x[0] = (uint64_t)(uintptr_t)HOST(NvnProgram, s.x[1]);  // host program
+    NvnProgram *program = s.x[1] ? HOST(NvnProgram, s.x[1]) : NULL;
+    r->x[0] = (uint64_t)(uintptr_t)program;
+    if (getenv("PICROSS_SHADER_TRACE")) {
+        static unsigned seen;
+        if (seen++ < 32) LOG("[shader bind] requested=%llx available=%x\n",
+                             (unsigned long long)s.x[2], program ? program->stage_mask : 0);
+    }
 }
 NVN(nvnCommandBufferBindBlendState) { record_copy(c, CMD_BIND_BLEND, 1, 8); }
 NVN(nvnCommandBufferBindChannelMaskState) { record_copy(c, CMD_BIND_CHANNEL_MASK, 1, 4); }
@@ -213,15 +219,20 @@ NVN(nvnCommandBufferBindImage) {
     r->x[0] = s.x[1]; r->x[1] = s.x[2]; r->x[2] = 1;
     memcpy(r->extra, &s.x[3], 8);
 }
-NVN(nvnCommandBufferBindSeparateTextures) { record_copy(c, CMD_BIND_TEXTURES, 4, (uint32_t)A(3) * 8); }
+NVN(nvnCommandBufferBindSeparateTextures) { record_copy(c, CMD_BIND_SEPARATE_TEXTURES, 4, (uint32_t)A(3) * 8); }
 NVN(nvnCommandBufferBindSeparateTexture) {
     Snap s = snap(c);
-    CmdRec *r = record(c, CMD_BIND_TEXTURES, 8, &s);
+    CmdRec *r = record(c, CMD_BIND_SEPARATE_TEXTURES, 8, &s);
     r->x[0] = s.x[1]; r->x[1] = s.x[2]; r->x[2] = 1;
     memcpy(r->extra, &s.x[3], 8);
 }
-NVN(nvnCommandBufferBindSeparateSamplers) { (void)c; }
-NVN(nvnCommandBufferBindSeparateSampler) { (void)c; }
+NVN(nvnCommandBufferBindSeparateSamplers) { record_copy(c, CMD_BIND_SEPARATE_SAMPLERS, 4, (uint32_t)A(3) * 8); }
+NVN(nvnCommandBufferBindSeparateSampler) {
+    Snap s = snap(c);
+    CmdRec *r = record(c, CMD_BIND_SEPARATE_SAMPLERS, 8, &s);
+    r->x[2] = 1;
+    memcpy(r->extra, &s.x[3], 8);
+}
 NVN(nvnCommandBufferBindTransformFeedbackBuffers) { (void)c; }
 NVN(nvnCommandBufferBindTransformFeedbackBuffer) { (void)c; }
 NVN(nvnCommandBufferBindCoverageModulationTable) { (void)c; }

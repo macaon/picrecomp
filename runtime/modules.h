@@ -9,7 +9,6 @@
 #define GAME_MODULES(X)            \
     X(main, 0x7000000000ull)       \
     X(subsdk0, 0x7008000000ull)    \
-    X(subsdk1, 0x700A000000ull)    \
     X(sdk, 0x700C000000ull)
-#define GAME_NMODULES 4
+#define GAME_NMODULES 3
 #define GAME_MODULE_SPAN 0x2000000ull  // room after every base but main's (checked by the loader)

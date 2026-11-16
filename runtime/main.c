@@ -12,6 +12,7 @@
 #include "settings.h"
 #include "hle.h"
 #include "kernel.h"
+extern uint32_t g_system_resource_size;
 
 const char *g_romfs_dir;
 
@@ -35,8 +36,31 @@ static void module_init(Cpu *c, Module *m) {
 }
 
 // Early: the SDK's own constructors. Late (its heap is up): the other modules', main last (it uses the others).
-static void rtld_init_sdk(Cpu *c) { module_init(c, loader_module("sdk")); }
+static void picross_startup_complete(Cpu *c) { (void)c; }
+
+static void rtld_init_sdk(Cpu *c) {
+    Module *sdk = loader_module("sdk");
+    if (getenv("PICROSS_EARLY_HEAP")) {
+        // PICROSS S v524288 SDK relocation for nninitStartup.
+        uint64_t *startup = (uint64_t *)(sdk->base + 0xcdd210);
+        uint64_t entry = loader_find_symbol("nninitStartup");
+        if (!entry || *startup != entry) FATAL("unexpected PICROSS S startup relocation\n");
+        LOG("initializing PICROSS S allocator before SDK constructors\n");
+        uint32_t resource_size = g_system_resource_size;
+        g_system_resource_size = 0;
+        guest_call(c, entry);
+        g_system_resource_size = resource_size;
+        *startup = hle_register("<picross_startup_complete>", picross_startup_complete);
+    }
+    module_init(c, sdk);
+}
 static void rtld_init_main(Cpu *c) {
+    if (getenv("PICROSS_INIT_VAMM")) {
+        uint64_t entry = loader_find_symbol("_ZN2nn2os30InitializeVirtualAddressMemoryEv");
+        if (!entry) FATAL("InitializeVirtualAddressMemory not found\n");
+        LOG("initializing SDK virtual address memory before game constructors\n");
+        guest_call(c, entry);
+    }
     for (int i = g_nmodules - 1; i >= 0; i--)
         if (strcmp(g_modules[i].name, "sdk")) module_init(c, &g_modules[i]);
 }
@@ -153,6 +177,7 @@ static void boot(const char *root) {
         uint8_t meta[0x80];
         if (fread(meta, 1, sizeof meta, f) == sizeof meta && !memcmp(meta, "META", 4)) {
             prio = meta[0xE];
+            memcpy(&g_system_resource_size, meta + 0x14, sizeof g_system_resource_size);
             stack_size = *(uint32_t *)(meta + 0x1C);
         }
         fclose(f);
@@ -220,6 +245,7 @@ int main(int argc, char **argv) {
             launcher_run(root);
         }
         boot(root);
+        if (getenv("PICROSS_HEADLESS_TRACE")) { SDL_Delay(15000); return 0; }
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested
         teardown();
         title = kind == RT_REBOOT_TITLE;
