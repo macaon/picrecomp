@@ -13,7 +13,7 @@ mkdir -p "$root/.picrecomp"
 stage=$(mktemp -d "$root/.picrecomp/generate.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 ln -s "$game/exefs" "$stage/exefs"
-PYTHONPATH="$root/tools" "$python" - "$stage/exefs/main" <<'PY'
+PYTHONPATH="$root/tools" "$python" - "$stage/exefs/main" "$stage/build-id" <<'PY'
 import glob, json, sys
 from gen import Module
 
@@ -23,6 +23,7 @@ title = next((t for t in titles if t["main_build_id"] == main.nso.build_id), Non
 if title is None:
     raise SystemExit(f"Unsupported build ID {main.nso.build_id}: no manifest in titles/")
 print(f"Generating {title['name']}")
+open(sys.argv[2], "w").write(main.nso.build_id + "\n")
 PY
 for spec in main:0x7000000000 subsdk0:0x7008000000 sdk:0x700c000000; do
     module=${spec%%:*}
@@ -32,3 +33,4 @@ done
 # (the jump tables of main are resolved by gen.py itself: tools/test_jumptable.py)
 "$python" tools/picross/fix-exception-resume.py "$stage"
 mv -- "$stage/lift" generated
+mv -- "$stage/build-id" generated/build-id

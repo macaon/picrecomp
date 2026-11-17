@@ -16,16 +16,36 @@
 static const GameLibTables *g_tables;
 static char g_error[256];
 
-// The library's id file (<library>.id, written next to it by the build): its GAMELIB_ID, read without loading it.
-static bool id_matches(const char *lib) {
+// The library's id file (<library>.id, written next to it by the build): line 1 its GAMELIB_ID, line 2 the build id of
+// the game's main module it was generated from. Read without loading the library. The second line must match the
+// game being started: the generated code is only valid for the exact executable it came from.
+static bool game_build_id(const char *game_dir, char out[33]) {
+    char path[1100];
+    snprintf(path, sizeof path, "%s/exefs/main", game_dir);
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    unsigned char b[16];
+    bool ok = fseek(f, 0x40, SEEK_SET) == 0 && fread(b, 1, 16, f) == 16;
+    fclose(f);
+    for (int k = 0; ok && k < 16; k++) snprintf(out + 2 * k, 3, "%02x", b[k]);
+    return ok;
+}
+
+static bool id_matches(const char *lib, const char *game_dir) {
     char path[1100], id[128] = {0};
     snprintf(path, sizeof path, "%s.id", lib);
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     size_t n = fread(id, 1, sizeof id - 1, f);
     fclose(f);
-    while (n && (id[n - 1] == '\n' || id[n - 1] == '\r')) id[--n] = 0;
-    return !strcmp(id, GAMELIB_ID);
+    char *nl = strchr(id, '\n'), *built = NULL;
+    if (nl) *nl = 0, built = nl + 1;
+    if (strcmp(id, GAMELIB_ID)) return false;
+    if (!game_dir) return true;
+    char have[33], want[33] = {0};
+    if (!built) return false;
+    for (n = 0; built[n] && built[n] != '\n' && built[n] != '\r' && n < 32; n++) want[n] = built[n];
+    return game_build_id(game_dir, have) && !strcmp(have, want);
 }
 
 static bool exists(const char *p) {
@@ -41,10 +61,10 @@ static int candidates(const char *game_dir, char out[3][1100]) {
     int n = 0;
     const char *env = getenv("PICRECOMP_GAME_LIB");
     if (env && *env) snprintf(out[n++], 1100, "%s", env);
+    if (game_dir) snprintf(out[n++], 1100, "%s/%s", game_dir, GAMELIB_NAME);  // (this game's own library first)
     char exe_side[1024];
     if (rt_resource(GAMELIB_NAME, NULL, exe_side, sizeof exe_side) && exists(exe_side))
         snprintf(out[n++], 1100, "%s", exe_side);
-    if (game_dir) snprintf(out[n++], 1100, "%s/%s", game_dir, GAMELIB_NAME);
     return n;
 }
 
@@ -60,7 +80,7 @@ bool gamelib_present(const char *game_dir) {
             if (gamelib_load(NULL, why, sizeof why)) return true;
             continue;
         }
-        if (exists(c[i]) && id_matches(c[i])) return true;
+        if (exists(c[i]) && id_matches(c[i], game_dir)) return true;
     }
     return false;
 }
@@ -96,7 +116,7 @@ bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
             if (!in_apk(c[i]) && !exists(c[i])) continue;
             // PICRECOMP_GAME_LIB / the APK's own: loaded as given, the library's own id decides
             bool given = (i == 0 && env && *env) || in_apk(c[i]);
-            if (!given && !id_matches(c[i])) {
+            if (!given && !id_matches(c[i], game_dir)) {
                 snprintf(g_error, sizeof g_error, "%s was built for another version", c[i]);
                 continue;
             }

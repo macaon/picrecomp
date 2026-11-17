@@ -183,7 +183,7 @@ endif
 $(GAMELIB): $(GEN_OBJ) | $(EXE)
 	$(CC) $(GAMELIB_LDFLAGS) -o $@.tmp $(GEN_OBJ)
 	mv -f $@.tmp $@
-	echo $(GAMELIB_ID) > $@.id
+	(echo $(GAMELIB_ID); cat $(GEN)/build-id) > $@.id
 
 $(B)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
