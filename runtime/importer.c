@@ -8,6 +8,7 @@
 #include "paths.h"
 #include "platform.h"
 
+static void poll_log(ImportState *s);
 static PlatProc g_proc;
 static int g_exit = -1;  // of the last one, once it ended
 static char g_log[1100];
@@ -20,8 +21,8 @@ bool importer_start(const char *folder, const char *keys) {
     static bool hooked;
     if (!hooked) hooked = true, atexit(importer_cancel);  // (quitting mid-import must not leave it running)
     char script[1100];
-    if (!rt_resource(NULL, "tools/picross/prepare.py", script, sizeof script)) {
-        snprintf(g_error, sizeof g_error, "tools/picross/prepare.py was not found next to PicRecomp");
+    if (!rt_resource(NULL, "tools/picross/install.py", script, sizeof script)) {
+        snprintf(g_error, sizeof g_error, "tools/picross/install.py was not found next to PicRecomp");
         return false;
     }
     char games[1100];
@@ -40,6 +41,16 @@ bool importer_start(const char *folder, const char *keys) {
 }
 
 void importer_poll(ImportState *s) {
+    static ImportState last;  // the log is read ten times a second, not every frame
+    static uint64_t at;
+    uint64_t now = plat_now_ns();
+    if (now - at < 100000000ull && at) { *s = last; return; }
+    at = now;
+    poll_log(s);
+    last = *s;
+}
+
+static void poll_log(ImportState *s) {
     memset(s, 0, sizeof *s);
     s->steps = 1;
     if (!g_log[0]) {
@@ -54,6 +65,10 @@ void importer_poll(ImportState *s) {
         if (sscanf(line, "@step %d/%d %n", &n, &total, &at) >= 2 && at && n >= 1 && n <= IMPORT_MAX_STEPS) {
             s->step = n, s->steps = total;
             snprintf(s->texts[n - 1], sizeof s->texts[0], "%s", line + at);
+            s->frac = 0;
+        } else if (!strncmp(line, "@progress ", 10)) {
+            long done = 0, total = 0;
+            if (sscanf(line + 10, "%ld/%ld", &done, &total) == 2 && total > 0) s->frac = (float)done / (float)total;
         } else if (!strncmp(line, "@error ", 7)) {
             snprintf(s->error, sizeof s->error, "%s", line + 7);
         }

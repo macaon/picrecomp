@@ -1092,7 +1092,7 @@ extern "C" void launcher_run(const char *root) {
             float x0 = 90 * s;
             ImGui::SetCursorPos(ImVec2(x0, 120 * s));
             ImGui::PushFont(g_font_title);
-            if (page == MAIN || page == ADD) {  // gold to orange, shadowed (not behind the Settings / Game Files windows)
+            if (page == MAIN) {  // gold to orange, shadowed (not behind the Settings / Game Files windows)
                 const char *t = "PicRecomp";
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 text_fx(ImGui::GetWindowDrawList(), ImGui::GetFont(), ImGui::GetFontSize(), p, IM_COL32(255, 232, 120, 255),
@@ -1209,6 +1209,9 @@ extern "C" void launcher_run(const char *root) {
                 if (menu_item("QUIT", true)) exit(0);
                 g_menu_gap = 0.35f;
             } else if (page == ADD) {
+                // (no title here and a tight line spacing: the ten steps, the bar and the buttons fit without scrolling)
+                ImGui::SetCursorPos(ImVec2(x0, 56 * s));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 3 * s));
                 ImportState is;
                 importer_poll(&is);
                 bool idle = !is.running && !is.done && !is.failed;
@@ -1227,7 +1230,8 @@ extern "C" void launcher_run(const char *root) {
                 if (idle) {
                     text("%s", "Add a game", gold);
                     text("%s", "Choose the folder with your game's two .nsp files, the base game and its update. "
-                         "Your prod.keys is read from that folder or from ~/.switch, or choose it below. Nothing leaves your computer.", white);
+                         "Your prod.keys is read from that folder or from ~/.switch, or choose it below. Adding a game "
+                         "builds its code and takes about ten minutes. Nothing leaves your computer.", white);
                     text("%s", dir.empty() ? "No folder chosen yet." : dir.c_str(), grey);
                     if (!keys.empty()) text("keys: %s", keys.c_str(), grey);
                 } else {
@@ -1250,7 +1254,8 @@ extern "C" void launcher_run(const char *root) {
                             mk->AddLine(ImVec2(m.x + u * 0.4f, cy + u * 0.4f), ImVec2(m.x + u * 1.2f, cy - u * 0.5f), g, fs * 0.12f);
                         }
                         ImGui::SetCursorPosX(x0 + fs * 1.3f);
-                        ImGui::TextColored(cur ? gold : grey, "%s", is.texts[k]);
+                        if (cur && is.frac > 0) ImGui::TextColored(gold, "%s  %d%%", is.texts[k], (int)(is.frac * 100));
+                        else ImGui::TextColored(cur ? gold : grey, "%s", is.texts[k]);
                     }
                     // one segment per step: done ones filled, the running one pulsing (the script reports steps, not percent)
                     ImGui::Dummy(ImVec2(0, 10 * s));
@@ -1261,9 +1266,11 @@ extern "C" void launcher_run(const char *root) {
                     for (int k = 0; k < is.steps; k++) {
                         bool done_k = is.done || k + 1 < is.step, run_k = is.running && k + 1 == is.step;
                         float a = done_k ? 1.0f : run_k ? 0.45f + 0.4f * sinf(t * 5) * 0.5f + 0.2f : 0.0f;
+                        if (run_k && is.frac > 0) a = 1.0f;
                         ImU32 col = is.failed && k + 1 == is.step ? IM_COL32(255, 128, 100, 255) : IM_COL32(255, 200, 80, (int)(255 * a));
                         ImVec2 p0(at.x + k * sw + 2 * s, at.y), p1(at.x + (k + 1) * sw - 2 * s, at.y + bh);
                         dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 30), 4 * s);
+                        if (run_k && is.frac > 0) p1.x = p0.x + (p1.x - p0.x) * (is.frac > 1 ? 1 : is.frac);  // (how far in)
                         if (a > 0 || (is.failed && k + 1 == is.step)) dl->AddRectFilled(p0, p1, col, 4 * s);
                     }
                     ImGui::Dummy(ImVec2(bw, bh + 8 * s));
@@ -1271,7 +1278,7 @@ extern "C" void launcher_run(const char *root) {
                     if (is.done) text("%s", "It is in your library now. Press Back to see it.", white);
                 }
                 ImGui::PopFont();
-                ImGui::Dummy(ImVec2(0, 20 * s));
+                ImGui::Dummy(ImVec2(0, 8 * s));
                 ImGui::SetCursorPosX(x0);
                 if (idle) {
                     if (menu_item("CHOOSE FOLDER", true)) SDL_ShowOpenFolderDialog(picked_add, NULL, win, NULL, false);
@@ -1296,6 +1303,7 @@ extern "C" void launcher_run(const char *root) {
                     g_bg = 0;
                     if (status.empty()) load_background(dev);
                 }
+                ImGui::PopStyleVar();
             } else if (page == SETTINGS) {
                 // the in-game menu's tabs (runtime/ui/menu.mm), in a window like the in-game one; tabs that need a
                 // loaded game say so

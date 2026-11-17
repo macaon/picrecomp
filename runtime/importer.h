@@ -8,6 +8,7 @@
 typedef struct {
     bool running, done, failed;
     int step, steps;                       // the current step (1-based) of how many
+    float frac;                            // how far into the current step (0 = not reported)
     char texts[IMPORT_MAX_STEPS][96];      // the steps seen so far, in order; the last is the current one
     char error[256];                       // failed: why
 } ImportState;

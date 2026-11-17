@@ -206,9 +206,27 @@ def prepare(args):
                 shutil.copyfile(icons / "icon_AmericanEnglish.dat", prepared / "icon.jpg")
             except (ValueError, OSError):
                 print("No icon found; the start screen will show the name only", flush=True)
-        step(7, "Finishing")
+        step(7, "Saving the game files")
         prepared.rename(output)
     print(f"Prepared game data in {output}", flush=True)
+
+
+def resolve_folder(args):
+    """--folder mode: fill in args.base, update, output and prod_keys from the folder."""
+    if not args.games:
+        raise ValueError("--folder needs --games")
+    step(1, "Looking for the game's packages")
+    title, args.base, args.update = find_packages(args.folder)
+    args.output = args.games / title["slug"]
+    if not args.prod_keys:  # beside the packages, else where Switch tools keep it
+        args.prod_keys = next((k for k in (args.folder / "prod.keys", Path.home() / ".switch" / "prod.keys")
+                               if k.is_file()), None)
+    if not args.prod_keys:
+        raise ValueError("No prod.keys beside the game packages or in ~/.switch")
+    args.games.mkdir(parents=True, exist_ok=True)
+    for stale in args.games.glob(".picrecomp-*"):  # (an import that was stopped)
+        shutil.rmtree(stale, ignore_errors=True)
+    return title
 
 
 def main():
@@ -223,19 +241,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.folder:
-            if not args.games:
-                raise ValueError("--folder needs --games")
-            step(1, "Looking for the game's packages")
-            title, args.base, args.update = find_packages(args.folder)
-            args.output = args.games / title["slug"]
-            if not args.prod_keys:  # beside the packages, else where Switch tools keep it
-                args.prod_keys = next((k for k in (args.folder / "prod.keys", Path.home() / ".switch" / "prod.keys")
-                                       if k.is_file()), None)
-            if not args.prod_keys:
-                raise ValueError("No prod.keys beside the game packages or in ~/.switch")
-            args.games.mkdir(parents=True, exist_ok=True)
-            for stale in args.games.glob(".picrecomp-*"):  # (an import that was stopped)
-                shutil.rmtree(stale, ignore_errors=True)
+            resolve_folder(args)
         elif not (args.base and args.update and args.output and args.prod_keys):
             raise ValueError("Give BASE UPDATE OUTPUT --prod-keys, or --folder and --games")
         else:
