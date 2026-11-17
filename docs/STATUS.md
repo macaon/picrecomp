@@ -39,9 +39,11 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   (`docs/ARCHITECTURE.md`, "Debugging a hang").
 - `tools/picross/fix-exception-resume.py` splices C into the generated code. It belongs in `tools/patches.py` or the
   lifter.
-- The native start screen (`runtime/ui/launcher.cpp`) still carries the base project's setup flow (a randomizer tab,
-  XCI-oriented extraction). It identifies PICROSS S's build ID but is not the supported way to set the game up:
-  use `tools/picross/prepare.py` or `tools/picross/launcher.sh`.
+- The start screen shows a card for each installed game and a "+" card. "+" opens a page that tells the user to run
+  `tools/picross/prepare.py`; Back rescans. The inherited in-app setup (`SETUP` page, `extract_thread`, the XCI reader)
+  is no longer reachable and still checks the old Zelda title ID. Importing from the start screen is a rewrite of it.
+  Layout checked by screenshots (no game, S only, all three, the + page); clicking a card, "+" and Back, and gamepad
+  navigation have not been tried.
 
 - **Other titles.** `titles/picross-s2.json` and `picross-s3.json` exist and `prepare.py` prepares both from the user's
   packages (checked: S, S2 and S3 each give a card with the Switch icon). Their `sdk` and `subsdk0` modules are

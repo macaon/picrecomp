@@ -497,7 +497,7 @@ static void load_background(GpuDevice dev) {
 
 // ------------------------------------------------------------------ game cards
 // One card per prepared game: <data root>/games/<name>/ (what tools/picross/prepare.py writes: title.json, icon.jpg, exefs,
-// romfs.bin), plus the folder the program was started with. The picture is the icon the Switch shows (256x256 JPEG).
+// romfs.bin), plus the folder the program was started with, when it holds a game. After the last card comes a "+" card. The picture is the icon the Switch shows (256x256 JPEG).
 struct Card { std::string root, name; uint64_t tex = 0; };
 static std::vector<Card> g_cards;
 static size_t g_card;  // the selected one; g_root is its folder
@@ -537,29 +537,32 @@ static void scan_cards(const std::string &current) {
     std::string dir = std::string(rt_data_root()) + "/games";
     if (DIR *d = opendir(dir.c_str())) {
         while (dirent *e = readdir(d))
-            if (e->d_name[0] != '.' && file_exists(dir + "/" + e->d_name + "/title.json")) {
+            if (e->d_name[0] != '.' && check_copied_files(dir + "/" + e->d_name).empty()) {
                 char real[4096];  // (the same folder reached by another path is one card)
                 if (realpath((dir + "/" + e->d_name).c_str(), real)) roots.push_back(real);
             }
         closedir(d);
     }
-    if (std::find(roots.begin(), roots.end(), current) == roots.end()) roots.push_back(current);
+    if (check_copied_files(current).empty() && std::find(roots.begin(), roots.end(), current) == roots.end())
+        roots.push_back(current);
     std::sort(roots.begin(), roots.end());
     g_cards.clear();
+    bool found = false;
     for (auto &r : roots) {
         Card c;
         c.root = r;
         c.name = json_str(r + "/title.json", "name");
         if (c.name.empty()) c.name = "PICROSS S";  // (a folder prepared before the manifests)
         c.tex = load_icon(r + "/icon.jpg");
-        if (r == current) g_card = g_cards.size();
+        if (r == current) g_card = g_cards.size(), found = true;
         g_cards.push_back(c);
     }
+    if (!found && !g_cards.empty()) g_card = 0, g_root = g_cards[0].root;  // (the folder given isn't a game)
 }
 
 // ------------------------------------------------------------------ screen
 static ImFont *g_font_title, *g_font_menu, *g_font_small;
-enum Page { MAIN, SETTINGS, SETUP };  // SETTINGS: the in-game menu's tabs (runtime/ui/menu.mm)
+enum Page { MAIN, SETTINGS, SETUP, ADD };  // SETTINGS: the in-game menu's tabs (runtime/ui/menu.mm)
 static int g_refocus = MAIN;  // back on the main page: select the item of the page we came from (controllers)
 
 // A big menu line: gold + a marker when focused / hovered (keyboard, gamepad or mouse), grey when disabled
@@ -947,7 +950,7 @@ extern "C" void launcher_run(const char *root) {
     scan_cards(g_root);
     std::string status = check_game_files(g_root);
     if (status.empty()) load_background(dev);
-    Page page = check_copied_files(g_root).empty() ? MAIN : SETUP;  // (files there, code not built: the cards still show)
+    Page page = MAIN;
     bool play = false;
     // PICRECOMP_LAUNCHER_SHOT=<frame>[:<page>] (test): save build/launcher.png at that frame and exit; page: settings[:<tab>] / askdelete / setup
     long shot_at = getenv("PICRECOMP_LAUNCHER_SHOT") ? atol(getenv("PICRECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
@@ -955,6 +958,7 @@ extern "C" void launcher_run(const char *root) {
         const char *pg = strchr(getenv("PICRECOMP_LAUNCHER_SHOT"), ':');
         if (pg && (!strncmp(pg + 1, "settings", 8) || !strcmp(pg + 1, "askdelete"))) page = SETTINGS, menu_tabs_focus(true);
         if (pg && !strcmp(pg + 1, "setup")) page = SETUP;
+        if (pg && !strcmp(pg + 1, "add")) page = ADD;
         if (pg && !strncmp(pg + 1, "fail", 4)) page = SETUP, set_failure(atoi(pg + 5));  // (the failure messages)
         if (pg && !strncmp(pg + 1, "settings", 8) && pg[9] == ':') g_tab_request_ext = atoi(pg + 10);  // settings:<tab>
         if (pg && !strcmp(pg + 1, "delete")) page = SETUP, g_confirm_delete = true;
@@ -1068,7 +1072,7 @@ extern "C" void launcher_run(const char *root) {
             float x0 = 90 * s;
             ImGui::SetCursorPos(ImVec2(x0, 120 * s));
             ImGui::PushFont(g_font_title);
-            if (page == MAIN) {  // gold to orange, shadowed (not behind the Settings / Game Files windows)
+            if (page == MAIN || page == ADD) {  // gold to orange, shadowed (not behind the Settings / Game Files windows)
                 const char *t = "PicRecomp";
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 text_fx(ImGui::GetWindowDrawList(), ImGui::GetFont(), ImGui::GetFontSize(), p, IM_COL32(255, 232, 120, 255),
@@ -1082,19 +1086,37 @@ extern "C" void launcher_run(const char *root) {
             static bool typed_before;
             bool typing = typed_before || ui_text_busy();
 
-            if (page == MAIN && !g_cards.empty()) {  // the games: the Switch's icon, the name under it, gold when chosen
-                float cs = 150 * s, gap = 24 * s, n = (float)g_cards.size();
+            if (page == MAIN) {  // the games: the Switch's icon, the name under it, gold when chosen; "+" adds one
+                float cs = 150 * s, gap = 24 * s, n = (float)g_cards.size() + 1;
                 float cx = ds.x - n * cs - (n - 1) * gap - 70 * s, cy = 250 * s;
                 ImDrawList *dl = ImGui::GetWindowDrawList();
-                for (size_t i = 0; i < g_cards.size(); i++) {
+                for (size_t i = 0; i <= g_cards.size(); i++) {
+                    bool plus = i == g_cards.size();
                     ImGui::SetCursorPos(ImVec2(cx + (float)i * (cs + gap), cy));
                     ImVec2 at = ImGui::GetCursorScreenPos();
                     ImGui::PushID((int)i);
                     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
                     bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + 36 * s), ImGuiButtonFlags_EnableNav);
                     ImGui::PopStyleColor();
-                    bool hot = ImGui::IsItemFocused() || ImGui::IsItemHovered(), sel = i == g_card;
+                    bool hot = ImGui::IsItemFocused() || ImGui::IsItemHovered(), sel = !plus && i == g_card;
                     ImGui::PopID();
+                    if (plus) {  // a blank card with a +
+                        ImVec2 br(at.x + cs, at.y + cs), m((at.x + br.x) * 0.5f, (at.y + br.y) * 0.5f);
+                        ImU32 col = hot ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 170);
+                        dl->AddRectFilled(at, br, IM_COL32(30, 44, 70, hot ? 200 : 120), 14 * s);
+                        dl->AddRect(at, br, col, 14 * s, 0, 2 * s);
+                        dl->AddLine(ImVec2(m.x - cs * 0.16f, m.y), ImVec2(m.x + cs * 0.16f, m.y), col, 5 * s);
+                        dl->AddLine(ImVec2(m.x, m.y - cs * 0.16f), ImVec2(m.x, m.y + cs * 0.16f), col, 5 * s);
+                        ImGui::PushFont(g_font_small);
+                        float tw = ImGui::CalcTextSize("Add a game").x;
+                        dl->AddText(ImVec2(at.x + (cs - tw) * 0.5f, br.y + 6 * s), col, "Add a game");
+                        ImGui::PopFont();
+                        if (clicked) {
+                            mkdir((std::string(rt_data_root()) + "/games").c_str(), 0755);
+                            page = ADD;
+                        }
+                        continue;
+                    }
                     if (clicked && !sel && !busy) {
                         g_card = i;
                         g_root = g_cards[i].root;
@@ -1163,14 +1185,37 @@ extern "C" void launcher_run(const char *root) {
                     opened = true;
                     page = SETTINGS;
                 }
-                if (!status.empty() || busy) {  // (once set up, the game files are kept up in Settings > Prelaunch)
-                    ImGui::SetCursorPosX(x0);
-                    if (g_refocus == SETUP) ImGui::SetKeyboardFocusHere(), g_refocus = MAIN;
-                    if (menu_item("SET UP GAME FILES", !busy)) page = SETUP;
-                }
                 ImGui::SetCursorPosX(x0);
                 if (menu_item("QUIT", true)) exit(0);
                 g_menu_gap = 0.35f;
+            } else if (page == ADD) {
+                std::string games = std::string(rt_data_root()) + "/games";
+                ImGui::PushFont(g_font_small);
+                ImGui::PushTextWrapPos(ds.x * 0.55f);
+                ImGui::SetCursorPosX(x0);
+                ImGui::TextUnformatted("Add a game");
+                ImGui::Spacing();
+                ImGui::SetCursorPosX(x0);
+                ImGui::TextWrapped("Prepare it from your own copy of the game. In the PicRecomp folder run:");
+                ImGui::SetCursorPosX(x0);
+                ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1),
+                                   "tools/picross/prepare.py BASE.nsp UPDATE.nsp %s/<name> --prod-keys prod.keys", games.c_str());
+                ImGui::SetCursorPosX(x0);
+                ImGui::TextWrapped("Press Back when it is done: the game shows up as a card.");
+                ImGui::PopTextWrapPos();
+                ImGui::PopFont();
+                ImGui::Dummy(ImVec2(0, 20 * s));
+                ImGui::SetCursorPosX(x0);
+                if (menu_item("OPEN GAMES FOLDER", true)) reveal_folder(games);
+                ImGui::SetCursorPosX(x0);
+                if (menu_item("BACK", true) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+                    page = MAIN;
+                    scan_cards(g_root);
+                    status = check_game_files(g_root);
+                    g_bg = 0;
+                    if (status.empty()) load_background(dev);
+                }
             } else if (page == SETTINGS) {
                 // the in-game menu's tabs (runtime/ui/menu.mm), in a window like the in-game one; tabs that need a
                 // loaded game say so
@@ -1415,9 +1460,9 @@ extern "C" void launcher_run(const char *root) {
                 ImGui::SetCursorPosX(x0);
                 ImGui::TextColored(ImVec4(0.66f, 0.76f, 0.98f, 1), "Nintendo Switch  \xc2\xb7  v1.0.0");
             } else {
-                ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Setting up the game files..." : status.c_str());
+                ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Setting up the game files..." : g_cards.empty() ? "No game added" : status.c_str());
                 ImGui::SetCursorPosX(x0);
-                ImGui::TextDisabled("Set up the game files to play.");
+                ImGui::TextDisabled(g_cards.empty() ? "Choose + to add a game." : "This game can't be played yet.");
             }
             if (const char *f = getenv("PICRECOMP_LAUNCHER_FONT")) {  // (test) which typeface this window shows
                 const char *b = strrchr(f, '/');
