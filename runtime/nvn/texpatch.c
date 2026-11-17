@@ -1,4 +1,4 @@
-// Texture edits on upload (texpatch.h). No Echoes of Wisdom texture is known yet: every texture is left as it is.
+// Texture edits on upload (texpatch.h). No PICROSS S texture is patched yet: every texture is left as it is.
 #include "texpatch.h"
 
 int texpatch_identify(const NvnTexture *t) {

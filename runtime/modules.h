@@ -2,7 +2,7 @@
 // tables (tools/gamelib_entry.c), the loader and the dispatcher. Guest addresses are host addresses.
 //
 // Order is the order Horizon's rtld loads them in (main, subsdk*, sdk), which is also the symbol lookup order.
-// Bases: main's image is 0x4004000 bytes (Echoes of Wisdom 1.0.0), so it gets 128 MB; the others 32 MB each.
+// Bases: main's image is 0x3060000 bytes (PICROSS S), so it gets 128 MB; subsdk0 gets 64 MB.
 // rtld isn't loaded: the runtime does its job (relocation, module init) itself.
 #pragma once
 

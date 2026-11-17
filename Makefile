@@ -42,8 +42,8 @@ GENARCH  ?= -mcpu=x86_64_v3  # (zig's spelling of x86-64-v3)
 endif
 IMGUI    := third_party/imgui
 GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
-# FNPROF=1: game code with the function-entry profiler's hook (EOWRECOMP_FNPROF; runtime/cpu.h FN_ENTER)
-GENFLAGS += $(if $(FNPROF),-DEOWRECOMP_FNPROF)
+# FNPROF=1: game code with the function-entry profiler's hook (PICRECOMP_FNPROF; runtime/cpu.h FN_ENTER)
+GENFLAGS += $(if $(FNPROF),-DPICRECOMP_FNPROF)
 
 # The game code (made by `make gen` from your own game files) is its own library next to the app (runtime/gamelib.h);
 # the app itself holds none of it
@@ -61,7 +61,7 @@ IMGUI_OBJ := $(B)/imgui/imgui.o $(B)/imgui/imgui_draw.o $(B)/imgui/imgui_tables.
              $(B)/imgui/imgui_impl_sdl3.o
 
 ifeq ($(PLATFORM),linux)
-EXE      := $(B)/eowrecomp
+EXE      := $(B)/picrecomp
 # (pkg-config: Fedora keeps FFmpeg's headers in /usr/include/ffmpeg; Debian / Ubuntu in /usr/include, where it adds nothing)
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include) $(shell pkg-config --cflags libavcodec libavformat libavutil libswscale 2>/dev/null)
 ifeq ($(ARCH),x86_64)
@@ -76,27 +76,27 @@ LDFLAGS  := -fuse-ld=lld -rdynamic $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-GAMELIB  := $(B)/eowgame.so
+GAMELIB  := $(B)/picgame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld  # (the runtime functions it calls: the app's own, -rdynamic)
 GAMELIB_SHARED := -shared
 else
-EXE      := $(B)/eowrecomp.exe
+EXE      := $(B)/picrecomp.exe
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S -DWIN32_LEAN_AND_MEAN -DNOMINMAX
 GENARCH  ?= -march=x86-64-v3  # AVX2 + FMA for the lifted FP/SIMD code (simd.h); override for older CPUs
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
 LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat -lavcodec -lavutil -lswscale \
             -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared \
-            $(if $(RELEASE),-Wl$(comma)--subsystem$(comma)windows)  # release: no console window (log -> eowrecomp.log)
+            $(if $(RELEASE),-Wl$(comma)--subsystem$(comma)windows)  # release: no console window (log -> picrecomp.log)
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 BACKEND_OBJ += $(if $(wildcard docs/icon/icon.ico),$(B)/rt/platform/windows_rc.o)  # the .exe's icon (none yet)
 WINDRES  ?= windres
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-GAMELIB  := $(B)/eowgame.dll
+GAMELIB  := $(B)/picgame.dll
 # the runtime functions it calls (RT_API in runtime/cpu.h): exported by the .exe, imported through an import library
-# made from tools/windows/eowrecomp.def
-IMPLIB   := $(B)/eowrecomp.lib
+# made from tools/windows/picrecomp.def
+IMPLIB   := $(B)/picrecomp.lib
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(IMPLIB)
 GAMELIB_SHARED := -shared  # (+ the import library: runtime/gamebuild.c)
 endif
@@ -109,8 +109,8 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
 
 RT_OBJ   := $(patsubst runtime/%.c,$(B)/rt/%.o,$(RT_SRC))
-RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -DEOW_RUNTIME -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS)
-CXXFLAGS := -O2 -g -std=c++17 -DEOW_RUNTIME -I$(IMGUI) -I$(IMGUI)/backends -Iruntime -Iruntime/nvn $(DEPINC)
+RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -DPICRECOMP_RUNTIME -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS)
+CXXFLAGS := -O2 -g -std=c++17 -DPICRECOMP_RUNTIME -I$(IMGUI) -I$(IMGUI)/backends -Iruntime -Iruntime/nvn $(DEPINC)
 
 all: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
 
@@ -173,9 +173,9 @@ $(EXE): $(RT_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ)
 	mv -f $(dir $@)link/$(notdir $@) $@
 
 ifeq ($(PLATFORM),windows)
-$(IMPLIB): tools/windows/eowrecomp.def
+$(IMPLIB): tools/windows/picrecomp.def
 	@mkdir -p $(dir $@)
-	$(or $(ZIG),zig) dlltool -m i386:x86-64 -D eowrecomp.exe -d $< -l $@
+	$(or $(ZIG),zig) dlltool -m i386:x86-64 -D picrecomp.exe -d $< -l $@
 $(GAMELIB): $(IMPLIB)
 endif
 
@@ -210,7 +210,7 @@ $(B)/rt/platform/windows_rc.o: runtime/platform/windows.rc docs/icon/icon.ico
 	@mkdir -p $(dir $@)
 	$(WINDRES) -I docs/icon -O coff $< -o $@
 
-# The game code generator as a standalone helper (PyInstaller, tools/eowgen.spec): build/helper/eowgen/, for the start
+# The game code generator as a standalone helper (PyInstaller, tools/picgen.spec): build/helper/picgen/, for the start
 # screen's setup on the player's machine (runtime/gamebuild.c). GEN_VENV: its venv.
 GEN_PY  ?= $(if $(filter windows,$(PLATFORM)),py -3.12,python3)
 GEN_VENV ?= build/gen-venv
@@ -219,9 +219,9 @@ GEN_VPY := $(if $(filter windows,$(PLATFORM)),$(GEN_VENV)/Scripts/python.exe,$(G
 gen-helper: $(GEN_VENV)/.ok
 	$(if $(filter windows,$(PLATFORM)),USERPROFILE="$$(cygpath -w ~ 2>/dev/null || echo $$HOME)") \
 	$(GEN_VPY) -m PyInstaller --noconfirm --clean --log-level WARN --distpath build/helper --workpath build/pyinstaller \
-	    tools/eowgen.spec
-	$(if $(filter windows,$(PLATFORM)),$(GEN_VPY) tools/pe_no_cfg.py build/helper/eowgen/eowgen.exe)
-	@du -sh build/helper/eowgen
+	    tools/picgen.spec
+	$(if $(filter windows,$(PLATFORM)),$(GEN_VPY) tools/pe_no_cfg.py build/helper/picgen/picgen.exe)
+	@du -sh build/helper/picgen
 
 $(GEN_VENV)/.ok:
 	$(GEN_PY) -m venv $(GEN_VENV)

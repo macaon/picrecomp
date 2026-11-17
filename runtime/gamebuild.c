@@ -104,8 +104,8 @@ static void args_free(Args *a) {
 
 // ------------------------------------------------------------------ the tools
 typedef struct {
-    char gen[1100], gen_script[1100];  // generator: eowgen, or (source checkout) the venv's python + tools/gen.py
-    char cc[1100];                     // compiler: zig (as `zig cc`), or EOWRECOMP_CC / clang
+    char gen[1100], gen_script[1100];  // generator: picgen, or (source checkout) the venv's python + tools/gen.py
+    char cc[1100];                     // compiler: zig (as `zig cc`), or PICRECOMP_CC / clang
     bool zig;
     char inc[1100], entry[1100], hle[1100];  // headers the game code includes, tools/gamelib_entry.c, HLE names
 #ifdef _WIN32
@@ -122,13 +122,13 @@ static bool file_exists(const char *p) {
 
 static bool find_tools(Tools *t) {
     memset(t, 0, sizeof *t);
-    const char *e = getenv("EOWRECOMP_GEN");
+    const char *e = getenv("PICRECOMP_GEN");
     if (e && *e) snprintf(t->gen, sizeof t->gen, "%s", e);
-    else if (!rt_resource("eowgen" SEP "eowgen" PLAT_EXE_SUFFIX, NULL, t->gen, sizeof t->gen) &&
+    else if (!rt_resource("picgen" SEP "picgen" PLAT_EXE_SUFFIX, NULL, t->gen, sizeof t->gen) &&
              !(rt_resource(NULL, "tools/" PLAT_VENV_PYTHON, t->gen, sizeof t->gen) &&
                rt_resource(NULL, "tools/gen.py", t->gen_script, sizeof t->gen_script)))
         return false;
-    e = getenv("EOWRECOMP_CC");
+    e = getenv("PICRECOMP_CC");
     if (e && *e) snprintf(t->cc, sizeof t->cc, "%s", e);
     else if (rt_resource("zig" SEP "zig" PLAT_EXE_SUFFIX, NULL, t->cc, sizeof t->cc)) t->zig = true;
 #ifndef _WIN32
@@ -143,7 +143,7 @@ static bool find_tools(Tools *t) {
     if (b > s) s = b;
     if (s) *s = 0;
 #ifdef _WIN32
-    if (!rt_resource("eowrecomp.dll.a", "build/eowrecomp.dll.a", t->implib, sizeof t->implib)) return false;
+    if (!rt_resource("picrecomp.dll.a", "build/picrecomp.dll.a", t->implib, sizeof t->implib)) return false;
     t->zig_rt[0] = 0;
     if (t->zig && rt_resource("zig" SEP "rt" SEP "link.rsp", NULL, t->zig_rt, sizeof t->zig_rt)) {
         char *s = strrchr(t->zig_rt, '/'), *b = strrchr(t->zig_rt, '\\');
@@ -303,7 +303,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     if (!registered) registered = true, atexit(end_all);
     Tools t;
     if (!find_tools(&t)) {
-        snprintf(why, why_size, "the game code builder is missing from this copy of EoWRecomp");
+        snprintf(why, why_size, "the game code builder is missing from this copy of PicRecomp");
         return false;
     }
     char work[1100], lib[1100], tmp[1100];
@@ -352,8 +352,8 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     int queued[GAME_NMODULES] = {0};  // chunk files of each module put in units so far
     bool tables[GAME_NMODULES] = {false};
     int next = 0, jobs = o->jobs < 1 ? 1 : o->jobs > 64 ? 64 : o->jobs;
-    {   // (testing / tuning: EOWRECOMP_BUILD_JOBS)
-        const char *e = getenv("EOWRECOMP_BUILD_JOBS");
+    {   // (testing / tuning: PICRECOMP_BUILD_JOBS)
+        const char *e = getenv("PICRECOMP_BUILD_JOBS");
         if (e && atoi(e) > 0) jobs = atoi(e) > 64 ? 64 : atoi(e);
     }
     struct { PlatProc p; int unit; } run[64];

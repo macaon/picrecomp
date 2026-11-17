@@ -10,10 +10,10 @@
 #include "modules.h"
 
 #if defined(_WIN32)
-#define GAMELIB_NAME "eowgame.dll"
+#define GAMELIB_NAME "picgame.dll"
 #define GAMELIB_EXPORT __declspec(dllexport)
 #else
-#define GAMELIB_NAME "eowgame.so"
+#define GAMELIB_NAME "picgame.so"
 #define GAMELIB_EXPORT __attribute__((visibility("default")))
 #endif
 
@@ -40,14 +40,14 @@ typedef struct {
 
 // The library's one exported function (tools/gamelib_entry.c).
 typedef const GameLibTables *(*GameLibEntry)(void);
-#define GAMELIB_ENTRY "eowgame_tables"
+#define GAMELIB_ENTRY "picgame_tables"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Loads the game code for the game files in game_dir (once; later calls return the first result). Looks at
-// EOWRECOMP_GAME_LIB, next to the executable (a source checkout's build/), then game_dir. false: why says what's wrong.
+// PICRECOMP_GAME_LIB, next to the executable (a source checkout's build/), then game_dir. false: why says what's wrong.
 bool gamelib_load(const char *game_dir, char *why, size_t why_size);
 // The tables of the loaded library (NULL before gamelib_load succeeds).
 const GameLibTables *gamelib_tables(void);

@@ -1,4 +1,4 @@
-"""Inventory of the game's ExeFS against what the runtime implements (data for docs/GAP.md).
+"""Inventory of the game's ExeFS against what the runtime implements (which services, SVCs and NVN calls the game uses).
 
 Usage: inventory.py <exefs dir> [--lift] [--simd c|asm]
 

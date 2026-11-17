@@ -1,4 +1,4 @@
-// EoWRecomp entry: load modules, set up the kernel, run nn::init::Start on the main thread.
+// PicRecomp entry: load modules, set up the kernel, run nn::init::Start on the main thread.
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -70,7 +70,7 @@ static void rtld_fini(Cpu *c) { (void)c; LOG("nnMain returned\n"); }
 static bool g_guest_reserved;
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
     if ((g_guest_reserved = plat_reserve_guest(GUEST_LO, GUEST_HI))) return;
-    const char *tries = getenv("EOWRECOMP_REEXEC");
+    const char *tries = getenv("PICRECOMP_REEXEC");
     int n = tries ? atoi(tries) : 0;
     if (n >= 20) {
         fprintf(stderr, "FATAL: guest address range %llx-%llx is not free\n", GUEST_LO, GUEST_HI);
@@ -78,7 +78,7 @@ __attribute__((constructor(101))) static void reserve_guest_space(void) {
     }
     char buf[16];
     snprintf(buf, sizeof buf, "%d", n + 1);
-    setenv("EOWRECOMP_REEXEC", buf, 1);
+    setenv("PICRECOMP_REEXEC", buf, 1);
     plat_exec(NULL);
     perror("re-exec");
     exit(1);
@@ -97,12 +97,12 @@ void rt_request_reboot(int kind) {
 }
 int rt_reboot_requested(void) { return g_reboot; }
 
-// EOWRECOMP_REBOOT_AT=<frame>:<game | title>[,...] (test): at that presented frame, boot the game again in place, or
+// PICRECOMP_REBOOT_AT=<frame>:<game | title>[,...] (test): at that presented frame, boot the game again in place, or
 // go back to the start screen. Frames count on across reboots. Called by the presenter every frame.
 void reboot_test_frame(uint64_t frame) {
     static const char *next;
     static int init;
-    if (!init) { init = 1; next = getenv("EOWRECOMP_REBOOT_AT"); }
+    if (!init) { init = 1; next = getenv("PICRECOMP_REBOOT_AT"); }
     long at;
     char what[128];
     if (!next || !*next || sscanf(next, "%ld:%127[^,]", &at, what) != 2 || (long)frame < at) return;
@@ -187,14 +187,14 @@ static void boot(const char *root) {
 
 int main(int argc, char **argv) {
     plat_init();
-    plat_thread_name("eow-main");
+    plat_thread_name("pic-main");
 #ifdef _WIN32
     setvbuf(stderr, NULL, _IONBF, 0);  // the Windows CRT treats _IOLBF as full buffering
 #else
     setvbuf(stderr, NULL, _IOLBF, 0);
 #endif
     const char *root = "extracted";  // (in the data root)
-    bool skip_launcher = getenv("EOWRECOMP_NO_LAUNCHER") || getenv("EOWRECOMP_INPUT");  // tests boot straight in
+    bool skip_launcher = getenv("PICRECOMP_NO_LAUNCHER") || getenv("PICRECOMP_INPUT");  // tests boot straight in
     static char arg_root[4096];  // (realpath: PATH_MAX)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--play")) skip_launcher = true;

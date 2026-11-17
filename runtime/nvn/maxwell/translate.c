@@ -24,7 +24,7 @@
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
 // Iteration limit of a branching shader's dispatch loop (a mistranslated branch can't hang the GPU forever).
-// EOWRECOMP_SHADER_GUARD overrides it (backends read it): a small one shows which shaders loop.
+// PICRECOMP_SHADER_GUARD overrides it (backends read it): a small one shows which shaders loop.
 uint32_t maxwell_loop_guard = 100000;
 const uint8_t *maxwell_dbg_code;
 uint32_t maxwell_dbg_pc;
@@ -421,7 +421,7 @@ static bool emit_half(Ctx *c, uint64_t w) {
         return true;
     }
     // ---- HSETP2 / HSET2: reg forms (5d20 / 5d18) and immediate forms (7e0x / 7c0x). The immediate takes bits 20-38 and
-    // 56 (himm), so the comparison moves to 49-52 and H_AND / BF to 53 (checked on Echoes of Wisdom's
+    // 56 (himm), so the comparison moves to 49-52 and H_AND / BF to 53 (checked on shader
     // 7e0683bc0f071507: HSETP2.LE.AND P0, PT, R21.F32, 1.0, 1.0, PT). The cbuf forms (7e8x / 7c8x) aren't done.
     bool himm_form = (op & 0xfe80) == 0x7e00 || (op & 0xfe80) == 0x7c00;
     if ((op & 0xfff8) == 0x5d20 || (op & 0xfff8) == 0x5d18 || himm_form) {
@@ -930,7 +930,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sp(&c->body, c->branchy ? "    exit_now = true; break;\n" : "    break;\n");
     } else if (OPM(0xe330000000000000ull, 0xfff0000000000000ull)) {  // KIL
         c->info->uses_discard = true;
-        if (getenv("EOWRECOMP_NO_DISCARD")) {
+        if (getenv("PICRECOMP_NO_DISCARD")) {
         } else if (!c->glsl) sp(&c->body, "    discard_fragment();\n");
         else if (c->stage == STAGE_FRAGMENT) sp(&c->body, "    discard;\n");
         else sp(&c->body, "    /* kil */\n");  // GLSL has discard in fragment shaders only
@@ -1419,7 +1419,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                OPM(0x3830000000000000ull, 0xfef8000000000000ull)) {  // FLO
         // FLO[.U32/.S32][.SH] Rd, ~?B: the most significant 1 (signed: of a negative value, the most significant 0), or
         // 0xFFFFFFFF if none; .SH (bit 41) gives the shift instead, 31 - position (Ryujinx EmitFlo). .INV (bit 40)
-        // complements B first. (.SH was missing: Echoes of Wisdom walks its light masks with FLO.SH of a BREV - the
+        // complements B first. (.SH was missing: a game walks its light masks with FLO.SH of a BREV - the
         // lowest set bit - and the wrong bit was cleared: the loop ran far too long and lit wrongly.)
         char vb[300];
         sprintf(vb, bits(w, 40, 1) ? "(~%s)" : "%s", B(false));
@@ -1659,7 +1659,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (pd != PT) { c->pred_used[pd] = 1; sp(&c->body, "    p%d = true;\n", pd); }
     } else if (OPM(0x5bd8000000000000ull, 0xfff8000000000000ull)) {  // LEA.HI Rd, A, B, C, shift (register form)
         // Rd = high word of (C:A << shift) + B. Fields per Ryujinx's InstLeaHiR (shift 28-32, C 39-46, NegA 37, X 38,
-        // CC 47); checked on Echoes of Wisdom's 5bdf7f81f0370404: LEA.HI R4, R4, R3, RZ, 0x1f.
+        // CC 47); checked on shader 5bdf7f81f0370404: LEA.HI R4, R4, R3, RZ, 0x1f.
         int sh = (int)bits(w, 28, 5);
         if (bits(w, 37, 1) || bits(w, 38, 1) || bits(w, 47, 1)) fail(c, "lea.hi neg/x/cc");
         const char *cv = R((int)bits(w, 39, 8));
@@ -1668,7 +1668,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         set_reg(c, d, t);
     } else if (OPM(0x50d8000000000000ull, 0xfff8000000000000ull)) {  // VOTE.{ALL,ANY,EQ} Rd, Pv, Ps
         // fields per Ryujinx's InstVote: mode 48-49, Pv 45-47, Ps 39-41 (+ not 42); Rd gets the ballot of Ps. Checked on
-        // Echoes of Wisdom's 50d9e3800007000e: VOTE.ANY R14, PT, PT (R14 = the active lanes).
+        // Shader 50d9e3800007000e: VOTE.ANY R14, PT, PT (R14 = the active lanes).
         int mode = (int)bits(w, 48, 2), vp = (int)bits(w, 45, 3);
         if (mode > 2) fail(c, "vote mode %d", mode);
         static const char *const gl[] = {"subgroupAll(vp_)", "subgroupAny(vp_)", "subgroupAllEqual(vp_)"};
@@ -1686,7 +1686,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sp(&c->body, "    }\n");
     } else if (OPM(0xebf8000000000000ull, 0xfff8000000000000ull)) {  // RED: atomic reduction to global memory, no result
         // fields per Ryujinx's InstRed: value 0-7, address 8-15 (64-bit pair with .E, bit 48), size 20-22, op 23-25,
-        // offset 28-47 (signed). Checked on Echoes of Wisdom's ebf9000003070002: RED.E.OR [R0], R2.
+        // offset 28-47 (signed). Checked on shader ebf9000003070002: RED.E.OR [R0], R2.
         int size = (int)bits(w, 20, 3), op = (int)bits(w, 23, 3), vr = d;
         bool wide = bits(w, 48, 1);
         int64_t off = sbits(w, 28, 20);
@@ -2122,7 +2122,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     const uint8_t *sph = blob + 0x30;
     const uint8_t *code = blob + 0x80;
     // compute programs have no SPH. Older NVN (Link's Awakening): no header either, code starts at the blob. Newer NVN
-    // (Echoes of Wisdom, SDK 16.2): a 0x100-byte header starting with the magic 0x12345679 (graphics: 0x12345678).
+    // (SDK 16.2): a 0x100-byte header starting with the magic 0x12345679 (graphics: 0x12345678).
     if (stage == STAGE_COMPUTE) code = *(const uint32_t *)blob == 0x12345679u ? blob + 0x100 : blob;
     c->code = code;
     if (stage == STAGE_FRAGMENT) {
@@ -2149,7 +2149,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     // makes [h, b] a loop: `for (;;) { its blocks; if (pc == h) continue; break; }`. Loops must nest (or be disjoint);
     // with PCNT / CONT, BRX, a backward SSY / PBK or overlapping loops the shader keeps the dispatch loop
     // (for { switch (pc) }). That loop around the whole shader keeps every register live across its back edge, which
-    // GPU compilers turn into spills: Echoes of Wisdom's main ground material (a loop, 32 textures) took ~4.5 ms per
+    // GPU compilers turn into spills: one game's main ground material (a loop, 32 textures) took ~4.5 ms per
     // draw on an Iris Xe.
     bool forward = true;
     enum { MAX_LOOPS = 64 };
@@ -2194,7 +2194,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     // translate
     bool dbg = maxwell_dbg_code && blob == maxwell_dbg_code && stage == STAGE_FRAGMENT;
     static int annotate = -1;
-    if (annotate < 0) annotate = getenv("EOWRECOMP_SAVE_MSL") != NULL;
+    if (annotate < 0) annotate = getenv("PICRECOMP_SAVE_MSL") != NULL;
     // a loop ends after its backward branch: its end is a block boundary (index of the first instruction after it)
     uint32_t loop_e[MAX_LOOPS];
     for (int k = 0; k < nloops && forward; k++) {
@@ -2214,7 +2214,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             if (loop_h[k] == loop_h[m] && k != m) forward = false;
         }
     c->branchy = any_branch;
-    c->fwd = any_branch && forward && !getenv("EOWRECOMP_NO_FWD_SHADERS");
+    c->fwd = any_branch && forward && !getenv("PICRECOMP_NO_FWD_SHADERS");
     bool fwd_first = true;
     for (size_t i = 0; i < end && !c->fail; i++) {
         if (i % 4 == 0) continue;

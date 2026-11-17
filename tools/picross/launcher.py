@@ -154,8 +154,8 @@ class Setup:
 
     @staticmethod
     def settings_path():
-        data = Path(os.environ.get("EOWRECOMP_DATA_ROOT") or ROOT / ".picrecomp" / "runtime")
-        return data / (os.environ.get("EOWRECOMP_SETTINGS") or "eowrecomp.ini")
+        data = Path(os.environ.get("PICRECOMP_DATA_ROOT") or ROOT / ".picrecomp" / "runtime")
+        return data / (os.environ.get("PICRECOMP_SETTINGS") or "picrecomp.ini")
 
     def settings_page(self):
         panel = self.section("settings", "Settings", "These settings apply the next time you launch the game.")
@@ -262,8 +262,8 @@ class Setup:
 
     @staticmethod
     def built():
-        return os.access(BUILD / "eowrecomp", os.X_OK) and all(
-            (BUILD / name).is_file() for name in ("eowgame.so", "eowgame.so.id")
+        return os.access(BUILD / "picrecomp", os.X_OK) and all(
+            (BUILD / name).is_file() for name in ("picgame.so", "picgame.so.id")
         )
 
     def refresh(self, initial=False):

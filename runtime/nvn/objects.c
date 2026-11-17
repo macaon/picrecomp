@@ -150,10 +150,10 @@ void renderer_flush(void);
 NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
     static int flush = -1;
     static uint64_t n;
-    if (flush < 0) flush = getenv("EOWRECOMP_SYNC_FLUSH") ? 1 : 0;
-    if (getenv("EOWRECOMP_LOG_SYNC") && n++ % 60 == 0) LOG("[nvn] SyncWait #%llu (lr %llx)\n", (unsigned long long)n, c->x[30]);
-    static int whole = -1;  // EOWRECOMP_SYNC_ALL=1: old behaviour, wait for all submitted work
-    if (whole < 0) whole = getenv("EOWRECOMP_SYNC_ALL") ? 1 : 0;
+    if (flush < 0) flush = getenv("PICRECOMP_SYNC_FLUSH") ? 1 : 0;
+    if (getenv("PICRECOMP_LOG_SYNC") && n++ % 60 == 0) LOG("[nvn] SyncWait #%llu (lr %llx)\n", (unsigned long long)n, c->x[30]);
+    static int whole = -1;  // PICRECOMP_SYNC_ALL=1: old behaviour, wait for all submitted work
+    if (whole < 0) whole = getenv("PICRECOMP_SYNC_ALL") ? 1 : 0;
     if (flush) renderer_flush();
     else if (whole) renderer_sync();
     else renderer_wait_seq(sync_of(A(0))->seq);  // only the submission that holds this fence
@@ -301,7 +301,7 @@ NVN(nvnTextureBuilderGetPackagedTextureData) { RET(TB(uint64_t, 0x48)); }
 NVN(nvnTextureBuilderGetPackagedTextureLayout) { RET(0); }
 NVN(nvnTextureBuilderGetGLTextureName) { RET(TB(uint32_t, 0x58)); }
 NVN(nvnTextureBuilderGetSparseTileLayout) { RET(0); }
-// Z-cull storage: games allocate it (Echoes of Wisdom: its depth buffer's, in a 256-byte-granule allocator that
+// Z-cull storage: games allocate it (one: its depth buffer's, in a 256-byte-granule allocator that
 // breaks on 0) and pass it to Save/RestoreZCullData, which are no-ops here - the host GPU culls by itself. Its size
 // only has to be a sane non-zero amount for the dimensions: 8 bytes per 16x16 pixel tile, 4 KB aligned.
 static uint64_t zcull_size(uint64_t w, uint64_t h) {
@@ -333,7 +333,7 @@ static void builder_layout(uint64_t b, TexLayout *t) {
     // from the driver default: NVNpackagedTextureLayout's low word is log2(GOBs per block).
     uint64_t pl = G(uint64_t, b, 0x50);
     if (pl && (uint32_t)pl <= 5) t->block_height_log2 = (uint32_t)pl;
-    if (pl && getenv("EOWRECOMP_LOG_PACKAGED")) {
+    if (pl && getenv("PICRECOMP_LOG_PACKAGED")) {
         static int n;
         if (n++ < 4000) LOG("[nvn] packaged layout %016llx fmt %#x %ux%u lv %u -> default bh %u\n", pl, G(uint32_t, b, 0x20), t->width, t->height, t->levels, t->block_height_log2);
     }
@@ -468,7 +468,7 @@ NVN(nvnTextureReadTexels) { LOG("[nvn] ReadTexels not implemented\n"); (void)c; 
 NVN(nvnTextureReadTexelsStrided) { (void)c; }
 
 // ================================================================== samplers
-// SamplerBuilder (guest memory): only 0x40 bytes are guaranteed - Echoes of Wisdom keeps them on its stack, right
+// SamplerBuilder (guest memory): only 0x40 bytes are guaranteed - a game keeps them on its stack, right
 // under the saved frame pointer and return address (an NvnSamplerDesc stored here overwrote them). So the builder
 // holds a packed copy (48 bytes), turned into an NvnSamplerDesc by sampler_desc().
 typedef struct {

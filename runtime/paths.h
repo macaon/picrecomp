@@ -1,14 +1,13 @@
-// Where EoWRecomp keeps its files (runtime/paths.c).
+// Where PicRecomp keeps its files (runtime/paths.c).
 //
 // Data root: everything the app writes or the user brings - extracted/ (game files), rando/ (seeds), save/,
-// cache/ (shaders / pipelines), fonts/ (imported), eowrecomp.ini. rt_paths_init() picks it and makes it the
+// cache/ (shaders / pipelines), fonts/ (imported), picrecomp.ini. rt_paths_init() picks it and makes it the
 // working directory, so the rest of the runtime opens those by their relative names. In order:
-//   1. EOWRECOMP_DATA_ROOT (tests, scratch installs)
-//   2. dev / portable mode: the starting directory already has extracted/ (a source checkout: `./build/eowrecomp
+//   1. PICRECOMP_DATA_ROOT (tests, scratch installs)
+//   2. dev / portable mode: the starting directory already has extracted/ (a source checkout: `./build/picrecomp
 //      extracted`, the test scripts) - used as is
-//   3. macOS: ~/Library/Application Support/com.eowrecomp.eowrecomp (the .app bundle itself is never written to)
-//      Windows: the folder of the .exe (portable, no installer); refuses to start, with a message, if not writable
-//      Linux: $XDG_DATA_HOME/eowrecomp (~/.local/share/eowrecomp)
+//   3. Windows: the folder of the .exe (portable, no installer); refuses to start, with a message, if not writable
+//      Linux: $XDG_DATA_HOME/picrecomp (~/.local/share/picrecomp)
 //
 // Resources: files that ship with the app (helper programs, the window icon) - next to the executable (the
 // Windows folder, the .app's Contents/MacOS), in the .app's Contents/Resources, or in the source tree.
@@ -19,8 +18,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define RT_BUNDLE_ID "com.eowrecomp.eowrecomp"
 
 void rt_paths_init(void);         // first thing in main(), after plat_init
 const char *rt_data_root(void);   // absolute

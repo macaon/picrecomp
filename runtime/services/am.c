@@ -39,7 +39,7 @@ static uint32_t new_event(void) {
 
 // An event that is already signaled: the game waits on it as a gate (ISelfController::GetLibraryAppletLaunchableEvent,
 // which the system signals once the application can launch library applets). The plain new_event() never fires, so the
-// game's main thread hung for good when Plus at PICROSS S's main menu waited on it (backtrace: EOWRECOMP_PROF_SVC=1).
+// game's main thread hung for good when Plus at PICROSS S's main menu waited on it (backtrace: PICRECOMP_PROF_SVC=1).
 static uint32_t new_signaled_event(void) {
     uint32_t w, r;
     KEvent *ev = kernel_create_event_pair(&w, &r);
@@ -73,7 +73,7 @@ static void common_state_getter(Service *s, IpcReq *req, IpcResp *resp) {
     case 9: OUT(uint8_t, 0) = 1; resp_size(resp, 1); break;   // GetCurrentFocusState: in focus
     case 13: case 61: resp->copy_handles[resp->ncopy++] = new_event(); break;
     case 60: {  // GetDefaultDisplayResolution
-        int w = getenv("EOWRECOMP_DISPLAY_W") ? atoi(getenv("EOWRECOMP_DISPLAY_W")) : 1920;
+        int w = getenv("PICRECOMP_DISPLAY_W") ? atoi(getenv("PICRECOMP_DISPLAY_W")) : 1920;
         LOG("[am] GetDefaultDisplayResolution -> %dx1080\n", w);
         OUT(int32_t, 0) = w; OUT(int32_t, 4) = 1080; resp_size(resp, 8); break;
     }

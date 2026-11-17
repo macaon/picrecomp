@@ -71,7 +71,7 @@ static bool writable(const char *dir) {
 
 static void fail(const char *msg) {
     fprintf(stderr, "%s\n", msg);
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "EoWRecomp", msg, NULL);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "PicRecomp", msg, NULL);
     exit(1);
 }
 
@@ -87,31 +87,28 @@ void rt_paths_init(void) {
         if (s) *s = 0;
     }
     char root[1024];
-    const char *env = getenv("EOWRECOMP_DATA_ROOT");
+    const char *env = getenv("PICRECOMP_DATA_ROOT");
     if (env && *env) snprintf(root, sizeof root, "%s", env);
     else if (is_dir("extracted")) snprintf(root, sizeof root, "%s", g_start), g_dev = true;  // dev / portable: as before
     else {
 #ifdef _WIN32
         snprintf(root, sizeof root, "%s", g_exe_dir);
 #elif defined(__linux__)
-        // (the AppImage is read-only): $XDG_DATA_HOME/eowrecomp, ~/.local/share/eowrecomp by default
+        // (the AppImage is read-only): $XDG_DATA_HOME/picrecomp, ~/.local/share/picrecomp by default
         const char *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
-        if (xdg && *xdg == '/') snprintf(root, sizeof root, "%s/eowrecomp", xdg);
-        else snprintf(root, sizeof root, "%s/.local/share/eowrecomp", home && *home ? home : "/tmp");
-#else
-        const char *home = getenv("HOME");
-        snprintf(root, sizeof root, "%s/Library/Application Support/" RT_BUNDLE_ID, home && *home ? home : "/tmp");
+        if (xdg && *xdg == '/') snprintf(root, sizeof root, "%s/picrecomp", xdg);
+        else snprintf(root, sizeof root, "%s/.local/share/picrecomp", home && *home ? home : "/tmp");
 #endif
     }
     mkdirs(root);
     char msg[1400];
     if (!is_dir(root) || !writable(root) || chdir(root) != 0) {
 #ifdef _WIN32
-        snprintf(msg, sizeof msg, "EoWRecomp can't write to its folder:\n%s\n\nIt keeps game files, saves and seeds "
-                 "next to the program. Move the \"EoWRecomp\" folder somewhere you can write to (e.g. Documents or "
+        snprintf(msg, sizeof msg, "PicRecomp can't write to its folder:\n%s\n\nIt keeps game files, saves and seeds "
+                 "next to the program. Move the \"PicRecomp\" folder somewhere you can write to (e.g. Documents or "
                  "Desktop, not Program Files) and start it again.", root);
 #else
-        snprintf(msg, sizeof msg, "EoWRecomp can't write to its data folder:\n%s", root);
+        snprintf(msg, sizeof msg, "PicRecomp can't write to its data folder:\n%s", root);
 #endif
         fail(msg);
     }
@@ -129,7 +126,7 @@ bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n) {
     }
     if (dev_rel) {
         snprintf(c[2], sizeof c[2], "%s" SEP "%s", g_start, dev_rel);
-        snprintf(c[3], sizeof c[3], "%s" SEP ".." SEP "%s", g_exe_dir, dev_rel);  // build/eowrecomp -> repo root
+        snprintf(c[3], sizeof c[3], "%s" SEP ".." SEP "%s", g_exe_dir, dev_rel);  // build/picrecomp -> repo root
     }
     for (int i = 0; i < 4; i++)
         if (c[i][0] && exists(c[i])) return (size_t)snprintf(out, n, "%s", c[i]) < n;  // (as is: a venv python must stay a link)

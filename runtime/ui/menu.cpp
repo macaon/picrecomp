@@ -54,7 +54,7 @@ static void set_open(bool open);
 extern "C" void menu_set_open(bool open) { set_open(open); }  // (the touch controls' menu button)
 extern "C" void menu_test_open(void) {
     set_open(true);
-    if (getenv("EOWRECOMP_MENU_TAB")) { extern int g_tab_request_ext; g_tab_request_ext = atoi(getenv("EOWRECOMP_MENU_TAB")); }
+    if (getenv("PICRECOMP_MENU_TAB")) { extern int g_tab_request_ext; g_tab_request_ext = atoi(getenv("PICRECOMP_MENU_TAB")); }
 }
 
 void menu_tabs_focus(bool first_tab);
@@ -327,8 +327,8 @@ static void init(void) {
     // the menu window itself: Baloo 2 SemiBold, as on the start screen (shipped, OFL), at its Settings window's sizes; the
     // FPS counter, overlays and on-screen keyboard keep the fonts above
     char baloo[1024];
-    if (const char *f = getenv("EOWRECOMP_MENU_FONT")) strlcpy(baloo, f, sizeof baloo);  // (test) another weight / face
-    if (getenv("EOWRECOMP_MENU_FONT") || rt_resource("Baloo2-SemiBold.ttf", "third_party/fonts/Baloo2/Baloo2-SemiBold.ttf", baloo, sizeof baloo)) {
+    if (const char *f = getenv("PICRECOMP_MENU_FONT")) strlcpy(baloo, f, sizeof baloo);  // (test) another weight / face
+    if (getenv("PICRECOMP_MENU_FONT") || rt_resource("Baloo2-SemiBold.ttf", "third_party/fonts/Baloo2/Baloo2-SemiBold.ttf", baloo, sizeof baloo)) {
         g_menu_font = io.Fonts->AddFontFromFileTTF(baloo, 39, &cfg);
         g_menu_font_big = io.Fonts->AddFontFromFileTTF(baloo, 72, &cfg);
     }
@@ -493,8 +493,8 @@ static void tab_quit(float scale, bool in_game) {
         ask = 0;
     const char *lost = in_game ? "\n\nProgress since your last save is lost." : "";
     char d1[200], d2[200];
-    snprintf(d1, sizeof d1, "Leaves the game and goes back to the EoWRecomp start screen.%s", lost);
-    snprintf(d2, sizeof d2, "Closes EoWRecomp.%s", lost);
+    snprintf(d1, sizeof d1, "Leaves the game and goes back to the PicRecomp start screen.%s", lost);
+    snprintf(d2, sizeof d2, "Closes PicRecomp.%s", lost);
     opt_begin("##quit", scale);
     opt_section("Quit");
     if (!ask) {
@@ -604,8 +604,8 @@ extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, in
     g_kbd_max = max_len > 0 && max_len < (int)sizeof g_kbd_text / 4 ? max_len : 8;
     input_reset();
     g_kbd = 1;
-    // (test) EOWRECOMP_KBD_AUTO=<text>: answer at once
-    if (getenv("EOWRECOMP_KBD_AUTO")) { snprintf(g_kbd_text, sizeof g_kbd_text, "%s", getenv("EOWRECOMP_KBD_AUTO")); g_kbd = 2; }
+    // (test) PICRECOMP_KBD_AUTO=<text>: answer at once
+    if (getenv("PICRECOMP_KBD_AUTO")) { snprintf(g_kbd_text, sizeof g_kbd_text, "%s", getenv("PICRECOMP_KBD_AUTO")); g_kbd = 2; }
     while (g_kbd.load() == 1 && !g_rt_unwind) {  // ~60 Hz (a reboot cancels)
         uint64_t t0 = SDL_GetTicks();
         backend_represent();
@@ -711,7 +711,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 case 8: tab_about(); break;
                 case 9: tab_quit(scale, in_game); break;
                 }
-                static const char *scroll_test = getenv("EOWRECOMP_MENU_SCROLL");  // test hook: page scroll, 0..1
+                static const char *scroll_test = getenv("PICRECOMP_MENU_SCROLL");  // test hook: page scroll, 0..1
                 if (scroll_test) ImGui::SetScrollY(ImGui::GetScrollMaxY() * (float)atof(scroll_test));
                 ImGui::EndChild();
                 ImGui::EndTabItem();

@@ -1,0 +1,10 @@
+; What the game code library (picgame.dll) imports from picrecomp.exe: RT_API in runtime/cpu.h.
+LIBRARY picrecomp.exe
+EXPORTS
+    rt_dispatch
+    rt_svc
+    rt_brk
+    rt_udf
+    rt_ticks
+    fnprof_hit
+    g_fnprof DATA

@@ -1,7 +1,7 @@
 // Widescreen: the renderer asks each frame whether the game image may fill a window that isn't 16:9, and how much of
-// the rendered image to present. In LAS Recomp the camera code's 16:9 aspect loads were patched (tools/patches.py)
-// so the game itself rendered wider views. Echoes of Wisdom has no such patches yet (milestone M7), so the game's
-// image is 16:9 and is shown boxed in other window shapes: widening it here would only stretch it.
+// the rendered image to present. Wider views would need the camera code's 16:9 aspect loads patched (tools/patches.py)
+// so the game itself rendered them; PICROSS S has no such patches, so the game's image is 16:9 and is shown boxed in
+// other window shapes: widening it here would only stretch it.
 #include <stdbool.h>
 
 #include "../hle.h"
@@ -23,8 +23,8 @@ void widescreen_present_crop(uint64_t frame, double shape, float crop[4], double
     crop[0] = crop[1] = 0, crop[2] = crop[3] = 1;
 }
 
-// Current level name for logs: unknown for Echoes of Wisdom so far.
+// Current level name for logs: none: PICROSS S has no level hook.
 const char *game_level_name(void) { return "-"; }
 
-// Test hook: the next presented frame is saved to this path (EOWRECOMP_HOST_INPUT "shot" entries, runtime/hle/input.c).
+// Test hook: the next presented frame is saved to this path (PICRECOMP_HOST_INPUT "shot" entries, runtime/hle/input.c).
 char g_window_shot_request[256];

@@ -1,9 +1,9 @@
 // Start screen, shown before the game boots (user 2026-10-08, styled after Dusklight's launcher): PLAY (with
 // ‹ Vanilla / seed › picker), SETTINGS, QUIT, game-files status at the lower left. Nothing of the game ships with
-// EoWRecomp: on first launch the user picks the folder with their own game files (v1.0.0), we check the main
+// PicRecomp: on first launch the user picks the folder with their own game files (v1.0.0), we check the main
 // module's build id, copy the files and build the game's data image; PLAY stays disabled until that worked. The background is a frame of the game's own title movie (from the user's files) once extracted.
 //
-// Skipped with --play, EOWRECOMP_NO_LAUNCHER=1, or any scripted test run (EOWRECOMP_INPUT): tests boot straight in.
+// Skipped with --play, PICRECOMP_NO_LAUNCHER=1, or any scripted test run (PICRECOMP_INPUT): tests boot straight in.
 // The in-game menu's "Title screen" comes back here without leaving the process (runtime/main.c reboots the game).
 #include <SDL3/SDL.h>
 #include <ctype.h>
@@ -48,18 +48,18 @@ void vk_imgui_backend_shutdown(void);
 uint64_t vk_imgui_texture_rgba(const void *rgba, int w, int h);
 }
 
-static const uint8_t BUILD_ID[8] = {0xa5, 0x81, 0x40, 0x6b, 0xc9, 0x85, 0x86, 0x51};  // Echoes of Wisdom v1.0.0 main (docs/STATUS.md)
+static const uint8_t BUILD_ID[8] = {0x26, 0x07, 0x97, 0x01, 0x8f, 0xef, 0xb8, 0x45};  // PICROSS S v524288 main (docs/STATUS.md)
 // The release tag this build is (also names the release files; Makefile / tools/bundle_macos.sh / make_dmg.sh read
 // it): alpha_<n> while the game isn't playable, beta_<n> until 1.0, then v<major>.<minor>.<patch>.
-#define EOWRECOMP_VERSION "alpha_1"
+#define PICRECOMP_VERSION "alpha_1"
 
 // ------------------------------------------------------------------ update check
 // The start screen asks GitHub for the project's releases once per launch (a background curl, which macOS and
 // Windows 10+ ship) and offers the best one if it outranks this build: any v1.0.0+ above every beta, every beta
 // above every alpha, alphas and betas by number; other tags are ignored. Offline / no curl / anything unexpected: nothing is shown.
 // The release feed checked for updates ("" = no update check).
-#define RELEASES_URL "https://api.github.com/repos/Nycolazs/EoWRecomp/releases"
-#define RELEASE_PAGE "https://github.com/Nycolazs/EoWRecomp/releases/tag/"
+#define RELEASES_URL "https://api.github.com/repos/macaon/picrecomp/releases"
+#define RELEASE_PAGE "https://github.com/macaon/picrecomp/releases/tag/"
 
 static long long tag_rank(const std::string &t) {
     int n, a, b, c;
@@ -86,7 +86,7 @@ static pthread_mutex_t g_update_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void *update_thread(void *) {
     std::string body;
-    if (const char *t = getenv("EOWRECOMP_UPDATE_TAGS")) {  // (test) "beta_2,v1.0.0": these releases, no network
+    if (const char *t = getenv("PICRECOMP_UPDATE_TAGS")) {  // (test) "beta_2,v1.0.0": these releases, no network
         for (const char *p = t; *p;) {
             const char *c = strchr(p, ',');
             body += "\"tag_name\": \"" + std::string(p, c ? c - p : strlen(p)) + "\"\n";
@@ -103,7 +103,7 @@ static void *update_thread(void *) {
         std::string out = std::string(rt_data_root()) + "/cache/releases.json";
         mkdir((std::string(rt_data_root()) + "/cache").c_str(), 0755);
         const char *av[] = {curl.c_str(), "-fsSL", "--max-time", "15", "-H", "Accept: application/vnd.github+json",
-                            "-A", "EoWRecomp/" EOWRECOMP_VERSION, RELEASES_URL, NULL};
+                            "-A", "PicRecomp/" PICRECOMP_VERSION, RELEASES_URL, NULL};
         PlatProc p = plat_spawn(av, out.c_str(), false);
         if (!p || plat_proc_wait(p, true) != 0) { remove(out.c_str()); return NULL; }
         if (FILE *f = fopen(out.c_str(), "rb")) {
@@ -115,7 +115,7 @@ static void *update_thread(void *) {
         remove(out.c_str());
     }
     std::string best;
-    long long best_rank = tag_rank(EOWRECOMP_VERSION);
+    long long best_rank = tag_rank(PICRECOMP_VERSION);
     for (size_t at = 0; (at = body.find("\"tag_name\"", at)) != std::string::npos;) {
         size_t q1 = body.find('"', body.find(':', at) + 1), q2 = q1 == std::string::npos ? q1 : body.find('"', q1 + 1);
         if (q2 == std::string::npos) break;
@@ -123,7 +123,7 @@ static void *update_thread(void *) {
         if (tag_rank(tag) > best_rank) best_rank = tag_rank(tag), best = tag;
         at = q2;
     }
-    if (!best.empty()) fprintf(stderr, "[launcher] update available: %s (this build %s)\n", best.c_str(), EOWRECOMP_VERSION);
+    if (!best.empty()) fprintf(stderr, "[launcher] update available: %s (this build %s)\n", best.c_str(), PICRECOMP_VERSION);
     pthread_mutex_lock(&g_update_lock);
     g_update_tag = best;
     pthread_mutex_unlock(&g_update_lock);
@@ -146,7 +146,7 @@ static std::string check_copied_files(const std::string &root) {
     fseek(f, 0x40, SEEK_SET);
     size_t n = fread(id, 1, 8, f);
     fclose(f);
-    if (n != 8 || memcmp(id, BUILD_ID, 8)) return "Wrong game version (needs v1.0.0)";
+    if (n != 8 || memcmp(id, BUILD_ID, 8)) return "Wrong game version (needs the v524288 update)";
     // the data the game reads (services/fs.c): an image, or the description of where it is in the game package
     if (!file_exists(root + "/romfs.bin") && !file_exists(root + "/romfs.src")) return "Game data missing";
     return "";
@@ -178,7 +178,7 @@ static void set_job(const std::string &s, bool failed = false, const std::string
     pthread_mutex_unlock(&g_lock);
 }
 
-// Setup failures: a short headline and what to do next (also EOWRECOMP_LAUNCHER_SHOT=<f>:fail<1-6>, screenshots)
+// Setup failures: a short headline and what to do next (also PICRECOMP_LAUNCHER_SHOT=<f>:fail<1-6>, screenshots)
 enum { FAIL_NOT_FOUND = 1, FAIL_UNUSABLE, FAIL_COPY, FAIL_VERSION, FAIL_MISSING, FAIL_BUILD };
 static void set_failure(int k) {
     static const char *const head[] = {"", "No game files found in that folder", "Those files can't be used",
@@ -189,7 +189,7 @@ static void set_failure(int k) {
         "Choose the folder that holds the game files.",
         "Compressed packages (.nsz / .xcz) can't be read: decompress them to .nsp / .xci first.",
         "Make sure there's about 12 GB free and try again.",
-        "EoWRecomp needs version 1.0.0 of the game, without updates.",
+        "PicRecomp needs version 1.0.0 of the game, without updates.",
         "Some files are missing. Choose the folder again; if it happens again, copy your extracted game files again.",
         "Make sure there's about 2 GB free and try again. If it keeps happening, report it on GitHub."};
     if (k >= 1 && k <= 6) set_job(head[k], true, hint[k]);
@@ -321,7 +321,7 @@ static void *extract_thread(void *) {
     if (exefs.empty() || romfs.empty()) { set_failure(unusable ? FAIL_UNUSABLE : FAIL_NOT_FOUND); goto done; }
     if (!build_id_ok(exefs + "/main")) { set_failure(FAIL_VERSION); goto done; }
     {
-        // (the picked folder can't be EoWRecomp's own copy: setting up again deletes that first)
+        // (the picked folder can't be PicRecomp's own copy: setting up again deletes that first)
         char a[4096], b[4096];
         mkdir(g_root.c_str(), 0755);
         if (realpath(exefs.c_str(), a) && realpath(g_root.c_str(), b) && !strncmp(a, b, strlen(b)) &&
@@ -476,7 +476,7 @@ static void load_background(GpuDevice dev) {
 }
 
 // ------------------------------------------------------------------ play choices
-// The PLAY line's ‹ › picker: LAS Recomp listed randomizer seeds here. EoWRecomp has only the game itself for now.
+// The PLAY line's ‹ › picker: LAS Recomp listed randomizer seeds here. PicRecomp has only the game itself for now.
 static std::vector<std::string> list_seeds() { return {}; }
 
 // ------------------------------------------------------------------ screen
@@ -500,9 +500,9 @@ extern "C" void launcher_play_seed(const char *seed) {
 }
 static float g_menu_gap = 0.35f;  // space under each item, in line heights
 
-// The first PLAY ever (settings.menu_tip_seen): a note on opening the EoWRecomp menu in game (it isn't obvious),
+// The first PLAY ever (settings.menu_tip_seen): a note on opening the PicRecomp menu in game (it isn't obvious),
 // OK starts the game. Returns true once OK is pressed.
-static bool g_tip_test;  // (EOWRECOMP_LAUNCHER_SHOT=<frame>:tip)
+static bool g_tip_test;  // (PICRECOMP_LAUNCHER_SHOT=<frame>:tip)
 // First PLAY ever, before the menu note: authentic 16:9 or the unlocked (fill the window) aspect ratio.
 static bool aspect_prompt(float s) {
     bool done = false;
@@ -561,7 +561,7 @@ static bool menu_tip(float s) {
         static const char *const home[] = {"Home button", "Xbox button", "PlayStation button"};  // (bind_label_family)
         static const char *const pad[] = {"Minus + Plus", "View + Menu", "Create + Options"};
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("EoWRecomp has its own menu for settings, the randomizer, cosmetics and more.");
+        ImGui::TextUnformatted("PicRecomp has its own menu for settings, the randomizer, cosmetics and more.");
         ImGui::Spacing();
         int fam = bind_label_family() % 3;
         ImGui::Text("Open it in game with F1 or Esc, or on a controller with the %s (or %s together).", home[fam], pad[fam]);
@@ -774,13 +774,13 @@ static void prelaunch_tab(float sc) {
     if (ImGui::Button("Show in Finder")) reveal_folder(g_root);
 #endif
     ImGui::SameLine();
-    static bool shot_del = getenv("EOWRECOMP_LAUNCHER_SHOT") && strstr(getenv("EOWRECOMP_LAUNCHER_SHOT"), ":askdelete");
+    static bool shot_del = getenv("PICRECOMP_LAUNCHER_SHOT") && strstr(getenv("PICRECOMP_LAUNCHER_SHOT"), ":askdelete");
     if (ImGui::Button("Delete game files") || shot_del) ImGui::OpenPopup("##delfiles"), shot_del = false;  // (test: :askdelete)
     if (ImGui::BeginPopupModal("##delfiles", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
         ImGui::PushFont(g_font_menu);
         ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "Are you sure?");
         ImGui::PopFont();
-        ImGui::Text("This deletes EoWRecomp's copy of the game files (%.1f GB).", gb);
+        ImGui::Text("This deletes PicRecomp's copy of the game files (%.1f GB).", gb);
         ImGui::TextDisabled("Saves, seeds and settings are kept. Your own game files aren't touched.");
         if (rt_dev_mode()) {  // (a source checkout: the files are the project's own extracted/)
             bool abs = !g_root.empty() && (g_root[0] == '/' || (g_root.size() > 1 && g_root[1] == ':'));
@@ -790,7 +790,7 @@ static void prelaunch_tab(float sc) {
         ImGui::Spacing();
         if (ImGui::Button("Delete", ImVec2(220 * sc, 0))) {
             bool ok = rt_remove_game_files(g_root.c_str());  // (runtime/paths.c: only what the extraction made)
-            set_job(ok ? "Game files deleted." : "Could not delete the game files (not in EoWRecomp's data folder?).", !ok);
+            set_job(ok ? "Game files deleted." : "Could not delete the game files (not in PicRecomp's data folder?).", !ok);
             g_files_deleted = true, gb = -1;
             ImGui::CloseCurrentPopup();
         }
@@ -826,7 +826,7 @@ extern "C" void launcher_run(const char *root) {
     g_root = root;
     g_start_screen = 1;
     static bool update_checked;  // (once per launch, not again after a "Title screen" reboot)
-    if (!update_checked && !getenv("EOWRECOMP_NO_UPDATE_CHECK")) {
+    if (!update_checked && !getenv("PICRECOMP_NO_UPDATE_CHECK")) {
         update_checked = true;
         pthread_t t;
         if (pthread_create(&t, NULL, update_thread, NULL) == 0) pthread_detach(t);
@@ -849,13 +849,13 @@ extern "C" void launcher_run(const char *root) {
     // Baloo 2 SemiBold (OFL, shipped: third_party/fonts/Baloo2) - rounded, game-like; it runs small, hence the sizes
     char baloo[1024];
     std::string own = rt_resource("Baloo2-SemiBold.ttf", "third_party/fonts/Baloo2/Baloo2-SemiBold.ttf", baloo, sizeof baloo) ? baloo : "";
-    const char *fonts[] = {getenv("EOWRECOMP_LAUNCHER_FONT") ? getenv("EOWRECOMP_LAUNCHER_FONT") : "",  // (test)
+    const char *fonts[] = {getenv("PICRECOMP_LAUNCHER_FONT") ? getenv("PICRECOMP_LAUNCHER_FONT") : "",  // (test)
                            own.c_str(), "fonts/nintendo_udsgr_std_003.ttf", "/System/Library/Fonts/Avenir Next.ttc",
                            "/System/Library/Fonts/Helvetica.ttc", "C:/Windows/Fonts/segoeui.ttf"};
     static const ImWchar ranges[] = {0x20, 0xFF, 0x2039, 0x203A, 0x2192, 0x2192, 0x2713, 0x2713, 0x25B8, 0x25B8, 0};  // + ‹ › → ✓ ▸
     for (const char *p : fonts) {
         if (g_font_menu || !*p || !file_exists(p)) continue;
-        bool b2 = p == own.c_str() || getenv("EOWRECOMP_LAUNCHER_FONT");
+        bool b2 = p == own.c_str() || getenv("PICRECOMP_LAUNCHER_FONT");
         g_font_small = io.Fonts->AddFontFromFileTTF(p, 30 * (b2 ? 1.75f : 1), NULL, ranges);
         g_font_menu = io.Fonts->AddFontFromFileTTF(p, 52 * (b2 ? 1.85f : 1), NULL, ranges);
         g_font_title = io.Fonts->AddFontFromFileTTF(p, 92 * (b2 ? 2.3f : 1), NULL, ranges);
@@ -876,15 +876,15 @@ extern "C" void launcher_run(const char *root) {
     std::string status = check_game_files(g_root);
     if (status.empty()) load_background(dev);
     std::vector<std::string> seeds = list_seeds();
-    std::vector<std::string> choices = {"Echoes of Wisdom"};
+    std::vector<std::string> choices = {"PICROSS S"};
     choices.insert(choices.end(), seeds.begin(), seeds.end());
     int choice = 0;
     Page page = status.empty() ? MAIN : SETUP;
     bool play = false;
-    // EOWRECOMP_LAUNCHER_SHOT=<frame>[:<page>] (test): save build/launcher.png at that frame and exit; page: settings[:<tab>] / askdelete / setup
-    long shot_at = getenv("EOWRECOMP_LAUNCHER_SHOT") ? atol(getenv("EOWRECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
+    // PICRECOMP_LAUNCHER_SHOT=<frame>[:<page>] (test): save build/launcher.png at that frame and exit; page: settings[:<tab>] / askdelete / setup
+    long shot_at = getenv("PICRECOMP_LAUNCHER_SHOT") ? atol(getenv("PICRECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     if (shot_at) {
-        const char *pg = strchr(getenv("EOWRECOMP_LAUNCHER_SHOT"), ':');
+        const char *pg = strchr(getenv("PICRECOMP_LAUNCHER_SHOT"), ':');
         if (pg && (!strncmp(pg + 1, "settings", 8) || !strcmp(pg + 1, "askdelete"))) page = SETTINGS, menu_tabs_focus(true);
         if (pg && !strcmp(pg + 1, "setup")) page = SETUP;
         if (pg && !strncmp(pg + 1, "fail", 4)) page = SETUP, set_failure(atoi(pg + 5));  // (the failure messages)
@@ -895,17 +895,17 @@ extern "C" void launcher_run(const char *root) {
     }
 
     static int runs;  // (test: =once - only the first time, so a "Title screen" reboot lands on the start screen)
-    const char *ap = getenv("EOWRECOMP_LAUNCHER_AUTOPLAY");
+    const char *ap = getenv("PICRECOMP_LAUNCHER_AUTOPLAY");
     if (ap && status.empty() && !(runs && !strcmp(ap, "once"))) play = true;  // (test: PLAY at once)
     runs++;
-    if (const char *t = getenv("EOWRECOMP_LAUNCHER_EXTRACT")) {  // (test) <folder>: set the game files up, log, exit
+    if (const char *t = getenv("PICRECOMP_LAUNCHER_EXTRACT")) {  // (test) <folder>: set the game files up, log, exit
         g_src = t;
         g_busy = true;
         extract_thread(NULL);
         fprintf(stderr, "[launcher] setup: %s -> %s\n", g_job.c_str(), check_game_files(g_root).empty() ? "READY" : "NOT READY");
         exit(0);
     }
-    if (const char *t = getenv("EOWRECOMP_LAUNCHER_SETUP")) {  // (test) <folder>: Set up started on the start screen
+    if (const char *t = getenv("PICRECOMP_LAUNCHER_SETUP")) {  // (test) <folder>: Set up started on the start screen
         g_src = t;
         g_busy = true;
         page = SETUP;
@@ -913,7 +913,7 @@ extern "C" void launcher_run(const char *root) {
         pthread_create(&th, NULL, extract_thread, NULL);
         pthread_detach(th);
     }
-    if (getenv("EOWRECOMP_LAUNCHER_DELETE")) {  // (test) what DELETE GAME FILES does, logged; then the start screen
+    if (getenv("PICRECOMP_LAUNCHER_DELETE")) {  // (test) what DELETE GAME FILES does, logged; then the start screen
         double gb = rt_game_files_size(g_root.c_str()) / 1e9;
         bool ok = rt_remove_game_files(g_root.c_str());
         status = check_game_files(g_root);
@@ -930,7 +930,7 @@ extern "C" void launcher_run(const char *root) {
         if (g_play_seed_req) {  // the Randomizer tab's Play: that seed, then PLAY as if pressed (first-launch questions)
             g_play_seed_req = false;
             seeds = list_seeds();
-            choices = {"Echoes of Wisdom"};
+            choices = {"PICROSS S"};
             choices.insert(choices.end(), seeds.begin(), seeds.end());
             choice = 0;
             for (size_t i = 0; i < seeds.size(); i++)
@@ -1014,7 +1014,7 @@ extern "C" void launcher_run(const char *root) {
             ImGui::SetCursorPos(ImVec2(x0, 120 * s));
             ImGui::PushFont(g_font_title);
             if (page == MAIN) {  // gold to orange, shadowed (not behind the Settings / Game Files windows)
-                const char *t = "EoWRecompiled";
+                const char *t = "PicRecomp";
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 text_fx(ImGui::GetWindowDrawList(), ImGui::GetFont(), ImGui::GetFontSize(), p, IM_COL32(255, 232, 120, 255),
                         IM_COL32(255, 138, 48, 255), t, 3 * s);
@@ -1174,7 +1174,7 @@ extern "C" void launcher_run(const char *root) {
                     page = MAIN, g_refocus = SETTINGS;
                     std::string cur = choices[choice];  // seeds made / renamed / deleted in the Randomizer tab
                     seeds = list_seeds();
-                    choices = {"Echoes of Wisdom"};
+                    choices = {"PICROSS S"};
                     choices.insert(choices.end(), seeds.begin(), seeds.end());
                     choice = 0;
                     for (size_t i = 0; i < choices.size(); i++)
@@ -1235,13 +1235,13 @@ extern "C" void launcher_run(const char *root) {
                     dl->AddLine(ImVec2(x, cy), ImVec2(x + u * 0.35f, cy + u * 0.35f), g, fs * 0.11f);
                     dl->AddLine(ImVec2(x + u * 0.35f, cy + u * 0.35f), ImVec2(x + u, cy - u * 0.4f), g, fs * 0.11f);
                 };
-                std::string src_d = "The folder with your own copy of The Legend of Zelda: Echoes of Wisdom for Nintendo "
-                                    "Switch, version 1.0.0: the .nsp or .xci with the prod.keys of your Switch beside it, "
-                                    "or the extracted exefs / romfs folders. The game isn't included with EoWRecomp.";
+                std::string src_d = "The folder with your own copy of PICROSS S for Nintendo Switch, with its "
+                                    "update (v524288): the .nsp files with the prod.keys of your Switch beside them, "
+                                    "or the extracted exefs / romfs folders. The game isn't included with PicRecomp.";
                 if (!src.empty()) src_d += "\n\nChosen: " + (src.compare(0, 8, "android:") ? src : src.substr(8));
                 // the step that's running / its result, under the rows and in the Set up row's explanation
                 const std::string &job_line = job;
-                std::string ex_d = "Copies the game files EoWRecomp needs and recompiles the game from them. This only "
+                std::string ex_d = "Copies the game files PicRecomp needs and recompiles the game from them. This only "
                                    "needs to be done once and may take a while. Your own files aren't changed.";
                 if (!job.empty()) ex_d += "\n\n" + job + (job_hint.empty() ? "" : ".\n" + job_hint);
 
@@ -1272,14 +1272,14 @@ extern "C" void launcher_run(const char *root) {
                     }
                     files_gb = -1;  // (re-measured after a setup)
                 } else {
-                    // DELETE: frees EoWRecomp's copy (runtime/paths.c removes only what the setup made, only inside
+                    // DELETE: frees PicRecomp's copy (runtime/paths.c removes only what the setup made, only inside
                     // the data root). Saves, seeds, settings and the user's own files stay.
                     if (files_gb < 0) files_gb = rt_game_files_size(g_root.c_str()) / 1e9;
                     char gb[32];
                     snprintf(gb, sizeof gb, "%.1f GB", files_gb);
                     opt_section("Game files");
                     if (!g_confirm_delete) {
-                        if (opt_action("Delete game files", gb, "Frees the space EoWRecomp's copy of the game files takes. "
+                        if (opt_action("Delete game files", gb, "Frees the space PicRecomp's copy of the game files takes. "
                                        "Saves, seeds and settings are kept, and your own game files aren't touched: you can "
                                        "set the game files up again from them.", true))
                             g_confirm_delete = true;
@@ -1289,7 +1289,7 @@ extern "C" void launcher_run(const char *root) {
                             bool ok = rt_remove_game_files(g_root.c_str());
                             status = check_game_files(g_root);
                             if (ok) set_job("Game files deleted.");
-                            else set_job("Couldn't delete the game files", true, "They aren't in EoWRecomp's data folder, "
+                            else set_job("Couldn't delete the game files", true, "They aren't in PicRecomp's data folder, "
                                          "so they were left alone.");
                             if (!status.empty()) g_bg = 0;
                             g_confirm_delete = false, files_gb = -1;
@@ -1320,7 +1320,7 @@ extern "C" void launcher_run(const char *root) {
                     g_confirm_delete = false;
                     page = MAIN, g_refocus = SETUP;
                 }
-                static bool test_busy = getenv("EOWRECOMP_LAUNCHER_SHOT") && strstr(getenv("EOWRECOMP_LAUNCHER_SHOT"), ":extracting");
+                static bool test_busy = getenv("PICRECOMP_LAUNCHER_SHOT") && strstr(getenv("PICRECOMP_LAUNCHER_SHOT"), ":extracting");
                 if (busy || test_busy) {  // extracting: everything dimmed, a progress bar in front (input waits)
                     ImDrawList *fg = ImGui::GetForegroundDrawList();
                     ImVec2 o = ImGui::GetMainViewport()->Pos;
@@ -1380,7 +1380,7 @@ extern "C" void launcher_run(const char *root) {
                 ImGui::SetCursorPosX(x0);
                 ImGui::TextDisabled("Set up the game files to play.");
             }
-            if (const char *f = getenv("EOWRECOMP_LAUNCHER_FONT")) {  // (test) which typeface this window shows
+            if (const char *f = getenv("PICRECOMP_LAUNCHER_FONT")) {  // (test) which typeface this window shows
                 const char *b = strrchr(f, '/');
                 ImGui::GetWindowDrawList()->AddText(ImVec2(ImGui::GetWindowPos().x + 20 * s, ImGui::GetWindowPos().y + 16 * s),
                                                     IM_COL32(255, 255, 255, 255), b ? b + 1 : f);
@@ -1395,7 +1395,7 @@ extern "C" void launcher_run(const char *root) {
                     dl->AddText(font, size, p, col, t);
                     if (bold) dl->AddText(font, size, ImVec2(p.x + 0.7f * s, p.y), col, t);
                 };
-                std::string ver = tag_label(EOWRECOMP_VERSION, true);
+                std::string ver = tag_label(PICRECOMP_VERSION, true);
                 float vs = fs * 1.4f, y = ImGui::GetWindowPos().y + ds.y - 134 * s;
                 ImVec2 vsz = font->CalcTextSizeA(vs, FLT_MAX, 0, ver.c_str());
                 text(ImVec2(right - vsz.x, y), vs, IM_COL32(255, 255, 255, 255), ver.c_str(), false);
@@ -1431,11 +1431,11 @@ extern "C" void launcher_run(const char *root) {
             osk_draw(g_font_menu, s * 0.7f);  // (a text field activated with the controller)
             typed_before = ui_text_busy();
 
-            if (getenv("EOWRECOMP_TOUCH_PREVIEW")) touch_preview(), touch_draw();  // (test: the controls' look)
+            if (getenv("PICRECOMP_TOUCH_PREVIEW")) touch_preview(), touch_draw();  // (test: the controls' look)
             ImGui::Render();
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)vk_frame_cmd());
             bool shot = shot_at && ++frame == shot_at;
-            vk_frame_end(shot ? getenv("EOWRECOMP_SHOT_PATH") ? getenv("EOWRECOMP_SHOT_PATH") : "build/launcher.png" : NULL);
+            vk_frame_end(shot ? getenv("PICRECOMP_SHOT_PATH") ? getenv("PICRECOMP_SHOT_PATH") : "build/launcher.png" : NULL);
             if (shot) exit(0);
         }
     }
