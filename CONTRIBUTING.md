@@ -1,4 +1,4 @@
-# Contributing to EoWRecomp
+# Contributing to PicRecomp
 
 Bug reports, testing on different hardware and code contributions are welcome. This project is developed mostly with
 AI; contributions written by hand, with AI assistance or anything in between are equally welcome - what matters is
@@ -13,18 +13,20 @@ clips in bug reports are fine.
 
 ## Project layout
 
-- `tools/nca_extract.py` - ExeFS / RomFS from the program NCA of the user's own dump (handles compressed RomFS).
-- `tools/gen.py` - the recompiler: the game's executables to C (`generated/`, never committed). `tools/patches.py`
-  holds code patches applied during generation; every patch site checks the original instruction word.
+- `tools/picross/` - preparing and generating the PICROSS S game data, and playing it: `prepare.py` (hactool), `generate.sh`,
+  `play.sh`, `launcher.py`.
+- `tools/gen.py`, `tools/lifter.py` - the recompiler: the game's executables to C (`generated/`, never committed).
+  `tools/patches.py` holds code patches applied during generation; every patch site checks the original instruction word.
 - `runtime/` - the host side: `kernel.c`, `loader.c`, `ipc.c`, `services/` (the Switch OS replacement), `hle/`
-  (host replacements of SDK functions), `nvn/` (NVN, the Vulkan and Metal backends, the Maxwell shader translator),
-  `ui/` (ImGui overlay menu and start screen).
+  (host replacements of SDK functions), `nvn/` (NVN, the Vulkan backend, the Maxwell shader translator), `ui/` (ImGui
+  overlay menu and start screen).
+- `docs/ARCHITECTURE.md` explains how the pieces fit together; `docs/STATUS.md` says where the project stands.
 
 ## Testing your change
 
-- Build cleanly on your platform. If you touch shared rendering code, say which backend you tested.
+- Build cleanly on your platform. If you touch rendering code, say which GPU and driver you tested on.
 - A fix isn't verified until it has been seen working (screenshot, log or test). Scripted runs (`tools/shot.sh`,
-  `EOWRECOMP_*` environment hooks) save a screenshot at a given frame.
+  `PICRECOMP_*` environment hooks) save a screenshot at a given frame.
 
 ## License
 

@@ -1,48 +1,46 @@
-# EoWRecomp — regras permanentes
+# PicRecomp: standing rules
 
-Recompilação estática de *The Legend of Zelda: Echoes of Wisdom* (Switch, 2024) para PC. Derivado do
-LASRecomp (MIT, https://github.com/peiikai/LASRecomp, commit base `d23597d`). Não é emulador: o ARM64 do jogo
-vira C em tempo de build; o runtime substitui o Horizon e a NVN. Arquitetura e plano: `docs/ARCHITECTURE.md`;
-estado atual e próximo passo: `docs/STATUS.md` (leia antes de começar).
+Static recompilation of the **PICROSS S** series (Nintendo Switch) for PC. Derived from EoWRecomp, itself derived from
+LASRecomp (MIT, https://github.com/peiikai/LASRecomp). It is not an emulator: the game's ARM64 code becomes C at build
+time, and the runtime replaces Horizon and NVN. Architecture: `docs/ARCHITECTURE.md`. Current state and next step:
+`docs/STATUS.md` (read it before starting). Code, comments and documentation are in English.
 
-## Arquivos da Nintendo
-- **Nenhum arquivo da Nintendo entra no repositório**: nada de `extracted/`, `generated/`, chaves, XCI/NSP/NCA/NSO,
-  fontes do sistema, texturas, modelos, música, texto ou qualquer asset — nem "um arquivo só para teste".
-  O `.gitignore` cobre isso; confira com `git status --ignored` antes de cada commit.
-  Exceção: capturas de tela do jogo rodando (`docs/screenshots/`, JPEG) para documentar o progresso, como faz o
-  LASRecomp — nunca arquivos extraídos.
-- Os arquivos do usuário (XCI, `prod.keys`) ficam numa pasta própria, fora do repositório (o caminho local está na
-  memória do agente, não aqui).
-  **Só leitura.** Nunca copiar o XCI nem as chaves para dentro do repo. Não pedir, procurar nem sugerir fontes
-  para esses arquivos.
-- Extração: `tools/nca_extract.py` (o hactool não lê o RomFS comprimido deste NCA) para `extracted/`
-  (`exefs/`, `romfs/`). Uma cópia filtrada das chaves, se precisar, vai para o scratchpad, nunca para o repo.
-- Versão fixa: **title 01008CF01BAAC000, v0 (1.0.0)**, build IDs em `docs/STATUS.md`. Endereços de patches e HLE
-  valem só para ela.
+## Nintendo and publisher files
+- **No file owned by Nintendo or the game's publisher goes into the repository**: no `extracted/`, `generated/`, keys,
+  XCI / NSP / NCA / NSO, system fonts, textures, models, music, text or any other asset, not even "one file for a
+  test". The `.gitignore` covers this; check `git status --ignored` before every commit.
+  Exception: screenshots of the game running (`docs/screenshots/`, JPEG) to document progress, never extracted files.
+- The user's own files (NSP, `prod.keys`) live in a folder of their own, outside the repository (the local path is in
+  the agent's memory, not here). **Read-only.** Never copy them into the repo. Never ask for, look for or suggest
+  sources for these files.
+- Preparation: `tools/picross/prepare.py` (bundled hactool) writes `.picrecomp/prepared-game/` (ignored by git). A
+  filtered copy of the keys, if one is ever needed, goes in the scratchpad, never in the repo.
+- Pinned version: **PICROSS S, title 0100BA0003EEA000, update v524288**, main build ID in `docs/STATUS.md`. Patch and
+  HLE addresses are valid only for it. Other titles get their own entry; never assume one title's addresses hold for
+  another.
 
-## Código
-- Código gerado (`generated/`) nunca é editado à mão: mudanças vão em `tools/lifter.py`, `tools/gen.py` ou
+## Code
+- Generated code (`generated/`) is never edited by hand. Changes go in `tools/lifter.py`, `tools/gen.py` or
   `tools/patches.py`.
-- Todo patch confere a palavra de instrução original antes de aplicar (`expect()` em `tools/patches.py`).
-- Seguir o estilo do código ao redor (nomes, estrutura, densidade de comentários). Comentários explicam o
-  *porquê* (o que o jogo faz, o que é um endereço, que log/teste mostrou o problema).
-- Para cada falha, achar a causa (Capstone, logs, Switchbrew, envytools) em vez de contornar. Recurso NVN ou
-  instrução Maxwell faltando: implementar corretamente e adicionar teste em `tools/` (`test_translate`,
-  `test_shaders`, `test_simd`, `test_lift`).
-- Variáveis de ambiente de depuração usam o prefixo `EOWRECOMP_`.
+- Every patch checks the original instruction word before applying (`expect()` in `tools/patches.py`).
+- Follow the surrounding style (names, structure, comment density). Comments explain *why*: what the game does, what
+  an address is, which log or test showed the problem.
+- For every failure find the cause (Capstone, logs, Switchbrew, envytools) instead of working around it. A missing NVN
+  feature or Maxwell instruction is implemented properly and gets a test in `tools/` (`test_translate`, `test_simd`,
+  `test_lift`, `test_jumptable`).
+- Debug environment variables use the prefix `PICRECOMP_`.
 
-## Verificação
-- Uma correção só está verificada depois de vista funcionando (screenshot, log ou teste) — nunca declarar
-  sucesso com base em "deve funcionar".
-- Mudança no renderer compartilhado: dizer qual backend foi testado (Vulkan / Metal).
-- Medir em vez de estimar (rodar as ferramentas: `tools/nso.py`, `tools/analyze.py --census`, logs).
-- Avançar por marcos (M1…M7, `docs/STATUS.md`); só passar ao próximo com o atual comprovado.
+## Verification
+- A fix is verified only after it has been seen working (screenshot, log or test), never on "it should work".
+- A change to the renderer: say which backend was tested. Vulkan on Linux is the tested one; Windows has not been run.
+- Measure instead of estimating (run the tools: `tools/nso.py`, `tools/analyze.py --census`, the logs).
+- Move in steps; go to the next only when the current one is proven.
 
 ## Git
-- Commits pequenos e descritivos; um assunto por commit.
-- README: projeto de fã, sem afiliação com a Nintendo, sem arquivos do jogo, exige cópia legal do próprio
-  usuário; créditos ao LASRecomp e a todas as bibliotecas usadas, com suas licenças.
+- Small, descriptive commits; one subject per commit. Commits are authored as `macaon` (the repository's own git
+  config; do not change it).
+- README: fan project, not affiliated with Nintendo, no game files, requires the user's own legal copy; credits to
+  EoWRecomp, LASRecomp and every library used, with its license.
 
-## Fim de sessão
-- Atualizar `docs/STATUS.md`: marco atual, o que funciona, o que quebrou, próximo passo, e o que o usuário deve
-  testar e observar.
+## End of session
+- Update `docs/STATUS.md`: what works, what broke, the next step, and what the user should test and look for.

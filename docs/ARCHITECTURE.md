@@ -1,142 +1,109 @@
-# Arquitetura do EoWRecomp (herdada do LASRecomp)
+# Architecture
 
-Base: LASRecomp commit `d23597d` (2026-10-18), estudado arquivo por arquivo. Este documento confirma/corrige a
-descrição inicial do projeto e lista o que é reaproveitado, adaptado ou novo. Números marcados "medido" vêm de
-ferramentas rodadas sobre o dump (comandos na seção final), não de estimativa.
+PicRecomp is a static recompiler plus a runtime. At build time the game's ARM64 code is lifted to C and compiled into a
+shared library. At run time a host program loads the game's executables into memory, runs the recompiled code, and
+answers everything the game asks of the Switch: kernel calls, system services, and GPU commands.
+
+It descends from LASRecomp through EoWRecomp (see the credits in the README). This document describes what the code does
+today. Where a number comes from a measurement, the tool that produces it is named.
 
 ## 1. Pipeline
 
 ```
-XCI ──hactool──> NCAs ──tools/nca_extract.py──> extracted/exefs (NSOs) + extracted/romfs
-extracted/exefs/<módulo> ──tools/gen.py──> generated/<módulo>/*.c ──clang──> eowgame.{so,dll,dylib}
-runtime (eowrecomp[.exe]) ── carrega NSOs na memória do guest, reloca, dlopen(eowgame) ── nn::init::Start
+base .nsp + update .nsp + prod.keys ──tools/picross/prepare.py (hactool)──> exefs/ (NSOs) + romfs.bin
+exefs/<module> ──tools/gen.py (tools/picross/generate.sh)──> generated/<module>/*.c ──clang──> picgame.so
+runtime (picrecomp) ── loads the NSOs into guest memory, relocates, dlopen(picgame.so) ── nn::init::Start
 ```
 
-### Recompilador (Python, `tools/`)
-- **`nso.py`** — lê o NSO (header, 3 segmentos LZ4, MOD0, `.dynamic`, dynsym via `DT_HASH`, relocs RELA/JMPREL).
-  Confirmado.
-- **`analyze.py`** — descoberta de funções. *Correção:* não é só `.eh_frame`: une `.eh_frame_hdr` (tabela de busca
-  binária), símbolos `STT_FUNC`, alvos de relocs `R_AARCH64_RELATIVE` que caem em `.text` (vtables/callbacks) e alvos
-  de `BL`. Também faz o censo de instruções (`--census`).
-- **`gen.py`** — além dessas fontes, adiciona alvos de `ADR` e `ADRP+ADD`, e itera até um ponto fixo: todo
-  branch/call para fora da função corrente vira nova fronteira (divide a função). Jump tables (`br xN`) são resolvidas
-  emulando o trecho com **Unicorn** para cada índice (formas "fallthrough" com `b.hi/b.hs` e "taken" com `b.ls/b.lo`);
-  se não resolver, a função ganha um `switch` sobre *todas* as instruções (`L_dispatch`) como fallback.
-  *Correção:* não gera um arquivo por função — gera **chunks** (`<módulo>_NNN.c`, até 1500 funções / ~1,5 MB de C por
-  arquivo; funções grandes ganham arquivo próprio) mais `<módulo>_table.c` (endereços ordenados + ponteiros). Cada
-  função é `void f_<endereço>(Cpu *c)`; chamadas diretas são chamadas C, saltos para fora são `musttail`, indiretos
-  passam por `rt_dispatch`. Só regrava arquivos que mudaram (rebuild incremental).
-- **`lifter.py`** — AArch64 → C. Inteiros, load/store, flags NZCV, exclusivos (LDXR/STXR emulados com CAS no host)
-  viram C; FP/SIMD/CRC32 vira inline asm em host ARM64 (`--simd asm`) ou C portátil (`--simd c`: `simd_c.py` +
-  `runtime/simd.h` + `simd_fp.h`, exige AVX2/FMA: `-march=x86-64-v3`). Endereço do guest == endereço do host
-  (`LD64(a)` é um ponteiro direto). Não suporta: pares exclusivos (`LDXP/STXP`), LSE (`CAS/SWP/LDADD…`).
-- **`patches.py`** — substituição por instrução (endereço → C), aplicada na geração, sempre conferindo a palavra
-  original (`expect()`). No EoWRecomp está vazio (só o mecanismo); os do LA foram removidos.
-- **`passes.py`**, `simd_c.py`, testes `test_lift.py`, `test_simd.py`, `test_translate.c`, `test_shaders.*`,
-  `test_astc.*`, `test_vk_pipelines.*`.
+The generated code is never committed and never edited by hand. Changes go in `tools/lifter.py`, `tools/gen.py` or
+`tools/patches.py`.
 
-### Código do jogo como biblioteca separada (não estava na descrição)
-O código gerado compila para `eowgame.so/.dll/.dylib`, carregado em runtime (`gamelib.c`, entrada
-`tools/gamelib_entry.c`, id = hash do gerador + headers + flags). O executável não contém código do jogo; a tela
-inicial pode gerar e compilar a biblioteca na máquina do usuário (`gamebuild.c`, gerador empacotado com PyInstaller,
-`zig cc` como compilador).
+### The recompiler (Python, `tools/`)
 
-### Runtime (`runtime/`)
-- **Espaço de endereços** (`rt.h`): janela fixa `0x7000000000–0x7320000000` reservada no início do processo
-  (re-exec se ocupada). `main` em `0x7000000000`, `sdk` em `0x7004000000`, HLE em `0x7080000000` (endereços falsos
-  de funções do host), TLS, heap de HLE, alias, heap do jogo em `0x7240000000` (máx. 3,25 GB).
-- **`loader.c`** — carrega `main` e `sdk` (lista fixa), descomprime, aplica relocs; imports são resolvidos primeiro
-  contra implementações do host (`HLE_FUNC` por nome de símbolo), depois contra símbolos do guest; o que sobra vira
-  stub "UNIMPLEMENTED" que retorna 0 e loga.
-- **`main.c`** — não usa o `rtld`: chama `nn::init::Start` do `sdk` diretamente e passa callbacks falsos que rodam
-  `DT_INIT` / `init_array` de cada módulo, como o rtld faria. Prioridade/stack da thread principal vêm do `main.npdm`.
-- **`dispatch.c`** — endereço do guest → função recompilada (busca binária em 2 tabelas + cache direto de 4096
-  entradas por thread), registro de HLE por nome (`HLE_FUNC` numa seção do linker), overrides por endereço,
-  `guest_call`, backtraces e watchpoints de depuração. `hle_symbols.txt` permite substituir funções *internas* do
-  `sdk` por símbolo na geração (vazio no LAS).
-- **`kernel.c`** — 43 SVCs: threads = pthreads (prioridade/núcleo só registrados), mutex/condvar do Horizon
-  (`ArbitrateLock`, `WaitProcessWideKey`), `WaitForAddress/SignalToAddress`, eventos, `WaitSynchronization`,
-  memória (heap, map/unmap por cópia, shared/transfer memory, physical memory), `GetInfo`, `QueryMemory`, ticks de
-  19,2 MHz. Suporta "reboot" no próprio processo (unwind das threads em pontos seguros).
-- **`ipc.c` + `services/`** — HIPC/CMIF com domains e controle (`ConvertCurrentObjectToDomain`, clone,
-  `QueryPointerBufferSize`); `sm:` via `ConnectToNamedPort`. Serviços: `acc:u0`, `fsp-srv`, `appletOE`, `apm`, `lm`,
-  `audren:u`, `audout:u`, `time:*`, `hid`, `hid:sys`, `set`, `set:sys`, `pctl*`, `aoc:u`; os demais caem num stub que
-  loga e responde OK com zeros. *Não há TIPC.*
-- **HLE de SDK** (`hle/`): `nn::vi` / `nv::` (display), `nn::hid` (estado dos controles a partir do SDL), `nn::pl`
-  (fontes do sistema), `nn::swkbd`, `movie::` (vídeo com FFmpeg), `nvnBootstrapLoader` / `nvnDeviceGetProcAddress`,
-  heaps do motor (`heaps.c`), frame pacing.
-- **Gráficos** (`nvn/`): a **API NVN é reimplementada em alto nível** (não se emula o push buffer da GPU). 516
-  funções `nvn*` (`objects.c`: device, memory pools, texturas, samplers, programas, filas, sync, janela;
-  `cmdbuf.c`: comandos gravados como registros `CmdRec` dentro da própria memória de comandos do guest). As listas
-  são executadas pelo backend: **Metal é o primário** (`renderer.m`, `metal.m`); `vulkan/exec.c` é um port do mesmo
-  executor (VMA, swapchain, descriptor sets, cache de pipelines). Texturas: layout block-linear da Tegra
-  (`tegra.c`), ASTC decodificado em software (`astc.c`). **Shaders**: binário Maxwell (header NVN + SPH + código)
-  → MSL, e GLSL por reescrita do MSL (`maxwell/translate.c`); GLSL → SPIR-V em runtime com **shaderc**, com cache
-  em disco (`cache/spirv/`). Upscalers (bilinear, FSR1, MetalFX), SMAA.
-- **Host**: SDL3 (janela, input, áudio), FFmpeg (vídeos), Dear ImGui (menu F1 e tela inicial), plataforma
-  (`platform/{linux,windows,macos}.c`: reserva de memória, crash handler, backtrace).
-- **Testes roteirizados**: variáveis `EOWRECOMP_*` (input gravado, screenshot no frame N, profilers), `tools/shot.sh`,
-  `tools/frames.sh`.
+- **`nso.py`** reads an NSO: the header, the three LZ4 segments, MOD0, `.dynamic`, the symbol table (via `DT_HASH`) and
+  the RELA / JMPREL relocations.
+- **`analyze.py`** finds functions: `.eh_frame_hdr` (a binary-search table), `STT_FUNC` symbols, `R_AARCH64_RELATIVE`
+  relocation targets that land in `.text` (vtables, callbacks), and `BL` targets. `--census` counts instructions.
+- **`gen.py`** adds `ADR` and `ADRP`+`ADD` targets, then iterates to a fixed point: every branch or call that leaves the
+  current function becomes a new boundary and splits it. It writes **chunks** (`<module>_NNN.c`, up to 1500 functions or
+  about 1.5 MB of C each; a very large function gets its own file) plus `<module>_table.c` (sorted addresses and
+  pointers). Each function is `void f_<address>(Cpu *c)`. Direct calls are C calls, jumps out of a function are
+  `musttail`, indirect ones go through `rt_dispatch`. Unchanged chunks are not rewritten, so rebuilds are incremental.
+  - **Jump tables** (`br xN`) are resolved three ways. Bounds-checked tables are resolved by emulating the code with
+    Unicorn for every index (a `b.hi` / `b.hs` guard in the fall-through form, `b.ls` / `b.lo` in the taken form). LLVM's
+    *compact* tables (`adr cases ; ldrb [table, idx] ; add lsl #2 ; br`) are read straight from the image, with the entry
+    count taken from a guard anywhere earlier in the function or from an `and idx, x, #2^k-1` mask
+    (`_jump_table_compact`; `tools/test_jumptable.py`). A table that none of these resolves gets a `switch` over every
+    instruction of the function (`L_dispatch`) as a slow fallback.
+- **`lifter.py`** lifts AArch64 to C: integers, loads and stores, NZCV flags, the exclusive and atomic instructions
+  (LDXR / STXR, LDXP / STXP, CAS / CASP and the LSE set, checked against Unicorn and, for the atomics, against the host
+  CPU). FP, SIMD and CRC32 become inline asm on an ARM64 host (`--simd asm`) or portable C (`--simd c`: `simd_c.py`,
+  `runtime/simd.h`, `simd_fp.h`; needs AVX2 and FMA, `-march=x86-64-v3`). A guest address is a host address, so
+  `LD64(a)` is a direct pointer dereference.
+- **`patches.py`** replaces single instructions by address with C. Every patch first checks the original instruction
+  word (`expect()`), so a wrong address or a different game build fails the generation loudly. It is a mechanism only;
+  there are no per-game entries yet. `tools/picross/fix-exception-resume.py` is the one post-generation patch that
+  remains (landing pads for an exception unwind path); it finds the generated chunks it edits by their content.
 
-## 2. O que o EoW tem de diferente (medido)
+### The game code is a separate library
 
-| | Link's Awakening (LAS) | Echoes of Wisdom (dump) |
-|---|---|---|
-| Módulos ExeFS | main, sdk | **main, sdk, subsdk0 (glslc), subsdk1 (multimedia)**, rtld |
-| SDK | (mais antigo) | **NintendoSDK 16.2.0** (nnSdk, NVN, gfx 16_2_0) |
-| `main` | cabe em 64 MB | imagem **0x4004000** (64 MB + 16 KB): passa de `SDK_BASE` |
-| `.text` main / sdk | — | 39,8 MB / 6,2 MB (+ 6,8 MB glslc, 3,4 MB multimedia) |
-| RomFS | — | 7,48 GiB, 10 963 arquivos, **comprimido** no NCA |
+The generated code is compiled into `picgame.so` (`.dll` on Windows), which the runtime loads (`runtime/gamelib.c`; the
+entry point is `tools/gamelib_entry.c`). The library's id is a hash of the generator, the headers it is compiled against
+and the flags; a library with another id is never loaded. The executable contains no game code.
 
-Imports do `main` (711): 671 do `sdk`, 28 do `multimedia` (exatamente as 28 funções `movie::` que `hle/movie.c` já
-implementa), 8 do `glslc` (`glslcInitialize`, `glslcCompile`, `glslcCompileSpecialized`, …). Nomes `nvn*` no
-`main`: 276, dos quais **263 já implementados** no LAS; faltam 11 (+2 de bootstrap, já tratados):
-`CommandBufferBind{SeparateSamplers,SeparateTextures,Textures,UniformBuffers}Deferred`, `InsertCheckpointStatic`,
-`SetProvokingVertexMode`, `SetZCullZF32CompressionEnable`, `DeviceSetAutomaticCheckpoints{ByDebugGroup,Enable,Mask}`,
-`DeviceSetCheckpointMaxCallStacksDepth`. SVCs com wrapper no `sdk`: 60, 41 implementadas (as 19 restantes podem nunca
-ser chamadas; o M2 mostra). Pares exclusivos/LSE no `sdk`: 187 `ldxp/stxp/ldaxp/stlxp`, 16 `cas*/swp*`; nenhum no
-`main`.
+## 2. The runtime (`runtime/`)
 
-## 3. Reaproveitar, adaptar, novo
+- **Address space** (`rt.h`, `modules.h`): a fixed window starting at `0x7000000000` is reserved when the process starts.
+  The modules load at `main` `0x7000000000`, `subsdk0` `0x7008000000` and `sdk` `0x700C000000`, followed by TLS, the HLE
+  stubs, the alias region and the game heap.
+- **`loader.c`**: loads the modules, decompresses them and applies relocations. An import is resolved first against host
+  implementations (`HLE_FUNC`, by symbol name), then against the other modules' symbols. What is left becomes an
+  "UNIMPLEMENTED" stub that returns 0 and logs.
+- **`main.c`**: does not run the system's `rtld`. It calls `nn::init::Start` in the `sdk` module directly and passes
+  callbacks that run each module's `DT_INIT` and `init_array`, as the `rtld` would. The main thread's priority and stack
+  size come from `main.npdm`.
+- **`dispatch.c`**: guest address to recompiled function (binary search over two tables plus a per-thread direct-mapped
+  cache), HLE registration, per-address overrides, `guest_call`, backtraces and debug watchpoints.
+- **`kernel.c`**: the supervisor calls. Threads are pthreads (priority and core are only recorded), the Horizon mutex and
+  condition variable (`ArbitrateLock`, `WaitProcessWideKey`), `WaitForAddress` / `SignalToAddress`, events,
+  `WaitSynchronization`, memory (heap, map and unmap by copy, shared and transfer memory), `GetInfo`, `QueryMemory`, and
+  the 19.2 MHz tick counter. The process can reboot itself in place by unwinding its threads at safe points.
+- **`ipc.c` and `services/`**: HIPC / CMIF with domains and control messages; the service manager `sm:` is answered by the runtime itself. Implemented
+  services include `appletOE` (and its `ICommonStateGetter`, `ISelfController`, `IApplicationFunctions`, a minimal
+  `ILibraryAppletCreator`), `apm`, `lm`, `acc:u0`, `fsp-srv`, `audren:u`, `audout:u`, `time:*`, `hid`, `set`, `pctl*` and
+  `aoc:u`. Every other service falls back to a stub that logs the call and answers success with zeros
+  (`[ipc] no HLE implementation for service ...`).
+- **SDK replacements** (`hle/`): `nn::vi` and `nv::` (display), `nn::hid` (controller state from SDL), `nn::pl` (system
+  fonts), `nn::swkbd`, `movie::` (video through FFmpeg), the NVN bootstrap, engine heaps, and frame pacing.
+- **Graphics** (`nvn/`): the NVN API is reimplemented at a high level; the GPU's command stream is not emulated.
+  `objects.c` holds the `nvn*` objects (devices, memory pools, textures, samplers, programs, queues, sync, windows) and
+  `cmdbuf.c` records commands as `CmdRec` entries inside the guest's own command memory. `vulkan/exec.c` executes the
+  lists with the Vulkan Memory Allocator, a swapchain, descriptor sets and a pipeline cache. Textures use the Tegra
+  block-linear layout (`tegra.c`) and ASTC is decoded in software (`astc.c`). **Shaders** are Maxwell binaries (NVN
+  header, SPH and code); `maxwell/translate.c` turns them into GLSL, which shaderc compiles to SPIR-V at run time, cached
+  on disk (`cache/spirv/`). Output scaling offers bilinear and FSR 1, and SMAA is available.
+- **Host**: SDL3 (window, input, audio), FFmpeg (video), Dear ImGui (the F1 menu and the start screen), and
+  `platform/linux.c` / `platform/windows.c` (memory reservation, crash handler, backtrace).
 
-**Reaproveitar sem mudança (esperado)**
-- `nso.py`, `analyze.py`, núcleo do `lifter.py` (inteiros, memória, flags, branches), `simd_c.py` + `simd.h` +
-  `simd_fp.h`, resolução de jump tables do `gen.py`, mecanismo de `patches.py`.
-- `cpu.h`, despacho e registro HLE (`dispatch.c`, `hle.h`), primitivas de sincronização e threads do `kernel.c`,
-  codec CMIF/domains do `ipc.c`.
-- NVN: `objects.c`, `cmdbuf.c` (263/276 nomes cobertos), `tegra.c`, `astc.c`, `formats.c`, `maxwell/translate.c`,
-  backend Vulkan (`vulkan/*`), `output_scale.c`, SMAA/FSR.
-- `hle/movie.c` (mesmos 28 símbolos), `hle/vi.c`, `hle/swkbd.c`, `hle/pl.c`, `hle/nvn_boot.c`.
-- Camada de plataforma, gamelib/gamebuild, ImGui (menu, controles, OSK), scripts de teste.
+## 3. Testing and debugging
 
-**Adaptar**
-- Layout de memória (`rt.h`): `main` não cabe antes de `SDK_BASE`; quatro módulos; revisar tamanho do heap.
-- `loader.c` / `main.c`: lista de módulos lida do ExeFS, ordem de init como o rtld (todos os módulos), resolução de
-  símbolos entre 4 módulos.
-- `gen.py` / `Makefile gen` / `gamelib.h` / `gamelib_entry.c` / `dispatch.c`: N módulos em vez de `main` + `sdk`.
-- `lifter.py`: `LDXP/STXP/LDAXP/STLXP` e LSE (`CAS`, `SWP`) usados pelo `sdk` 16.2.
-- `ipc.c`: provável **TIPC** (o `sm:` usa TIPC desde o SDK 12) — confirmar no M2.
-- `kernel.c`: SVCs que o SDK 16.2 chamar e o LAS não tem; `GetInfo` (title ID já trocado).
-- `services/`: comandos novos do SDK 16 (hid, am/applet, audren revisão nova, fs, set, time) — guiado por log.
-- NVN: 11 funções faltando; conferir offsets das structs/builders gravadas na memória do guest para a versão de NVN
-  do SDK 16.2.
-- `hle/heaps.c`, `hle/input.c`, `hle/framepace.c`, `hle/bindings.c`: valores/endereços do motor do LA.
-- UI: `launcher.mm` (configuração dos arquivos do jogo, sem randomizer), `menu.mm` (abas do LA removidas).
+Tests (each runs without game files unless noted):
 
-**Novo**
-- `tools/nca_extract.py` (feito): o hactool não lê o RomFS deste NCA (compressão BucketTree/LZ4 sobre a camada de
-  integridade). Depois: extração dentro do app a partir do XCI + chaves do usuário.
-- `glslc` (`subsdk0`): o jogo importa o compilador GLSL da NVN. Se for chamado em runtime, HLE que compila o GLSL
-  direto (shaderc) em vez de recompilar os 6,8 MB do glslc — decidir por medição.
-- Recompilação e despacho de 4 módulos.
-- HLE/patches específicos do EoW (heaps do motor, save, M7: resolução, aspect ratio, 60 fps, ícones de botões).
-- Testes roteirizados próprios (input gravado do EoW, frames de referência).
+| | |
+|---|---|
+| `tools/test_lift.py` | the lifter against Unicorn, one instruction at a time (`--synth` needs no NSO) |
+| `tools/test_simd.py` | the portable SIMD C against the instruction semantics |
+| `tools/test_jumptable.py` | compact jump-table resolution on a hand-assembled function |
+| `tools/test_translate.sh` | the Maxwell shader translator, fuzzed (GLSL compiles and validates) |
+| `tools/test_vk_pipelines.sh` | fuzzed shaders through the Vulkan backend into real pipelines |
+| `tools/test_astc.sh`, `tools/test_nxpkg.sh` | the ASTC decoder; the NSP / XCI / NCA reader (crypto and LZ4 vectors; header checks need your own package) |
 
-## 4. Comandos das medições
+Scripted runs use `PICRECOMP_*` environment variables (recorded input, a screenshot at frame N, profilers; `tools/shot.sh`,
+`tools/frames.sh`). `PICRECOMP_PROF_SVC=1` also logs every event the runtime creates, with a backtrace.
 
-```
-tools/venv/bin/python -I tools/nso.py extracted/exefs/{main,sdk,subsdk0,subsdk1,rtld}
-tools/venv/bin/python -I tools/analyze.py extracted/exefs/main --census
-```
-(Imports por módulo de origem, nomes NVN, SVCs e atômicos foram contados com scripts ad hoc sobre `nso.py`/Capstone;
-viram ferramenta própria no inventário do `docs/GAP.md`.)
+**Debugging a hang.** A frozen window with 0% CPU is a deadlock, not a slow frame. Attach with `gdb -batch -p $(pgrep -n
+pic-main) -ex 'thread apply all bt 25'` and look for threads blocked in `svc_wait_synchronization` (`timeout=-1`). In
+that frame the argument `handles_ptr` points at the handle the thread waits on; the kernel's `handles[h - 0x100]` gives
+its type (1 thread, 2 event, 3 session) and whether it is signaled. An event created by a service handler that nothing
+signals will block the game forever: with `PICRECOMP_PROF_SVC=1` the creation line is followed by a backtrace naming the
+handler (`addr2line -f -e build/picrecomp <address>` resolves unnamed static functions).

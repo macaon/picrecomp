@@ -1,56 +1,42 @@
-# Building EoWRecomp on Windows (x86-64)
+# Windows
 
-> [!NOTE]
-> Herdado do LAS Recomp (só renomeado). Ainda não revisado para o EoWRecomp: ver `docs/STATUS.md`.
+**Status: untested.** PicRecomp is developed and tested on Linux. The Windows pieces inherited from its base project are
+still in the tree, but nobody has built or run PicRecomp on Windows, and some of the workflow is Linux-only today.
+Treat this page as a starting point for a tester, not as a guide that is known to work.
 
-Status: part of main. Builds and runs the game on Vulkan (with your own game files); `make dist` packages the
-release zip.
+## What exists
 
-## One-time setup
-Run in PowerShell from the repo root:
+- The Makefile has a Windows branch (`PLATFORM=windows`): `picrecomp.exe` with the Vulkan backend, and the game library
+  `picgame.dll`, linked against an import library made from `tools/windows/picrecomp.def` (the runtime functions the
+  game code calls, exported by the `.exe`).
+- `runtime/platform/windows.c`: address-space reservation for the guest window (`VirtualAlloc`, committed per region,
+  with a vectored exception handler for first touches), crash handler and backtrace.
+- `tools/windows/build.sh`: cross-build from Linux with Zig (`WINCROSS=1`): fetches MSYS2 UCRT64 and FFmpeg dependencies
+  (`tools/windows/fetch_deps.sh`), builds `build/win/picrecomp.exe` and, when `generated/` exists, `picgame.dll`, and
+  gathers the DLLs into `build/win/dist/PicRecomp/`. It needs Zig 0.17 (`tools/fetch_zig.sh`).
+- `tools/setup_windows.ps1` and `tools/build_deps_windows.sh`: a native MSYS2 setup. Unverified for PICROSS S.
 
-    powershell -ExecutionPolicy Bypass -File tools\setup_windows.ps1
+## What is missing
 
-This installs MSYS2 (UCRT64: clang, lld, make, SDL3, FFmpeg, Vulkan loader + headers, shaderc, Vulkan Memory
-Allocator, validation layers), Python 3.12 for the tools (`tools\venv`: unicorn, capstone, lz4) and the randomizer
-(`third_party\LAS-Randomizer\venv`) and switches the clone to LF line endings.
+- `tools/picross/generate.sh`, `play.sh` and `launcher.sh` are bash scripts that assume Linux paths (`tools/venv/bin/python`)
+  and `build/picrecomp`. They need Windows equivalents.
+- Nothing has confirmed that the generated code (identical to Linux's) links and runs against the Windows runtime.
 
-## Build
-From an MSYS2 UCRT64 shell, or Git Bash with MSYS2 first on PATH:
+## If you want to try
 
-    export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
-    make gen        # once: recompile the game from extracted/exefs (your own game files; see the start screen)
-    make -j         # -> build/eowrecomp.exe and the game code library build/eowgame.dll
+The generated C is portable (x86-64, `--simd c`), so one way is to generate it on Linux and cross-build:
 
-Without `generated/` only the app is built: the start screen builds the game code itself when you set up the game
-files (as for players), given the generator and the compiler (`make gen-helper`, `tools/fetch_zig.sh`).
-`make runtime-objs` compiles the runtime only (quick check).
+```bash
+tools/picross/generate.sh /path/to/prepared-game     # on Linux
+tools/windows/build.sh                                # needs zig; writes build/win/dist/PicRecomp/
+```
 
-Run from a shell that has `C:\msys64\ucrt64\bin` on PATH (SDL3, FFmpeg, Vulkan, shaderc DLLs).
+then copy `build/win/dist/PicRecomp/` and the prepared game folder to a Windows machine, and run
+`picrecomp.exe --play <prepared-game-folder>`. Please report what happens, with the log: on Windows the release
+build writes `picrecomp.log` next to the `.exe`.
 
-## Package
-    make rando-helper   # the seed generator without Python (build/helper/rando-gen)
-    make gen-helper     # the game code generator without Python (build/helper/eowgen)
-    tools/fetch_zig.sh  # the compiler the start screen builds the game code with (build/zig)
-    make dist           # -> build/dist/EoWRecomp-<version>-windows.zip (no game code inside)
+## Tests that apply
 
-The zip's `EoWRecomp/` folder holds `eowrecomp.exe` (icon from `docs/icon/icon.ico`, via windres),
-`rando-gen/` and the MSYS2 DLLs. No installer: game files, saves, seeds and settings are kept next to the exe, so
-the folder must be writable (the app says so and quits if it isn't, e.g. under Program Files). A source checkout
-with `extracted/` in the starting folder keeps using that folder instead.
-
-## Differences from macOS
-- Guest window 0x70_0000_0000..0x73_2000_0000 is reserved with VirtualAlloc and committed per region
-  (kernel regions, modules, HLE heap); stray first touches are committed by a vectored exception handler.
-- AArch64 FP/SIMD instructions are lowered to C (`gen.py --simd=c`, the default on non-arm64 hosts) instead of
-  inline-asm passthrough.
-- Renderer: Vulkan (runtime/nvn/vulkan) instead of Metal; shaders are translated to GLSL and compiled with
-  shaderc. macOS keeps Metal.
-- Seed switches and "Title screen" reboot the game in place on both (runtime/main.c); the only re-exec left is
-  the startup retry when the guest window is taken, which on Windows starts a new process and exits.
-
-## Tests
-- `tools/test_translate.sh`: shader translator fuzz (MSL output unchanged, GLSL compiles and validates).
-- `tools/test_vk_pipelines.sh`: fuzzed shaders through the backend's compile/reflection into real pipelines.
-- `EOWRECOMP_VK_VALIDATION=1` with `VK_ADD_LAYER_PATH` pointing at `C:\msys64\ucrt64\bin`: Khronos validation layer.
-- Run test windows directly, not under MSYS `timeout` (it stalls the window).
+- `tools/test_translate.sh`: shader translator fuzzing.
+- `tools/test_vk_pipelines.sh`: fuzzed shaders through the backend into real pipelines.
+- `PICRECOMP_VK_VALIDATION=1` with `VK_ADD_LAYER_PATH` pointing at the validation layer's folder: Khronos validation.

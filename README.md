@@ -1,48 +1,141 @@
 # PicRecomp
 
-PicRecomp is a work-in-progress native Linux recompilation of **PICROSS S** for Nintendo Switch. It uses the ARM64-to-C recompiler and Switch runtime from [EoWRecomp](https://github.com/Nycolazs/EoWRecomp), with changes for PICROSS S boot, exception handling, synchronization, and graphics.
+PicRecomp runs the **PICROSS S** series of Nintendo Switch games natively on a PC. It is not an emulator: the game's
+ARM64 code is translated to C once, at build time, from your own copy of the game, and compiled into a library the
+runtime loads. The runtime replaces the Switch's operating system (Horizon) and its GPU API (NVN), drawing with Vulkan.
+
+This is a fan project. It is not affiliated with or endorsed by Nintendo or Jupiter. It contains no game files, keys or
+assets, and it needs a legal copy of the game that you own.
 
 ## Status
 
-The current prototype targets **Linux x86-64** and **PICROSS S update v524288**. The title screen, puzzle selection, cell fills and X marks, completed puzzle thumbnails, and audio have been exercised. Only PICROSS S has been tested. The project is for developer testing and has no packaged releases.
+Work in progress, for developers and testers. There are no packaged releases.
 
-The inherited EoWRecomp start screen includes package selection, game setup, and settings. PicRecomp's tested path starts from pre-extracted game files and bypasses that screen. A separate Linux file picker can prepare the supported base and update NSPs for an existing build. The runtime also inherits an in-game settings overlay, including input bindings and master volume.
+| | |
+|---|---|
+| Games | **PICROSS S** (title `0100BA0003EEA000`) with its update v524288. Other PICROSS games are planned |
+| Platforms | **Linux x86-64** (developed and tested). **Windows**: build files exist (`tools/windows/`), but nobody has built or run it for PICROSS S yet |
+| Graphics | Vulkan 1.3 |
+| Working | Boots, title screen, puzzle selection, solving a puzzle, completed-puzzle thumbnails, audio, 60 fps in the menus on an RTX 5070 Ti |
+| Not verified | Saves across restarts, the other game modes, other GPUs |
+| Not done | The system controller-pairing screen (Plus at the main menu) is skipped, and the game returns to its menu |
 
-## Prepare game data from NSPs
+## Requirements
 
-Use your own PICROSS S base NSP, v524288 update NSP, and `prod.keys`. This setup currently expects NSPs containing CNMT XML and common tickets. It uses the tickets inside the packages and does not add keys to the finished game directory. PicRecomp builds its bundled [hactool extractor](third_party/hactool/UPSTREAM.md) during the Linux build. To prepare the game before compiling the runtime, run `make hactool` first. Extraction works offline with the built tool.
+- An x86-64 CPU with AVX2 and FMA (2013 or newer) and a Vulkan 1.3 GPU driver
+- Your own PICROSS S base game and its update as `.nsp` files, and the `prod.keys` from your Switch
+- About 2 GB of free disk space for the generated code and the build, and some patience: the first build compiles about
+  170,000 generated functions
+
+## Build
+
+### Fedora
 
 ```bash
-make hactool
-mkdir -p .picrecomp
-python3 tools/picross/prepare.py "/path/to/base.nsp" "/path/to/update.nsp" \
-  .picrecomp/prepared-game --prod-keys "/path/to/prod.keys"
+sudo dnf install clang lld make gcc pkgconf-pkg-config python3 python3-pip \
+    SDL3-devel libavcodec-free-devel libavformat-free-devel libavutil-free-devel libswscale-free-devel \
+    vulkan-loader-devel libshaderc-devel VulkanMemoryAllocator-devel
 ```
 
-Pass that directory to the build and play commands below, or run `tools/picross/launcher.sh` to open the **PicRecomp launcher** on Linux. The setup window uses the desktop-themed Zenity file picker when installed and falls back to Tk. It requires Python Tk support (`python3-tk` on Debian/Ubuntu). Open **Game Files** and choose the base NSP, update NSP, and keys, then select **Prepare game**. The window shows each preparation step and enables **Play** once the game data and build are both ready. It reuses `.picrecomp/prepared-game` on subsequent launches. The **Settings** page saves screen, graphics, and volume preferences to the same configuration file used in-game.
+These are the packages the build was verified against on Fedora 44. You also need a Vulkan driver (`mesa-vulkan-drivers`
+for AMD / Intel, or NVIDIA's). Install `gdb` if you want to debug a hang or a crash.
 
-## Build from source
+### Ubuntu / Debian
 
-You need an x86-64 Linux system with AVX2 and FMA, a Vulkan driver, GNU Make, GCC for the bundled extractor, Python with Capstone, and a Clang/LLD toolchain with support for the generated code's tail-call attributes. The runtime links against SDL3, Vulkan, shaderc and FFmpeg and uses the Vulkan Memory Allocator headers. The inherited `tools/linux/dev_deps.sh` provides a Debian/Ubuntu dependency setup.
+```bash
+sudo apt install clang lld make gcc pkg-config python3-venv python3-pip libsdl3-dev libavformat-dev \
+    libavcodec-dev libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev
+```
 
-Prepare a directory from your own PICROSS S base game and update. It must contain the **updated** `exefs/main`, `exefs/main.npdm`, `exefs/subsdk0`, and `exefs/sdk`, plus the matching `romfs.bin` image. Prepare the matching base/update data with a tool that supports Switch update overlays. The generator checks the updated main executable's build ID before starting. Keep your game files and keys outside the checkout.
+SDL3 3.2 or newer is required. These package names have not been tested by the maintainer.
+
+### All distributions
 
 ```bash
 python3 -m venv tools/venv
-tools/venv/bin/python -m pip install capstone lz4 unicorn
-tools/picross/generate.sh /absolute/path/to/prepared-game
+tools/venv/bin/pip install lz4 capstone unicorn
 
-# Use the dependency prefix from tools/linux/dev_deps.sh when applicable.
-PATH="$PWD/build/bin:$PATH" make -j"$(nproc)" \
-  DEPS=build/deps-linux GENARCH=-mcpu=x86_64_v3
-
-tools/picross/play.sh /absolute/path/to/prepared-game
+make hactool                       # the bundled extractor, built with gcc
+make -j"$(nproc)"                  # the runtime (and the game library, once the code is generated)
 ```
 
-For system-installed dependencies, omit `DEPS` and provide compiler include and library flags as needed. With Clang instead of Zig, use `GENARCH=-march=x86-64-v3`. When using the bundled dependency prefix, export `LD_LIBRARY_PATH="$PWD/build/deps-linux/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"` before launching. The first build generates hundreds of megabytes of C and can take several minutes. Run it from disk if your system mounts `/tmp` as tmpfs.
+## Prepare your game
 
-The launcher stores settings and saves under `.picrecomp/runtime` unless `EOWRECOMP_DATA_ROOT` is set. Audio is enabled by default. The inherited keyboard defaults use the arrow keys for movement, **K** for Switch A, and **J** for Switch B.
+Keep your game files and keys outside the checkout; nothing from the game may ever be committed.
 
-## Source and credits
+```bash
+mkdir -p .picrecomp
+python3 tools/picross/prepare.py "/path/to/base.nsp" "/path/to/update.nsp" \
+    .picrecomp/prepared-game --prod-keys "/path/to/prod.keys"
+```
 
-Forked from EoWRecomp at commit `dd9c79d`. See the [upstream README](README.upstream.md) and [license](LICENSE) for attribution and upstream documentation. PicRecomp's game-specific lifting patches live under `tools/picross` and run locally against the supported executable. Game packages, keys, generated game code, linked game libraries, and personal saves stay local.
+This applies the update and writes `exefs/` and `romfs.bin` into `.picrecomp/prepared-game`. It works offline and uses
+the tickets inside the packages. `tools/picross/launcher.sh` does the same from a small window (needs Python Tk,
+`python3-tkinter` on Fedora, `python3-tk` on Debian).
+
+Then generate the C code from the game's executables, build the game library, and play. Both steps check the game's
+build ID and refuse an unsupported version.
+
+```bash
+tools/picross/generate.sh .picrecomp/prepared-game      # a minute or two; writes generated/ (never committed)
+make -j"$(nproc)"                                       # compiles generated/ into build/picgame.so (long)
+tools/picross/play.sh .picrecomp/prepared-game
+```
+
+Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
+
+## Controls
+
+The defaults are keyboard and gamepad. Both can be remapped in the in-game menu (F1, Controls tab).
+
+| Switch | Keyboard |
+|---|---|
+| A (confirm) | K |
+| B (back) | J |
+| X / Y | L / I |
+| D-pad | Arrow keys |
+| Left stick | W A S D |
+| L / R | Q / E |
+| ZL / ZR | 1 / 3 |
+| Plus / Minus | Enter / Backspace |
+
+Plus at the main menu opens the system's controller screen on a Switch. PicRecomp skips it: pair your controller on the
+PC, and use the Controls tab to change the bindings.
+
+## Troubleshooting
+
+- **The window opens and nothing moves**: run it from a terminal and read the output. From a terminal the log goes to the
+  terminal; when stderr is redirected it goes to `.picrecomp/runtime/picrecomp.log`.
+- **A hang or a crash**: a crash prints a backtrace. For a hang, attach with
+  `gdb -batch -p $(pgrep -n pic-main) -ex 'thread apply all bt 12'`. `PICRECOMP_PROF_SVC=1` logs where the game
+  creates the runtime's events, which finds waits that nothing ever signals.
+- **`make` stops with `clang: No such file or directory`**: install `clang` and `lld`.
+
+More detail on how it works is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the current state and the known gaps are in
+[docs/STATUS.md](docs/STATUS.md). Windows build notes are in [docs/BUILD-windows.md](docs/BUILD-windows.md).
+
+## Credits and licenses
+
+PicRecomp is a fork of [EoWRecomp](https://github.com/Nycolazs/EoWRecomp), a recompilation of *The Legend of Zelda: Echoes
+of Wisdom*, which is itself a fork of [LASRecomp](https://github.com/peiikai/LASRecomp) by Peiikai, a recompilation of
+*The Legend of Zelda: Link's Awakening*. The ARM64-to-C lifter, the Horizon and NVN runtime and the Maxwell shader
+translator all descend from their work. PicRecomp was forked from EoWRecomp at commit `dd9c79d`. Thank you to both
+projects and their contributors.
+
+PicRecomp is released under the [MIT License](LICENSE), which carries the copyright notices of those projects. It does
+not cover PICROSS S or any other game. Third-party components keep their own licenses:
+
+| Component | License |
+|---|---|
+| [hactool](https://github.com/SciresM/hactool) (`third_party/hactool`), with its bundled mbed TLS | ISC; Apache-2.0 |
+| [Dear ImGui](https://github.com/ocornut/imgui) (`third_party/imgui`) | MIT |
+| [SMAA](https://github.com/iryoku/smaa) (`third_party/smaa`) | MIT |
+| DejaVu Sans (`third_party/fonts/DejaVu`) | Bitstream Vera license, public-domain changes |
+| Baloo 2 (`third_party/fonts/Baloo2`) | SIL Open Font License 1.1 |
+| [SDL3](https://libsdl.org) | zlib |
+| [FFmpeg](https://ffmpeg.org) (system library) | LGPL 2.1 or later |
+| Vulkan loader and headers, [shaderc](https://github.com/google/shaderc) | Apache-2.0 |
+| [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | MIT |
+| [Capstone](https://www.capstone-engine.org), [LZ4](https://github.com/lz4/lz4) (Python, build tools only) | BSD |
+| [Unicorn](https://www.unicorn-engine.org) (Python, build tools only) | GPL-2.0 |
+| [Zig](https://ziglang.org) (Windows cross build only) | MIT |
