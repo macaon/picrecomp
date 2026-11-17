@@ -26,7 +26,6 @@ for spec in main:0x7000000000 subsdk0:0x7008000000 sdk:0x700c000000; do
     "$python" tools/gen.py "$module" "$stage/exefs/$module" "${spec#*:}" "$stage/lift/$module" \
         --hle runtime/hle/hle_symbols.txt --simd c
 done
-for patch in hash-jump float-jump decoder-jump exception-resume; do
-    PYTHONPATH="$root/tools" "$python" "tools/picross/fix-$patch.py" "$stage"
-done
+# (the jump tables of main are resolved by gen.py itself: tools/test_jumptable.py)
+"$python" tools/picross/fix-exception-resume.py "$stage"
 mv -- "$stage/lift" generated
