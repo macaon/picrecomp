@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Prepare PICROSS S v524288 from a local base and update NSP."""
+"""Prepare a PICROSS game (a titles/*.json manifest) from a local base and update NSP."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -26,23 +28,45 @@ def find_hactool(override):
     return tool
 
 
-def program_nca(directory, title_id, kind, version):
-    programs = []
-    for metadata in directory.glob("*.cnmt.xml"):
-        root = ET.parse(metadata).getroot()
-        if root.findtext("Type") != kind or root.findtext("Id", "").lower() != title_id:
-            continue
-        if int(root.findtext("Version", "-1")) != version:
-            continue
-        for entry in root.findall("Content"):
-            content_id = entry.findtext("Id", "")
-            if entry.findtext("Type") == "Program" and re.fullmatch(r"[a-fA-F0-9]{32}", content_id):
-                candidate = directory / f"{content_id.lower()}.nca"
-                if candidate.is_file() and candidate.stat().st_size == int(entry.findtext("Size", "-1")):
-                    programs.append(candidate)
-    if len(programs) != 1:
-        raise ValueError(f"Expected one {kind} v{version} PICROSS S program in NSP metadata")
-    return programs[0]
+def load_manifests():
+    return [json.loads(p.read_text()) for p in sorted((ROOT / "titles").glob("*.json"))]
+
+
+CONTENT_PROGRAM, CONTENT_CONTROL = 1, 3
+META_APPLICATION, META_PATCH = 0x80, 0x81
+
+
+def read_metas(directory, hactool):
+    """The content metadata of every *.cnmt.nca in a package, read from the NCA itself.
+
+    hactool's own .cnmt.xml is missing for some packages (PICROSS S3's), so the binary record is parsed here."""
+    metas = []
+    for nca in sorted(directory.glob("*.cnmt.nca")):
+        out = directory / (nca.name + ".dir")
+        hactool("Reading metadata", "-t", "nca", f"--section0dir={out}", nca)
+        for record in out.glob("*.cnmt"):
+            data = record.read_bytes()
+            title, version, kind, _, ext, count = struct.unpack_from("<QIBBHH", data)
+            contents = []
+            for k in range(count):
+                row = data[0x20 + ext + k * 0x38:0x20 + ext + (k + 1) * 0x38]
+                contents.append((row[0x20:0x30].hex(), int.from_bytes(row[0x30:0x36], "little"), row[0x36]))
+            metas.append({"id": f"{title:016x}", "version": version, "kind": kind, "contents": contents})
+    return metas
+
+
+def content_nca(directory, meta, content_type):
+    found = [directory / f"{cid}.nca" for cid, size, ctype in meta["contents"]
+             if ctype == content_type and (directory / f"{cid}.nca").is_file()
+             and (directory / f"{cid}.nca").stat().st_size == size]
+    return found[0] if len(found) == 1 else None
+
+
+def pick_meta(metas, kind, title_id, version):
+    found = [m for m in metas if m["kind"] == kind and m["id"] == title_id and m["version"] == version]
+    if len(found) != 1:
+        raise ValueError(f"Expected one {title_id} v{version} entry in the package metadata")
+    return found[0]
 
 
 def prepare(args):
@@ -86,8 +110,18 @@ def prepare(args):
         prepared.mkdir(mode=0o700)
         hactool("Reading base NSP", "-t", "pfs0", f"--pfs0dir={base}", args.base.resolve())
         hactool("Reading update NSP", "-t", "pfs0", f"--pfs0dir={update}", args.update.resolve())
-        base_nca = program_nca(base, "0x0100ba0003eea000", "Application", 0)
-        update_nca = program_nca(update, "0x0100ba0003eea800", "Patch", 524288)
+        base_metas, update_metas = read_metas(base, hactool), read_metas(update, hactool)
+        found = next((m["id"] for m in base_metas if m["kind"] == META_APPLICATION), None)
+        title = next((t for t in load_manifests() if t["base_id"] == found), None)
+        if title is None:
+            raise ValueError(f"Title {found} has no manifest in titles/")
+        print(f"Title: {title['name']}", flush=True)
+        base_meta = pick_meta(base_metas, META_APPLICATION, title["base_id"], 0)
+        update_meta = pick_meta(update_metas, META_PATCH, title["update_id"], title["update_version"])
+        base_nca = content_nca(base, base_meta, CONTENT_PROGRAM)
+        update_nca = content_nca(update, update_meta, CONTENT_PROGRAM)
+        if not base_nca or not update_nca:
+            raise ValueError("The program NCA is missing or has the wrong size")
         # A common ticket holds the encrypted title key expected by hactool.
         tickets = []
         for folder in (base, update):
@@ -107,10 +141,20 @@ def prepare(args):
                 raise ValueError(f"Missing extracted ExeFS file: {name}")
         with (exefs / "main").open("rb") as stream:
             header = stream.read(0x60)
-        if header[:4] != b"NSO0" or header[0x40:0x60].rstrip(b"\0").hex() != "260797018fefb8459d1bf07815e71c23":
-            raise ValueError("Extracted executable has an unsupported build ID")
+        if header[:4] != b"NSO0" or header[0x40:0x60].rstrip(b"\0").hex() != title["main_build_id"]:
+            raise ValueError("Extracted executable has build ID %s, the manifest expects %s" %
+                             (header[0x40:0x60].rstrip(b"\0").hex(), title["main_build_id"]))
         if not romfs.is_file() or romfs.stat().st_size == 0:
             raise ValueError("hactool did not produce an updated RomFS image")
+        (prepared / "title.json").write_text(json.dumps(title, indent=2) + "\n")
+        control = content_nca(base, base_meta, CONTENT_CONTROL)
+        if control:  # the card image the Switch shows (a JPEG in the control data)
+            icons = work / "control"
+            try:
+                hactool("Reading the icon", "-t", "nca", f"--romfsdir={icons}", control)
+                shutil.copyfile(icons / "icon_AmericanEnglish.dat", prepared / "icon.jpg")
+            except (ValueError, OSError):
+                print("No icon found; the start screen will show the name only", flush=True)
         prepared.rename(output)
     print(f"Prepared game data in {output}")
 
