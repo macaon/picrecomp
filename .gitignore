@@ -41,23 +41,12 @@ build/
 *.dylib
 /cache/
 save/
-/eowrecomp.ini
+/picrecomp.ini
 # ---- tools and Python environments (machine-specific)
 tools/venv/
 venv/
 __pycache__/
 .DS_Store
-# ---- Android build output and local settings
-android/local.properties
-android/keystore.properties
-android/.gradle/
-android/build/
-android/app/build/
-android/app/.cxx/
-*.jks
-*.keystore
-*.apk
-*.aab
 
 # Local game inputs and generated recompilation output.
 /generated
