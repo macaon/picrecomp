@@ -14,12 +14,15 @@ stage=$(mktemp -d "$root/.picrecomp/generate.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 ln -s "$game/exefs" "$stage/exefs"
 PYTHONPATH="$root/tools" "$python" - "$stage/exefs/main" <<'PY'
-import sys
+import glob, json, sys
 from gen import Module
 
 main = Module("main", sys.argv[1], 0x7000000000, "c")
-if main.nso.build_id != "260797018fefb8459d1bf07815e71c23":
-    raise SystemExit(f"Unsupported PICROSS S build ID: {main.nso.build_id}")
+titles = [json.load(open(f)) for f in sorted(glob.glob("titles/*.json"))]
+title = next((t for t in titles if t["main_build_id"] == main.nso.build_id), None)
+if title is None:
+    raise SystemExit(f"Unsupported build ID {main.nso.build_id}: no manifest in titles/")
+print(f"Generating {title['name']}")
 PY
 for spec in main:0x7000000000 subsdk0:0x7008000000 sdk:0x700c000000; do
     module=${spec%%:*}
