@@ -571,8 +571,10 @@ static VkSpan guest_copy(uint64_t addr, uint64_t size) {
 }
 
 // ================================================================== worker threads (shader / pipeline builds)
-// First-use compiles run off the render thread; draws needing them are skipped until ready (as on Metal).
-// PICRECOMP_SYNC_SHADERS=1 builds on first use, blocking (deterministic tests).
+// A program or pipeline is built on first use and the draw waits for it. PICRECOMP_ASYNC_SHADERS=1 builds it on a worker
+// thread and skips draws until it is ready (as on Metal): that fits a game that redraws everything every frame, but
+// PICROSS draws some things once, into a texture (the "Play this puzzle?" preview), and a skipped draw left that texture
+// black for good. Shaders are cached on disk, so only a first run pays for the waiting.
 typedef struct Job { void (*fn)(void *); void *arg; struct Job *next; } Job;
 static Job *jobs_head, *jobs_tail;
 static pthread_mutex_t jobs_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -595,7 +597,7 @@ static void *worker(void *a) {
 
 static bool sync_shaders(void) {
     static int v = -1;
-    if (v < 0) v = getenv("PICRECOMP_SYNC_SHADERS") != NULL;
+    if (v < 0) v = getenv("PICRECOMP_ASYNC_SHADERS") == NULL;
     return v;
 }
 
