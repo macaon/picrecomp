@@ -952,7 +952,11 @@ KEvent *kernel_create_event_pair(uint32_t *w, uint32_t *r) {
     ev->type = KOBJ_EVENT;
     *w = kernel_new_handle(ev);
     *r = kernel_new_handle(ev);
-    if (ENV("EOWRECOMP_PROF_SVC")) { const char *s = plat_symbol((uint64_t)(uintptr_t)__builtin_return_address(0), NULL); LOG("[evt] hle w=%x r=%x from %s\n", *w, *r, s ? s : "?"); }
+    if (ENV("EOWRECOMP_PROF_SVC")) {
+        const char *s = plat_symbol((uint64_t)(uintptr_t)__builtin_return_address(0), NULL);
+        LOG("[evt] hle w=%x r=%x from %s\n", *w, *r, s ? s : "?");
+        plat_print_backtrace();  // (names the service handler that hands this event to the guest: a never-signaled one hangs it)
+    }
     return ev;
 }
 

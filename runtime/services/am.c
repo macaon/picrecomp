@@ -37,6 +37,18 @@ static uint32_t new_event(void) {
     return r;
 }
 
+// An event that is already signaled: the game waits on it as a gate (ISelfController::GetLibraryAppletLaunchableEvent,
+// which the system signals once the application can launch library applets). The plain new_event() never fires, so the
+// game's main thread hung for good when Plus at PICROSS S's main menu waited on it (backtrace: EOWRECOMP_PROF_SVC=1).
+static uint32_t new_signaled_event(void) {
+    uint32_t w, r;
+    KEvent *ev = kernel_create_event_pair(&w, &r);
+    pthread_mutex_lock(&g_klock);
+    kernel_signal(ev);
+    pthread_mutex_unlock(&g_klock);
+    return r;
+}
+
 #define UNHANDLED(iface) LOG("[am] %s cmd %u (unhandled, ok)\n", iface, req->cmd)
 
 static void common_state_getter(Service *s, IpcReq *req, IpcResp *resp) {
@@ -73,7 +85,7 @@ static void self_controller(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
     case 0: LOG("[am] application requested exit\n"); exit(0);
-    case 9: resp->copy_handles[resp->ncopy++] = new_event(); break;
+    case 9: resp->copy_handles[resp->ncopy++] = new_signaled_event(); break;  // GetLibraryAppletLaunchableEvent
     case 40: OUT(uint64_t, 0) = 1; resp_size(resp, 8); break;  // CreateManagedDisplayLayer
     case 69: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;
     default: UNHANDLED("ISelfController");
@@ -133,6 +145,51 @@ static Service *new_am_storage(const void *data, uint64_t size) {
     return service_new("IStorage", am_storage, st);
 }
 
+// ------------------------------------------------------------------ ILibraryAppletCreator / ILibraryAppletAccessor
+// The game launches a system applet (PICROSS S: Plus at the main menu). None is emulated: the applet is created, and
+// finishes as soon as it is started, with no output. The log names the applet id (nn::applet::AppletId) and every
+// call, so which applet it is and what the game does with it can be read from there.
+typedef struct { uint32_t id, mode; KEvent *ev; uint32_t ev_r; } LibApplet;
+
+static void applet_finish(LibApplet *a) {
+    pthread_mutex_lock(&g_klock);
+    kernel_signal(a->ev);  // GetAppletStateChangedEvent
+    pthread_mutex_unlock(&g_klock);
+}
+
+static void library_applet_accessor(Service *s, IpcReq *req, IpcResp *resp) {
+    LibApplet *a = s->state;
+    LOG("[am] ILibraryAppletAccessor(applet 0x%x) cmd %u\n", a->id, req->cmd);
+    switch (req->cmd) {
+    case 0: resp->copy_handles[resp->ncopy++] = a->ev_r; break;  // GetAppletStateChangedEvent
+    case 1: OUT(uint8_t, 0) = 1; resp_size(resp, 1); break;      // IsCompleted
+    case 10: case 20: case 25: applet_finish(a); break;          // Start / RequestExit / Terminate
+    case 30: break;                                              // GetResult: success
+    case 101: case 104: ipc_return_object(resp, new_am_storage(NULL, 0x1000)); break;  // PopOutData / PopInteractiveOutData
+    case 105: case 106: resp->copy_handles[resp->ncopy++] = a->ev_r; break;  // GetPopOutDataEvent / ...InteractiveInDataEvent
+    case 110: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;    // NeedsToExitProcess
+    default: break;  // (PushInData and the rest: accepted, ignored)
+    }
+}
+
+static void library_applet_creator(Service *s, IpcReq *req, IpcResp *resp) {
+    (void)s;
+    switch (req->cmd) {
+    case 0: {  // CreateLibraryApplet(AppletId, LibraryAppletMode)
+        LibApplet *a = calloc(1, sizeof *a);
+        uint32_t w;
+        a->id = IN(uint32_t, 0);
+        a->mode = IN(uint32_t, 4);
+        a->ev = kernel_create_event_pair(&w, &a->ev_r);
+        LOG("[am] CreateLibraryApplet id 0x%x mode %u\n", a->id, a->mode);
+        ipc_return_object(resp, service_new("ILibraryAppletAccessor", library_applet_accessor, a));
+        break;
+    }
+    case 10: ipc_return_object(resp, new_am_storage(NULL, (uint64_t)IN(int64_t, 0))); break;  // CreateStorage(size)
+    default: UNHANDLED("ILibraryAppletCreator");
+    }
+}
+
 extern const uint8_t g_user_id[16];
 
 static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
@@ -174,7 +231,7 @@ static void application_proxy(Service *s, IpcReq *req, IpcResp *resp) {
         {3, "IAudioController", generic_ok},
         {4, "IDisplayController", generic_ok},
         {10, "IProcessWindingController", generic_ok},
-        {11, "ILibraryAppletCreator", generic_ok},
+        {11, "ILibraryAppletCreator", library_applet_creator},
         {20, "IApplicationFunctions", application_functions},
         {1000, "IDebugFunctions", generic_ok},
     };
