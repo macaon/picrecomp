@@ -6,17 +6,30 @@ PicRecomp is a work-in-progress native Linux recompilation of **PICROSS S** for 
 
 The current prototype targets **Linux x86-64** and **PICROSS S update v524288**. The title screen, puzzle selection, cell fills and X marks, completed puzzle thumbnails, and audio have been exercised. Only PICROSS S has been tested. The project is for developer testing and has no packaged releases.
 
-The inherited EoWRecomp start screen includes package selection, game setup, and settings. PicRecomp's tested path starts from pre-extracted game files and bypasses that screen. Package selection and automatic setup still need to be adapted and verified for PICROSS S. The runtime also inherits an in-game settings overlay, including input bindings and master volume.
+The inherited EoWRecomp start screen includes package selection, game setup, and settings. PicRecomp's tested path starts from pre-extracted game files and bypasses that screen. A separate Linux file picker can prepare the supported base and update NSPs for an existing build. The runtime also inherits an in-game settings overlay, including input bindings and master volume.
+
+## Prepare game data from NSPs
+
+Use your own PICROSS S base NSP, v524288 update NSP, and `prod.keys`. This setup currently expects NSPs containing CNMT XML and common tickets. It uses the tickets inside the packages and does not add keys to the finished game directory. PicRecomp builds its bundled [hactool extractor](third_party/hactool/UPSTREAM.md) during the Linux build. To prepare the game before compiling the runtime, run `make hactool` first. Extraction works offline with the built tool.
+
+```bash
+make hactool
+mkdir -p .picrecomp
+python3 tools/picross/prepare.py "/path/to/base.nsp" "/path/to/update.nsp" \
+  .picrecomp/prepared-game --prod-keys "/path/to/prod.keys"
+```
+
+Pass that directory to the build and play commands below, or run `tools/picross/launcher.sh` to open the **PicRecomp launcher** on Linux. The setup window uses the desktop-themed Zenity file picker when installed and falls back to Tk. It requires Python Tk support (`python3-tk` on Debian/Ubuntu). Open **Game Files** and choose the base NSP, update NSP, and keys, then select **Prepare game**. The window shows each preparation step and enables **Play** once the game data and build are both ready. It reuses `.picrecomp/prepared-game` on subsequent launches. The **Settings** page saves screen, graphics, and volume preferences to the same configuration file used in-game.
 
 ## Build from source
 
-You need an x86-64 Linux system with AVX2 and FMA, a Vulkan driver, GNU Make, Python with Capstone, and a Clang/LLD toolchain with support for the generated code's tail-call attributes. The runtime links against SDL3, Vulkan, shaderc and FFmpeg and uses the Vulkan Memory Allocator headers. The inherited `tools/linux/dev_deps.sh` provides a Debian/Ubuntu dependency setup.
+You need an x86-64 Linux system with AVX2 and FMA, a Vulkan driver, GNU Make, GCC for the bundled extractor, Python with Capstone, and a Clang/LLD toolchain with support for the generated code's tail-call attributes. The runtime links against SDL3, Vulkan, shaderc and FFmpeg and uses the Vulkan Memory Allocator headers. The inherited `tools/linux/dev_deps.sh` provides a Debian/Ubuntu dependency setup.
 
 Prepare a directory from your own PICROSS S base game and update. It must contain the **updated** `exefs/main`, `exefs/main.npdm`, `exefs/subsdk0`, and `exefs/sdk`, plus the matching `romfs.bin` image. Prepare the matching base/update data with a tool that supports Switch update overlays. The generator checks the updated main executable's build ID before starting. Keep your game files and keys outside the checkout.
 
 ```bash
 python3 -m venv tools/venv
-tools/venv/bin/python -m pip install capstone
+tools/venv/bin/python -m pip install capstone lz4 unicorn
 tools/picross/generate.sh /absolute/path/to/prepared-game
 
 # Use the dependency prefix from tools/linux/dev_deps.sh when applicable.

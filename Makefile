@@ -150,6 +150,25 @@ CXXFLAGS := -O2 -g -std=c++17 -DEOW_RUNTIME -I$(IMGUI) -I$(IMGUI)/backends -Irun
 
 all: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
 
+ifeq ($(PLATFORM),linux)
+HOSTCC ?= gcc
+HACTOOL_SRC := $(shell find third_party/hactool -type f)
+all: $(B)/tools/hactool
+
+.PHONY: hactool
+hactool: $(B)/tools/hactool
+
+$(B)/tools/hactool: $(HACTOOL_SRC)
+	@mkdir -p "$(@D)"
+	@set -e; stage=$$(mktemp -d "$(@D)/hactool.XXXXXX"); \
+		trap 'rm -rf "$$stage"' EXIT; \
+		cp -R third_party/hactool/. "$$stage"; \
+		cp "$$stage/config.mk.template" "$$stage/config.mk"; \
+		$(MAKE) -C "$$stage" MAKEOVERRIDES= CC="$(HOSTCC)"; \
+		mv "$$stage/hactool" "$@"
+endif
+
+
 $(B)/obj/%.o: $(GEN)/%.c runtime/cpu.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(GENFLAGS) -c $< -o $@
