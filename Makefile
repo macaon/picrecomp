@@ -97,7 +97,8 @@ GAMELIB_LDFLAGS := -dynamiclib -undefined dynamic_lookup  # (the runtime functio
 GAMELIB_SHARED := -shared -Wl,-undefined,dynamic_lookup  # (the same, for the start screen's build: zig cc)
 else ifeq ($(PLATFORM),linux)
 EXE      := $(B)/eowrecomp
-DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
+# (pkg-config: Fedora keeps FFmpeg's headers in /usr/include/ffmpeg; Debian / Ubuntu in /usr/include, where it adds nothing)
+DEPINC   := $(if $(DEPS),-I$(DEPS)/include) $(shell pkg-config --cflags libavcodec libavformat libavutil libswscale 2>/dev/null)
 ifeq ($(ARCH),x86_64)
 GENARCH  ?= -march=x86-64-v3  # as on Windows: AVX2 + FMA for the lifted FP/SIMD code (checked at startup)
 endif
