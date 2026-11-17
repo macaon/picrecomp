@@ -138,6 +138,22 @@ static bool file_exists(const std::string &p) {
     return stat(p.c_str(), &st) == 0;
 }
 
+// The text of "key": "value" in a flat JSON file ("" if there is none). The manifests (titles/*.json, written next to
+// a prepared game as title.json) are flat, so this is all the parsing they need.
+static std::string json_str(const std::string &path, const char *key) {
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f) return "";
+    char buf[2048];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    std::string pat = std::string("\"") + key + "\"";
+    const char *k = strstr(buf, pat.c_str());
+    if (!k || !(k = strchr(k + pat.size(), ':')) || !(k = strchr(k, '"'))) return "";
+    const char *e = strchr(++k, '"');
+    return e ? std::string(k, e - k) : "";
+}
+
 // The copied game files alone ("" = there), without the game code built from them
 static std::string check_copied_files(const std::string &root) {
     FILE *f = fopen((root + "/exefs/main").c_str(), "rb");
@@ -146,7 +162,11 @@ static std::string check_copied_files(const std::string &root) {
     fseek(f, 0x40, SEEK_SET);
     size_t n = fread(id, 1, 8, f);
     fclose(f);
-    if (n != 8 || memcmp(id, BUILD_ID, 8)) return "Wrong game version (needs the v524288 update)";
+    std::string want = json_str(root + "/title.json", "main_build_id");  // (a folder prepared before manifests: PICROSS S)
+    char have[17] = {0};
+    for (int k = 0; k < 8; k++) snprintf(have + 2 * k, 3, "%02x", id[k]);
+    if (n != 8 || (want.empty() ? memcmp(id, BUILD_ID, 8) != 0 : want.compare(0, 16, have) != 0))
+        return "Unsupported game version (needs the latest update)";
     // the data the game reads (services/fs.c): an image, or the description of where it is in the game package
     if (!file_exists(root + "/romfs.bin") && !file_exists(root + "/romfs.src")) return "Game data missing";
     return "";
@@ -473,6 +493,68 @@ static void load_background(GpuDevice dev) {
         avcodec_free_context(&cc);
     }
     avformat_close_input(&fmt);
+}
+
+// ------------------------------------------------------------------ game cards
+// One card per prepared game: <data root>/games/<name>/ (what tools/picross/prepare.py writes: title.json, icon.jpg, exefs,
+// romfs.bin), plus the folder the program was started with. The picture is the icon the Switch shows (256x256 JPEG).
+struct Card { std::string root, name; uint64_t tex = 0; };
+static std::vector<Card> g_cards;
+static size_t g_card;  // the selected one; g_root is its folder
+
+static uint64_t load_icon(const std::string &path) {
+    AVFormatContext *fmt = NULL;
+    uint64_t tex = 0;
+    if (avformat_open_input(&fmt, path.c_str(), NULL, NULL) < 0) return 0;
+    if (avformat_find_stream_info(fmt, NULL) >= 0 && fmt->nb_streams) {
+        const AVCodec *codec = avcodec_find_decoder(fmt->streams[0]->codecpar->codec_id);
+        AVCodecContext *cc = avcodec_alloc_context3(codec);
+        avcodec_parameters_to_context(cc, fmt->streams[0]->codecpar);
+        AVPacket *pkt = av_packet_alloc();
+        AVFrame *fr = av_frame_alloc();
+        if (codec && avcodec_open2(cc, codec, NULL) == 0 && av_read_frame(fmt, pkt) >= 0 &&
+            avcodec_send_packet(cc, pkt) == 0 && (avcodec_receive_frame(cc, fr) == 0 ||
+            (avcodec_send_packet(cc, NULL), avcodec_receive_frame(cc, fr) == 0))) {
+            int w = fr->width, h = fr->height;
+            std::vector<uint8_t> rgba((size_t)w * h * 4);
+            SwsContext *sws = sws_getContext(w, h, (AVPixelFormat)fr->format, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+            uint8_t *dst[1] = {rgba.data()};
+            int dst_ls[1] = {w * 4};
+            sws_scale(sws, fr->data, fr->linesize, 0, h, dst, dst_ls);
+            sws_freeContext(sws);
+            tex = vk_imgui_texture_rgba(rgba.data(), w, h);
+        }
+        av_frame_free(&fr);
+        av_packet_free(&pkt);
+        avcodec_free_context(&cc);
+    }
+    avformat_close_input(&fmt);
+    return tex;
+}
+
+static void scan_cards(const std::string &current) {
+    std::vector<std::string> roots;
+    std::string dir = std::string(rt_data_root()) + "/games";
+    if (DIR *d = opendir(dir.c_str())) {
+        while (dirent *e = readdir(d))
+            if (e->d_name[0] != '.' && file_exists(dir + "/" + e->d_name + "/title.json")) {
+                char real[4096];  // (the same folder reached by another path is one card)
+                if (realpath((dir + "/" + e->d_name).c_str(), real)) roots.push_back(real);
+            }
+        closedir(d);
+    }
+    if (std::find(roots.begin(), roots.end(), current) == roots.end()) roots.push_back(current);
+    std::sort(roots.begin(), roots.end());
+    g_cards.clear();
+    for (auto &r : roots) {
+        Card c;
+        c.root = r;
+        c.name = json_str(r + "/title.json", "name");
+        if (c.name.empty()) c.name = "PICROSS S";  // (a folder prepared before the manifests)
+        c.tex = load_icon(r + "/icon.jpg");
+        if (r == current) g_card = g_cards.size();
+        g_cards.push_back(c);
+    }
 }
 
 // ------------------------------------------------------------------ screen
@@ -862,9 +944,10 @@ extern "C" void launcher_run(const char *root) {
     launcher_pad_open_all();
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 
+    scan_cards(g_root);
     std::string status = check_game_files(g_root);
     if (status.empty()) load_background(dev);
-    Page page = status.empty() ? MAIN : SETUP;
+    Page page = check_copied_files(g_root).empty() ? MAIN : SETUP;  // (files there, code not built: the cards still show)
     bool play = false;
     // PICRECOMP_LAUNCHER_SHOT=<frame>[:<page>] (test): save build/launcher.png at that frame and exit; page: settings[:<tab>] / askdelete / setup
     long shot_at = getenv("PICRECOMP_LAUNCHER_SHOT") ? atol(getenv("PICRECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
@@ -999,6 +1082,39 @@ extern "C" void launcher_run(const char *root) {
             static bool typed_before;
             bool typing = typed_before || ui_text_busy();
 
+            if (page == MAIN && !g_cards.empty()) {  // the games: the Switch's icon, the name under it, gold when chosen
+                float cs = 150 * s, gap = 24 * s, n = (float)g_cards.size();
+                float cx = ds.x - n * cs - (n - 1) * gap - 70 * s, cy = 250 * s;
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                for (size_t i = 0; i < g_cards.size(); i++) {
+                    ImGui::SetCursorPos(ImVec2(cx + (float)i * (cs + gap), cy));
+                    ImVec2 at = ImGui::GetCursorScreenPos();
+                    ImGui::PushID((int)i);
+                    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
+                    bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + 36 * s), ImGuiButtonFlags_EnableNav);
+                    ImGui::PopStyleColor();
+                    bool hot = ImGui::IsItemFocused() || ImGui::IsItemHovered(), sel = i == g_card;
+                    ImGui::PopID();
+                    if (clicked && !sel && !busy) {
+                        g_card = i;
+                        g_root = g_cards[i].root;
+                        status = check_game_files(g_root);
+                        g_bg = 0;
+                        if (status.empty()) load_background(dev);
+                    }
+                    ImVec2 br(at.x + cs, at.y + cs);
+                    if (g_cards[i].tex) dl->AddImageRounded((ImTextureID)g_cards[i].tex, at, br, ImVec2(0, 0), ImVec2(1, 1),
+                                                            sel || hot ? IM_COL32_WHITE : IM_COL32(200, 200, 210, 255), 14 * s);
+                    else dl->AddRectFilled(at, br, IM_COL32(30, 44, 70, 230), 14 * s);
+                    dl->AddRect(at, br, sel ? IM_COL32(255, 214, 64, 255) : hot ? IM_COL32(255, 255, 255, 200) : IM_COL32(255, 255, 255, 40),
+                                14 * s, 0, (sel ? 4 : 2) * s);
+                    ImGui::PushFont(g_font_small);
+                    float tw = ImGui::CalcTextSize(g_cards[i].name.c_str()).x;
+                    dl->AddText(ImVec2(at.x + (cs - tw) * 0.5f, br.y + 6 * s), sel ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 255),
+                                g_cards[i].name.c_str());
+                    ImGui::PopFont();
+                }
+            }
             if (page == MAIN) {
                 {  // the four items close together, the block anchored where QUIT always was (the gap to the status
                    // line stays)
@@ -1011,6 +1127,7 @@ extern "C" void launcher_run(const char *root) {
                 }
                 bool hov = false;
                 const char *label = "PLAY";
+                ImGui::SetCursorPosX(x0);
                 static bool focused_once;
                 if (!focused_once) { ImGui::SetKeyboardFocusHere(); focused_once = true; }
                 ImVec2 play_at = ImGui::GetCursorScreenPos();
@@ -1370,3 +1487,5 @@ extern "C" void launcher_run(const char *root) {
     g_bg = 0;
     g_start_screen = 0;
 }
+
+extern "C" const char *launcher_root(void) { return g_root.c_str(); }  // the card chosen when PLAY was pressed

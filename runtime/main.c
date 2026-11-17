@@ -205,7 +205,9 @@ int main(int argc, char **argv) {
     for (bool title = !skip_launcher;;) {
         if (title) {  // start screen (runtime/ui/launcher.mm): game files setup, settings
             extern void launcher_run(const char *root);
+            extern const char *launcher_root(void);
             launcher_run(root);
+            root = launcher_root();  // the game card that was chosen
         }
         boot(root);
         if (getenv("PICROSS_HEADLESS_TRACE")) { SDL_Delay(15000); return 0; }

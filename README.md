@@ -73,6 +73,10 @@ This applies the update and writes `exefs/` and `romfs.bin` into `.picrecomp/pre
 the tickets inside the packages. `tools/picross/launcher.sh` does the same from a small window (needs Python Tk,
 `python3-tkinter` on Fedora, `python3-tk` on Debian).
 
+Games prepared into `.picrecomp/runtime/games/<name>` (any folder name) appear as cards on the start screen, with the
+icon the Switch shows. Each game's manifest is in `titles/`; `prepare.py` picks it from the package, so a PICROSS game
+with a manifest needs no other setting. Only PICROSS S has been generated, built and run so far.
+
 Then generate the C code from the game's executables, build the game library, and play. Both steps check the game's
 build ID and refuse an unsupported version.
 
