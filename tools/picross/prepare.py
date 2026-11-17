@@ -10,10 +10,57 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[2]
+STEPS = 7
+
+
+def step(number, text):
+    """One line the start screen reads from the log: which step of STEPS is running."""
+    print(f"@step {number}/{STEPS} {text}", flush=True)
+    time.sleep(float(os.environ.get("PICRECOMP_STEP_DELAY", "0")))  # (test: slows it down to be seen)
+
+
+def pfs0_names(path):
+    """The file names inside a PFS0 (NSP) package, from its header alone."""
+    with path.open("rb") as stream:
+        head = stream.read(16)
+        if head[:4] != b"PFS0":
+            return []
+        count, strings = struct.unpack_from("<II", head, 4)
+        table = stream.read(count * 0x18 + strings)
+    names = []
+    for k in range(count):
+        offset = struct.unpack_from("<I", table, k * 0x18 + 0x10)[0]
+        end = table.index(b"\0", count * 0x18 + offset)
+        names.append(table[count * 0x18 + offset:end].decode("ascii", "replace"))
+    return names
+
+
+def find_packages(folder):
+    """(manifest, base .nsp, update .nsp) for the one game whose two packages are in the folder. A package's title ID is
+    the start of its ticket's file name."""
+    manifests = {t["base_id"]: t for t in load_manifests()}
+    manifests.update({t["update_id"]: t for t in load_manifests()})
+    found = {}
+    for nsp in sorted(folder.glob("*.nsp")):
+        for name in pfs0_names(nsp):
+            if name.endswith(".tik") and name[:16].lower() in manifests:
+                found.setdefault(manifests[name[:16].lower()]["slug"], {})[name[:16].lower()] = nsp
+    games = []
+    for slug, packages in found.items():
+        title = next(t for t in load_manifests() if t["slug"] == slug)
+        if title["base_id"] in packages and title["update_id"] in packages:
+            games.append((title, packages[title["base_id"]], packages[title["update_id"]]))
+    if len(games) != 1:
+        raise ValueError("No supported game in that folder (it needs the base .nsp and the update .nsp)" if not games
+                         else "More than one game in that folder; keep one game's two .nsp files there")
+    return games[0]
+
+
 
 
 def find_hactool(override):
@@ -97,19 +144,21 @@ def prepare(args):
         (key_dir / "prod.keys").write_text("".join(entries), encoding="ascii")
         env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home)}
 
-        def hactool(step, *arguments):
-            print(step, flush=True)
+        def hactool(what, *arguments):
             result = subprocess.run(
                 [tool, *map(str, arguments)], cwd=work, env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             if result.returncode:
-                raise ValueError(f"{step} failed (hactool exit {result.returncode})")
+                raise ValueError(f"Extraction failed at '{what}' (hactool exit {result.returncode}); are the keys complete?")
 
         base, update, prepared = (work / name for name in ("base", "update", "prepared"))
         prepared.mkdir(mode=0o700)
-        hactool("Reading base NSP", "-t", "pfs0", f"--pfs0dir={base}", args.base.resolve())
-        hactool("Reading update NSP", "-t", "pfs0", f"--pfs0dir={update}", args.update.resolve())
+        step(2, "Reading the base package")
+        hactool("base", "-t", "pfs0", f"--pfs0dir={base}", args.base.resolve())
+        step(3, "Reading the update package")
+        hactool("update", "-t", "pfs0", f"--pfs0dir={update}", args.update.resolve())
+        step(4, "Reading the game's metadata")
         base_metas, update_metas = read_metas(base, hactool), read_metas(update, hactool)
         found = next((m["id"] for m in base_metas if m["kind"] == META_APPLICATION), None)
         title = next((t for t in load_manifests() if t["base_id"] == found), None)
@@ -134,7 +183,8 @@ def prepare(args):
         (key_dir / "title.keys").write_text("".join(tickets), encoding="ascii")
         romfs = prepared / "romfs.bin"
         exefs = prepared / "exefs"
-        hactool("Applying update and extracting game data", "-t", "nca", f"--basenca={base_nca}",
+        step(5, "Applying the update and extracting the game data")
+        hactool("extract", "-t", "nca", f"--basenca={base_nca}",
                 f"--exefsdir={exefs}", f"--section1={romfs}", update_nca)
         for name in ("main", "main.npdm", "subsdk0", "sdk"):
             if not (exefs / name).is_file():
@@ -150,25 +200,49 @@ def prepare(args):
         control = content_nca(base, base_meta, CONTENT_CONTROL)
         if control:  # the card image the Switch shows (a JPEG in the control data)
             icons = work / "control"
+            step(6, "Reading the game's icon")
             try:
-                hactool("Reading the icon", "-t", "nca", f"--romfsdir={icons}", control)
+                hactool("icon", "-t", "nca", f"--romfsdir={icons}", control)
                 shutil.copyfile(icons / "icon_AmericanEnglish.dat", prepared / "icon.jpg")
             except (ValueError, OSError):
                 print("No icon found; the start screen will show the name only", flush=True)
+        step(7, "Finishing")
         prepared.rename(output)
-    print(f"Prepared game data in {output}")
+    print(f"Prepared game data in {output}", flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("base", type=Path)
-    parser.add_argument("update", type=Path)
-    parser.add_argument("output", type=Path)
-    parser.add_argument("--prod-keys", type=Path, required=True)
+    parser.add_argument("base", type=Path, nargs="?")
+    parser.add_argument("update", type=Path, nargs="?")
+    parser.add_argument("output", type=Path, nargs="?")
+    parser.add_argument("--folder", type=Path, help="Find the game's two packages and prod.keys in this folder instead")
+    parser.add_argument("--games", type=Path, help="With --folder: the folder the game is added to (as <games>/<slug>)")
+    parser.add_argument("--prod-keys", type=Path)
     parser.add_argument("--hactool", help="Override the automatically located extraction tool")
+    args = parser.parse_args()
     try:
-        prepare(parser.parse_args())
+        if args.folder:
+            if not args.games:
+                raise ValueError("--folder needs --games")
+            step(1, "Looking for the game's packages")
+            title, args.base, args.update = find_packages(args.folder)
+            args.output = args.games / title["slug"]
+            if not args.prod_keys:  # beside the packages, else where Switch tools keep it
+                args.prod_keys = next((k for k in (args.folder / "prod.keys", Path.home() / ".switch" / "prod.keys")
+                                       if k.is_file()), None)
+            if not args.prod_keys:
+                raise ValueError("No prod.keys beside the game packages or in ~/.switch")
+            args.games.mkdir(parents=True, exist_ok=True)
+            for stale in args.games.glob(".picrecomp-*"):  # (an import that was stopped)
+                shutil.rmtree(stale, ignore_errors=True)
+        elif not (args.base and args.update and args.output and args.prod_keys):
+            raise ValueError("Give BASE UPDATE OUTPUT --prod-keys, or --folder and --games")
+        else:
+            step(1, "Checking the files")
+        prepare(args)
     except (OSError, ValueError, ET.ParseError) as error:
+        print(f"@error {error}", flush=True)
         parser.exit(1, f"{error}\n")
 
 
