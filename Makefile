@@ -49,8 +49,16 @@ GENFLAGS += $(if $(FNPROF),-DPICRECOMP_FNPROF)
 # the app itself holds none of it
 # the game's modules and their guest bases (runtime/modules.h): name:base pairs
 GAME_MODULES := $(shell sed -n 's/^ *X(\([a-z0-9]*\), *\(0x[0-9A-Fa-f]*\)ull).*/\1:\2/p' runtime/modules.h)
-GEN_SRC  := $(foreach m,$(GAME_MODULES),$(wildcard $(GEN)/$(firstword $(subst :, ,$(m)))/*.c))
-GEN_OBJ  := $(patsubst %.c,$(B)/obj/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(B)/obj/tools/gamelib_entry.o
+# make game GAME=<folder>: build that game's own library from <folder>/generated into <folder>/picgame.so (objects in
+# <folder>/obj), as the start screen's importer does
+ifdef GAME
+GEN      := $(GAME)/generated
+GOBJ     := $(GAME)/obj
+endif
+GOBJ     ?= $(B)/obj
+# (biggest first: the long compiles start early and the last ones are quick, instead of one big file ending the build alone)
+GEN_SRC  := $(shell ls -S $(foreach m,$(GAME_MODULES),$(wildcard $(GEN)/$(firstword $(subst :, ,$(m)))/*.c)) 2>/dev/null)
+GEN_OBJ  := $(patsubst %.c,$(GOBJ)/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(GOBJ)/tools/gamelib_entry.o
 RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) \
             $(wildcard runtime/nvn/*.c) $(wildcard runtime/nvn/maxwell/*.c) runtime/platform/$(PLATFORM).c
 RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) \
@@ -101,6 +109,12 @@ GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(IMPLIB)
 GAMELIB_SHARED := -shared  # (+ the import library: runtime/gamebuild.c)
 endif
 
+ifdef GAME
+GAMELIB  := $(GAME)/$(notdir $(GAMELIB))
+.PHONY: game
+game: $(GAMELIB)
+endif
+
 # GAMELIB_ID: what the game code library is built from (the generator, the headers it is compiled against, the
 # flags). A library with another id is rebuilt by the start screen, never loaded.
 GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools/passes.py tools/patches.py \
@@ -133,11 +147,11 @@ $(B)/tools/hactool: $(HACTOOL_SRC)
 endif
 
 
-$(B)/obj/%.o: $(GEN)/%.c runtime/cpu.h
+$(GOBJ)/%.o: $(GEN)/%.c runtime/cpu.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(GENFLAGS) -c $< -o $@
 
-$(B)/obj/tools/gamelib_entry.o: tools/gamelib_entry.c $(GAMELIB_SRCS)
+$(GOBJ)/tools/gamelib_entry.o: tools/gamelib_entry.c $(GAMELIB_SRCS)
 	@mkdir -p $(dir $@)
 	$(CC) $(GENFLAGS) -DGAMELIB_ID='"$(GAMELIB_ID)"' -c $< -o $@
 $(B)/rt/gamelib.o: $(GAMELIB_SRCS)

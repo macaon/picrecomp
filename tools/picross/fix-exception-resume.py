@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -23,21 +24,26 @@ def patch(module, decl, *edits):
 
 
 root = Path(sys.argv[1]).resolve()
+sites = json.loads(Path(sys.argv[2]).read_text())["exception_landings"]  # the title's manifest (titles/*.json)
+call, catch = sites["call"], sites["catch"]
 main, sdk = root / "lift/main", root / "lift/sdk"
+A = {k: v[2:] for k, v in call.items()}
+B = {k: v[2:] for k, v in catch.items()}
 patch(main, '_Bool rt_call_with_landing(Cpu *c, uint64_t pc);',
-      ('c->x[30] = 0x7001b40d84ull; rt_dispatch(c);',
-       'c->x[30] = 0x7001b40d84ull;\n'
-       '    if (rt_call_with_landing(c, 0x7001b40eb8ull)) goto L_7001b40ec8;'))
+      (f'c->x[30] = 0x{A["return"]}ull; rt_dispatch(c);',
+       f'c->x[30] = 0x{A["return"]}ull;\n'
+       f'    if (rt_call_with_landing(c, 0x{A["landing"]}ull)) goto L_{A["resume"]};'))
+# (the sdk module is the same in every PICROSS game: same build ID, same addresses)
 patch(sdk, '_Noreturn void rt_resume_landing(Cpu *c);',
       ('    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    return;\n}\nvoid f_700c55f200',
        '    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    rt_resume_landing(c);\n}\nvoid f_700c55f200'))
 patch(main, '_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *));',
-      ('c->x[30] = 0x7001510f9cull; f_7001511030(c);',
-       'c->x[30] = 0x7001510f9cull;\n'
-       '    if (rt_invoke_with_landing(c, 0x7001510fa8ull, f_7001511030)) goto L_7001510fa8;'),
+      (f'c->x[30] = 0x{B["return"]}ull; f_{B["callee"]}(c);',
+       f'c->x[30] = 0x{B["return"]}ull;\n'
+       f'    if (rt_invoke_with_landing(c, 0x{B["landing"]}ull, f_{B["callee"]})) goto L_{B["landing"]};'),
       ('    return;\n    c->x[20] = (uint64_t)(0ull | c->x[0]);\n'
        '    (void)(subs32(c, (uint32_t)c->x[1], 0x1ull));\n'
-       '    if (COND_NE(c)) { goto L_7001511020; }',
-       '    return;\nL_7001510fa8:;\n    c->x[20] = (uint64_t)(0ull | c->x[0]);\n'
+       f'    if (COND_NE(c)) {{ goto L_{B["target"]}; }}',
+       f'    return;\nL_{B["landing"]}:;\n    c->x[20] = (uint64_t)(0ull | c->x[0]);\n'
        '    (void)(subs32(c, (uint32_t)c->x[1], 0x1ull));\n'
-       '    if (COND_NE(c)) { goto L_7001511020; }'))
+       f'    if (COND_NE(c)) {{ goto L_{B["target"]}; }}'))

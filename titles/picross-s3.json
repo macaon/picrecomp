@@ -4,5 +4,18 @@
   "base_id": "010079200d330000",
   "update_id": "010079200d330800",
   "update_version": 655360,
-  "main_build_id": "7615bc81de189a40a9e3e213554bb8a4"
+  "main_build_id": "7615bc81de189a40a9e3e213554bb8a4",
+  "exception_landings": {
+    "call": {
+      "return": "0x7001b791d4",
+      "landing": "0x7001b79308",
+      "resume": "0x7001b79318"
+    },
+    "catch": {
+      "return": "0x700169c0bc",
+      "callee": "0x700169c150",
+      "landing": "0x700169c0c8",
+      "target": "0x700169c140"
+    }
+  }
 }
