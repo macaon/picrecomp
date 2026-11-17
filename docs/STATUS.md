@@ -16,6 +16,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 ## What works (seen running)
 
+- Saves persist across restarts (checked by the user).
 - Boots, shows the title screen and the main menu, selects puzzles, solves a puzzle, shows completed-puzzle thumbnails.
 - Audio plays (SDL, PipeWire). The runtime's frame stats show 60 fps on the title screen and menus on the test GPU;
   the frame rate while solving puzzles has not been measured.
@@ -23,7 +24,6 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 ## Not verified
 
-- A save written, the game quit, and the save loaded again. (`save/save_0` mounts.)
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
 
 ## Known gaps
@@ -43,6 +43,14 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   XCI-oriented extraction). It identifies PICROSS S's build ID but is not the supported way to set the game up:
   use `tools/picross/prepare.py` or `tools/picross/launcher.sh`.
 
+- **Other titles.** `titles/picross-s2.json` and `picross-s3.json` exist and `prepare.py` prepares both from the user's
+  packages (checked: S, S2 and S3 each give a card with the Switch icon). Their `sdk` and `subsdk0` modules are
+  byte-identical to PICROSS S's (same build IDs and sizes); only `main` differs (S2 `427cae75...`, S3 `7615bc81...`).
+  Not done: generating and building their code (`generated/` and `build/picgame.so` hold one game; a library's `.id`
+  file now names its main build ID and is refused for any other game), the exception-landing patches in
+  `tools/picross/fix-exception-resume.py` (main-module addresses valid only for S), and `rtld_init_sdk`'s `sdk + 0xcdd210`
+  in `runtime/main.c` (the sdk module is shared, so it probably holds). Neither game has been started.
+
 ## Leftovers from the base project
 
 Removed in this stage: the Android, macOS and Metal ports, and every name from EoWRecomp (environment variables are now
@@ -59,11 +67,11 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 
 ## Next steps
 
-1. Verify saving, the remaining screens, and a gamepad. Look for `[am] ... unhandled`, `[ipc] STUB` and frozen windows.
-2. A per-title manifest (build IDs, module bases, patches) in place of the constants in `generate.sh`, `prepare.py` and
-   `tools/picross/fix-exception-resume.py`, so another PICROSS game is a new entry and not a new fork. Confirm that the
-   other games share this SDK and engine by comparing their build IDs and SDK strings.
-3. A native, gamepad-friendly launcher in C that lists the games a user has added.
+1. Verify the remaining screens and a gamepad. Look for `[am] ... unhandled`, `[ipc] STUB` and frozen windows.
+2. Make the code generation per title: patches in the manifest instead of `fix-exception-resume.py`, a library and a
+   generated folder per game (`<game folder>/picgame.so` is already searched first), then generate S2 and S3.
+3. Finish the launcher: set a game up from the start screen (it still has the base project's setup flow), tell the user
+   why a card cannot be played, and test the cards with a gamepad.
 4. The cleanup above, then Windows.
 
 ## What to test and watch for
