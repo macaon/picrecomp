@@ -125,6 +125,8 @@ class Module:
         r = self._jump_table_fallthrough(br_pc, entry, end)
         if r is None:
             r = self._jump_table_taken(br_pc, entry, end)
+        if r is None:
+            r = self._jump_table_compact(br_pc, entry)
         return r
 
     def _index_regs(self, start, at, idx):
@@ -300,6 +302,63 @@ class Module:
         except uc.UcError:
             return None
         return sorted(set(targets))
+
+    def _jump_table_compact(self, br_pc, entry):
+        """LLVM's compact table read straight from the image (no emulation, no index value needed):
+        adrp xS ; add xT, xS, #t ; adr xA, cases ; ldrb/ldrh wO, [xT, xI] ; add xB, xA, xO, lsl #2 ; br xB.
+        Entry count: the guard (cmp idx, #N ; b.hi/b.hs) anywhere earlier in the function - PICROSS S has them 17-19
+        instructions up, beyond the other resolvers' window - or an `and idx, x, #2^k-1` (no guard at all).
+        A wrong guess only loses precision: functions with tables keep the all-instruction fallback."""
+        lo = max(entry, br_pc - 4 * 96)
+
+        def back(frm, pred):
+            for a in range(frm - 4, lo - 4, -4):
+                if pred(self.word(a)):
+                    return a
+            return None
+        rb = bits(self.word(br_pc), 5, 5)
+        add = back(br_pc, lambda w: (w & 0xFFE0FC00) == 0x8B000800 and bits(w, 0, 5) == rb)
+        if add is None:
+            return None
+        wa = self.word(add)
+        ldr = back(add, lambda w: (w & 0xFFE0FC00) in (0x38606800, 0x78607800) and bits(w, 0, 5) == bits(wa, 16, 5))
+        adr = back(add, lambda w: (w & 0x9F000000) == 0x10000000 and bits(w, 0, 5) == bits(wa, 5, 5))
+        if ldr is None or adr is None:
+            return None
+        wl = self.word(ldr)
+        esize = 1 if (wl & 0xFFE0FC00) == 0x38606800 else 2
+        addi = back(ldr, lambda w: (w & 0xFFC00000) == 0x91000000 and bits(w, 0, 5) == bits(wl, 5, 5))
+        if addi is None:
+            return None
+        wi = self.word(addi)
+        adrp = back(addi, lambda w: (w & 0x9F000000) == 0x90000000 and bits(w, 0, 5) == bits(wi, 5, 5))
+        if adrp is None:
+            return None
+        table = pcrel(self.word(adrp), adrp) + bits(wi, 10, 12)
+        regs = self._index_regs(max(entry, ldr - 4 * 64), ldr, bits(wl, 16, 5))
+        counts = []
+        for a in range(ldr - 4, lo - 4, -4):
+            w = self.word(a)
+            if (w & 0xFF000010) == 0x54000000 and bits(w, 0, 4) in (8, 2) and a - 4 >= entry:
+                c = self.word(a - 4)
+                if (c & 0x7F80001F) == 0x7100001F and not bits(c, 22, 1) and bits(c, 5, 5) in regs:
+                    counts.append(bits(c, 10, 12) + (1 if bits(w, 0, 4) == 8 else 0))
+                    break
+        for a in range(ldr - 4, lo - 4, -4):
+            w = self.word(a)  # and idx, x, #(2^k - 1): the mask is the bound
+            if (w & 0x7F800000) == 0x12000000 and bits(w, 0, 5) in regs and bits(w, 16, 6) == 0 \
+                    and bits(w, 10, 6) < (63 if bits(w, 22, 1) else 31):
+                counts.append(1 << (bits(w, 10, 6) + 1))
+                break
+        count = min(counts, default=0)
+        off = table - self.base
+        img = self.nso.image
+        if not 0 < count <= 4096 or off < 0 or off + count * esize > len(img):
+            return None
+        cases = pcrel(self.word(adr), adr)
+        ts = sorted({cases + 4 * int.from_bytes(img[off + i * esize:off + (i + 1) * esize], 'little')
+                     for i in range(count)})
+        return ts if all(self._vlo <= t < self._vhi for t in ts) else None
 
     # ------------------------------------------------------------ functions
 
@@ -483,11 +542,18 @@ class Module:
 from patches import PATCHES
 
 
-def adr_feeds_br(m, i, rd, window=6):
+def pcrel(w, pc):
+    """Target of an ADR / ADRP word at pc."""
+    imm = sext(bits(w, 5, 19) << 2 | bits(w, 29, 2), 21)
+    return (pc & ~0xFFF) + (imm << 12) if w & 0x80000000 else pc + imm
+
+
+def adr_feeds_br(m, i, rd, window=16):
     """ADR whose register reaches a `br` within a few instructions: the base of a compact jump table's cases
     (LLVM: adr xB, cases ; ldrb/ldrh wO, [table, idx] ; add xB, xB, xO, lsl #2 ; br xB), code inside the same
     function - not a callback. Treating it as a function start split the function at its cases, so its table
-    couldn't be resolved (main: 71 tables resolved, 1832 left to the all-instruction fallback)."""
+    couldn't be resolved (main: 71 tables resolved, 1832 left to the all-instruction fallback). The window must
+    cover the code LLVM schedules in between: PICROSS S has 13 instructions from the ADR to the br."""
     regs = {rd}
     for k in range(i + 1, min(i + 1 + window, len(m.words))):
         w = m.words[k]
