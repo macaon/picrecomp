@@ -17,6 +17,9 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 ## What works (seen running)
 
 - Saves persist across restarts (checked by the user).
+- The stage preview ("Play this puzzle?") shows its picture: shaders now compile before the draw runs. The game draws
+  that preview once, into a texture, and the old default (skip draws while a shader compiles in the background) left it
+  black. `PICRECOMP_ASYNC_SHADERS=1` brings the old behaviour back.
 - Boots, shows the title screen and the main menu, selects puzzles, solves a puzzle, shows completed-puzzle thumbnails.
 - Audio plays (SDL, PipeWire). The runtime's frame stats show 60 fps on the title screen and menus on the test GPU;
   the frame rate while solving puzzles has not been measured.
@@ -42,21 +45,34 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 - The start screen shows a card for each installed game and a "+" card. "+" opens the importer: pick a folder with the
   two `.nsp` files (and a `prod.keys` if it is not beside them or in `~/.switch`), Import. `runtime/importer.c` runs
   `tools/picross/prepare.py --folder` as a child process (so it needs python3 and the built `hactool`, found from the
-  checkout) and shows the `@step n/7` lines it prints as a step list and a segmented bar. Importing takes well under a
-  second on a fast disk, so the steps flash by; the long waits are code generation and compiling, which the importer
-  does not do yet. The inherited in-app setup (`SETUP` page, `extract_thread`, the XCI reader) is unreachable and still
+  checkout) and shows the `@step n/10` and `@progress` lines it prints as a step list and a segmented bar (generation
+  and compiling report how far they are). Needs `clang`, `make`, `bash` and the Python tools venv. The inherited in-app setup (`SETUP` page, `extract_thread`, the XCI reader) is unreachable and still
   checks the old Zelda title ID; it can be deleted.
   Layout checked by screenshots (no game, S only, all three, the importer idle, running, done and failed); an import of
   S3 was run end to end and gave a card. Clicking the buttons and the file dialogs, and gamepad navigation, have not
   been tried.
 
-- **Other titles.** `titles/picross-s2.json` and `picross-s3.json` exist and `prepare.py` prepares both from the user's
-  packages (checked: S, S2 and S3 each give a card with the Switch icon). Their `sdk` and `subsdk0` modules are
-  byte-identical to PICROSS S's (same build IDs and sizes); only `main` differs (S2 `427cae75...`, S3 `7615bc81...`).
-  Not done: generating and building their code (`generated/` and `build/picgame.so` hold one game; a library's `.id`
-  file now names its main build ID and is refused for any other game), the exception-landing patches in
-  `tools/picross/fix-exception-resume.py` (main-module addresses valid only for S), and `rtld_init_sdk`'s `sdk + 0xcdd210`
-  in `runtime/main.c` (the sdk module is shared, so it probably holds). Neither game has been started.
+- **Other titles.** Every game now has its own folder `<data root>/games/<name>` holding `exefs/`, `romfs.bin`, the
+  icon, `generated/` and its own `picgame.so`. `tools/picross/install.py` (what the start screen's importer runs) does
+  everything: prepare, `generate.sh`, `make game GAME=<folder>`. A library's `.id` file names the main build ID it was
+  generated from and is refused for any other game. The only per-title code left was the exception-landing patches;
+  they are in the manifests now, and S2's and S3's were found by matching S's two patched functions in their `main`
+  (identical code at identical offsets, see `titles/*.json`). S2's install ran end to end here (prepare, generate 2.5
+  minutes, compile) and gave a ready card. After the generator changes below S and S2 were installed again (about
+  4 minutes each on 16 threads) and both were started in a scripted run through the title, the main menu and the stage
+  list to the "Play this puzzle?" popup, with its preview: S2 was checked to there and S through a puzzle's first
+  seconds. **S3 has been prepared only, not generated, built or started.** Nothing beyond those paths has been played on S2. `runtime/main.c`'s `sdk + 0xcdd210` is in the shared `sdk` module
+  (same build ID in all three games).
+
+- **Generated code and jump tables.** A function with a jump table gets a fallback switch over all its instructions,
+  so a case the resolver missed still lands. In one 2,900-instruction function of S that switch took clang 8 minutes
+  (the "frozen at 100%" in the importer was the last chunk compiling). Functions of more than 1,500 instructions
+  whose tables are all exact (the compare's own count, every index emulated: `gen.py` `SAFETY_NET_MAX`) now go
+  without it. A compare is taken as a table's bound only if the register indexing the table load is the compared
+  one (`_indexes_table`); the earlier, looser match sent one S2 switch to one wrong target and the game stopped at
+  boot (`tools/test_jumptable.py` has both cases). Not audited: every exact table in the three games.
+  The compact tables (`_jump_table_compact`) guess their size and keep the fallback.
+- **Importer progress.** It counts only the game's own objects and holds at 99% until the library is linked.
 
 ## Leftovers from the base project
 
@@ -75,8 +91,8 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 ## Next steps
 
 1. Verify the remaining screens and a gamepad. Look for `[am] ... unhandled`, `[ipc] STUB` and frozen windows.
-2. Make the code generation per title: patches in the manifest instead of `fix-exception-resume.py`, a library and a
-   generated folder per game (`<game folder>/picgame.so` is already searched first), then generate S2 and S3.
+2. Play S2, then import and play S3. Look for exceptions (the landing patches are untested on S2 and S3), missing
+   textures and wrong shaders. The importer keeps `generated/` (about 650 MB per game) for rebuilds; only `obj/` is removed.
 3. Finish the launcher: set a game up from the start screen (it still has the base project's setup flow), tell the user
    why a card cannot be played, and test the cards with a gamepad.
 4. The cleanup above, then Windows.

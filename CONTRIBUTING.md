@@ -13,7 +13,7 @@ clips in bug reports are fine.
 
 ## Project layout
 
-- `tools/picross/` - preparing and generating the PICROSS S game data, and playing it: `prepare.py` (hactool), `generate.sh`,
+- `tools/picross/` - preparing and generating the PICROSS S game data, and playing it: `install.py` (what the importer runs), `prepare.py` (hactool), `generate.sh`,
   `play.sh`, `launcher.py`.
 - `tools/gen.py`, `tools/lifter.py` - the recompiler: the game's executables to C (`generated/`, never committed).
   `tools/patches.py` holds code patches applied during generation; every patch site checks the original instruction word.

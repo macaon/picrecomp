@@ -59,34 +59,30 @@ make hactool                       # the bundled extractor, built with gcc
 make -j"$(nproc)"                  # the runtime (and the game library, once the code is generated)
 ```
 
-## Prepare your game
+## Add your games
 
-Keep your game files and keys outside the checkout; nothing from the game may ever be committed.
-
-```bash
-mkdir -p .picrecomp
-python3 tools/picross/prepare.py "/path/to/base.nsp" "/path/to/update.nsp" \
-    .picrecomp/prepared-game --prod-keys "/path/to/prod.keys"
-```
-
-This applies the update and writes `exefs/` and `romfs.bin` into `.picrecomp/prepared-game`. It works offline and uses
-the tickets inside the packages. `tools/picross/launcher.sh` does the same from a small window (needs Python Tk,
-`python3-tkinter` on Fedora, `python3-tk` on Debian).
-
-You can also add a game from the start screen: choose "+", pick the folder with the base and update `.nsp` files (the
-keys are read from there, from `~/.switch`, or a file you choose), and Import. It needs `python3` on the PATH and shows
-each step as it runs. Either way, games prepared into `.picrecomp/runtime/games/<name>` appear as cards on the start screen, with the
-icon the Switch shows. Each game's manifest is in `titles/`; `prepare.py` picks it from the package, so a PICROSS game
-with a manifest needs no other setting. Only PICROSS S has been generated, built and run so far.
-
-Then generate the C code from the game's executables, build the game library, and play. Both steps check the game's
-build ID and refuse an unsupported version.
+Keep your game files and keys outside the checkout; nothing from the game may ever be committed. Each game needs its base
+`.nsp` and its update `.nsp` (and your `prod.keys`) in one folder.
 
 ```bash
-tools/picross/generate.sh .picrecomp/prepared-game      # a minute or two; writes generated/ (never committed)
-make -j"$(nproc)"                                       # compiles generated/ into build/picgame.so (long)
-tools/picross/play.sh .picrecomp/prepared-game
+tools/picross/play.sh        # the start screen: choose "+", pick the folder, Import
 ```
+
+Importing runs seven stages and then two long ones, shown as a step list with a bar: the files are prepared
+(`tools/picross/prepare.py`, with the bundled hactool; it works offline and uses the tickets inside the packages), the
+game's code is lifted to C and compiled into the game's own library (together about four minutes on 16 threads). The game
+then shows as a card with the icon the Switch shows. It needs `python3`, `clang`, `make` and `bash` (the Build section),
+and about 1.5 GB of disk per game. The keys are read from the folder, from `~/.switch`, or a file you choose.
+
+The same from a terminal:
+
+```bash
+python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .picrecomp/runtime/games
+```
+
+Each game's ids, update version, main build ID and exception-landing patches are in its manifest, `titles/<name>.json`;
+the importer picks the manifest from the packages and refuses a game or version without one. Today PICROSS S, S2 and S3
+have manifests; only S has been played (S2 and S3: see `docs/STATUS.md`).
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
 

@@ -10,8 +10,9 @@ today. Where a number comes from a measurement, the tool that produces it is nam
 ## 1. Pipeline
 
 ```
-base .nsp + update .nsp + prod.keys ──tools/picross/prepare.py (hactool)──> exefs/ (NSOs) + romfs.bin
-exefs/<module> ──tools/gen.py (tools/picross/generate.sh)──> generated/<module>/*.c ──clang──> picgame.so
+base .nsp + update .nsp + prod.keys ──tools/picross/prepare.py (hactool)──> <game>/exefs/ (NSOs) + romfs.bin + icon.jpg
+(tools/picross/install.py runs all three stages; <game> is <data root>/games/<name>, described by titles/<name>.json)
+exefs/<module> ──tools/gen.py (tools/picross/generate.sh)──> <game>/generated/<module>/*.c ──make game──> <game>/picgame.so
 runtime (picrecomp) ── loads the NSOs into guest memory, relocates, dlopen(picgame.so) ── nn::init::Start
 ```
 
@@ -34,7 +35,9 @@ The generated code is never committed and never edited by hand. Changes go in `t
     *compact* tables (`adr cases ; ldrb [table, idx] ; add lsl #2 ; br`) are read straight from the image, with the entry
     count taken from a guard anywhere earlier in the function or from an `and idx, x, #2^k-1` mask
     (`_jump_table_compact`; `tools/test_jumptable.py`). A table that none of these resolves gets a `switch` over every
-    instruction of the function (`L_dispatch`) as a slow fallback.
+    instruction of the function (`L_dispatch`) as a slow fallback; so does any function with a table of 1,500
+    instructions or fewer, and any with a guessed (compact) table, because a case the resolver missed would otherwise
+    abort. Bigger functions with exact tables go without it: it made one of them take eight minutes to compile.
 - **`lifter.py`** lifts AArch64 to C: integers, loads and stores, NZCV flags, the exclusive and atomic instructions
   (LDXR / STXR, LDXP / STXP, CAS / CASP and the LSE set, checked against Unicorn and, for the atomics, against the host
   CPU). FP, SIMD and CRC32 become inline asm on an ARM64 host (`--simd asm`) or portable C (`--simd c`: `simd_c.py`,
@@ -47,9 +50,9 @@ The generated code is never committed and never edited by hand. Changes go in `t
 
 ### The game code is a separate library
 
-The generated code is compiled into `picgame.so` (`.dll` on Windows), which the runtime loads (`runtime/gamelib.c`; the
-entry point is `tools/gamelib_entry.c`). The library's id is a hash of the generator, the headers it is compiled against
-and the flags; a library with another id is never loaded. The executable contains no game code.
+The generated code is compiled into the game's own `picgame.so` (`.dll` on Windows) in its folder, which the runtime loads (`runtime/gamelib.c`; the
+entry point is `tools/gamelib_entry.c`). The library's id file holds a hash of the generator, the headers it is compiled against and the flags, and the build ID of
+the `main` module it came from; a library with another id, or for another game, is never loaded. The executable contains no game code.
 
 ## 2. The runtime (`runtime/`)
 
