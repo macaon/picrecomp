@@ -1,6 +1,6 @@
 // Where PicRecomp keeps its files (runtime/paths.c).
 //
-// Data root: everything the app writes or the user brings - extracted/ (game files), rando/ (seeds), save/,
+// Data root: everything the app writes or the user brings - extracted/ (game files), save/,
 // cache/ (shaders / pipelines), fonts/ (imported), picrecomp.ini. rt_paths_init() picks it and makes it the
 // working directory, so the rest of the runtime opens those by their relative names. In order:
 //   1. PICRECOMP_DATA_ROOT (tests, scratch installs)
@@ -32,7 +32,7 @@ bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n);
 // one the setup creates (exefs, romfs, romfs.bin, leftover folders) and not a link. The folder the user picked
 // never gets here. true = removed or not there.
 bool rt_remove_game_file(const char *game_dir, const char *name);
-// All the game files set up there (rt_remove_game_file on each, then the empty folder). Saves, seeds, settings stay.
+// All the game files set up there (rt_remove_game_file on each, then the empty folder). Saves and settings stay.
 bool rt_remove_game_files(const char *game_dir);
 // Bytes taken by the extracted game files in game_dir (links not followed).
 unsigned long long rt_game_files_size(const char *game_dir);

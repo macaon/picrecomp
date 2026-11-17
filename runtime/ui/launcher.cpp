@@ -1,5 +1,5 @@
-// Start screen, shown before the game boots (user 2026-10-08, styled after Dusklight's launcher): PLAY (with
-// ‹ Vanilla / seed › picker), SETTINGS, QUIT, game-files status at the lower left. Nothing of the game ships with
+// Start screen, shown before the game boots (user 2026-10-08, styled after Dusklight's launcher): PLAY,
+// SETTINGS, QUIT, game-files status at the lower left. Nothing of the game ships with
 // PicRecomp: on first launch the user picks the folder with their own game files (v1.0.0), we check the main
 // module's build id, copy the files and build the game's data image; PLAY stays disabled until that worked. The background is a frame of the game's own title movie (from the user's files) once extracted.
 //
@@ -475,10 +475,6 @@ static void load_background(GpuDevice dev) {
     avformat_close_input(&fmt);
 }
 
-// ------------------------------------------------------------------ play choices
-// The PLAY line's ‹ › picker: LAS Recomp listed randomizer seeds here. PicRecomp has only the game itself for now.
-static std::vector<std::string> list_seeds() { return {}; }
-
 // ------------------------------------------------------------------ screen
 static ImFont *g_font_title, *g_font_menu, *g_font_small;
 enum Page { MAIN, SETTINGS, SETUP };  // SETTINGS: the in-game menu's tabs (runtime/ui/menu.mm)
@@ -491,13 +487,6 @@ void menu_tabs_focus(bool first_tab);
 extern int g_tab_request_ext;
 extern "C" void menu_apply_window_requests(void *sdl_window);
 int g_start_screen;  // the start screen is up (no game loaded: host code must not read its memory)
-// The Randomizer tab's Play / Play Now on the start screen (rando_tab.mm): start the game with that seed
-static std::string g_play_seed;
-static bool g_play_seed_req, g_play_pending;
-extern "C" void launcher_play_seed(const char *seed) {
-    g_play_seed = seed ? seed : "";
-    g_play_seed_req = true;
-}
 static float g_menu_gap = 0.35f;  // space under each item, in line heights
 
 // The first PLAY ever (settings.menu_tip_seen): a note on opening the PicRecomp menu in game (it isn't obvious),
@@ -561,7 +550,7 @@ static bool menu_tip(float s) {
         static const char *const home[] = {"Home button", "Xbox button", "PlayStation button"};  // (bind_label_family)
         static const char *const pad[] = {"Minus + Plus", "View + Menu", "Create + Options"};
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("PicRecomp has its own menu for settings, the randomizer, cosmetics and more.");
+        ImGui::TextUnformatted("PicRecomp has its own menu for settings, controls and more.");
         ImGui::Spacing();
         int fam = bind_label_family() % 3;
         ImGui::Text("Open it in game with F1 or Esc, or on a controller with the %s (or %s together).", home[fam], pad[fam]);
@@ -611,13 +600,13 @@ static void sparkle(ImDrawList *dl, ImVec2 c, float r, float k, float spin) {
     dl->AddConvexPolyFilled(pts, 8, IM_COL32(255, 248, 215, (int)(235 * k)));
 }
 
-// split .. split_end: that part of the label in its own colour (PLAY's choice: Vanilla in vanilla cream)
+// split .. split_end: that part of the label in its own colour
 static bool menu_item(const char *label, bool enabled, bool *hovered = NULL, const char *split = NULL, ImU32 col2 = 0,
                       const char *split_end = NULL) {
     ImGui::PushFont(g_menu_small ? g_font_small : g_font_menu);
     ImGui::BeginDisabled(!enabled);
     ImVec2 at = ImGui::GetCursorScreenPos();
-    // (the ID from the label's fixed part: PLAY's changes with the seed shown, and a new ID loses the selection)
+    // (the ID from the label's fixed part: a new ID loses the selection)
     ImGui::PushID(label, split ? split : label + strlen(label));
     ImVec2 sz = ImGui::CalcTextSize(label);
     // (EnableNav: otherwise an InvisibleButton can't be reached with the d-pad / arrow keys - ImGui 1.91)
@@ -732,7 +721,7 @@ static bool launcher_pad_event(const SDL_Event &e) {
     }
 }
 
-// Returns when PLAY is chosen (seed stored in g_settings.rando_seed); QUIT exits.
+// Returns when PLAY is chosen; QUIT exits.
 // Settings' first tab, on the start screen only: the extracted game files (size, delete) and the user's own Switch
 // fonts (import / back to the substitute)
 // Open a folder in Finder / Explorer (relative paths are in the data root, the working directory)
@@ -781,7 +770,7 @@ static void prelaunch_tab(float sc) {
         ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "Are you sure?");
         ImGui::PopFont();
         ImGui::Text("This deletes PicRecomp's copy of the game files (%.1f GB).", gb);
-        ImGui::TextDisabled("Saves, seeds and settings are kept. Your own game files aren't touched.");
+        ImGui::TextDisabled("Saves and settings are kept. Your own game files aren't touched.");
         if (rt_dev_mode()) {  // (a source checkout: the files are the project's own extracted/)
             bool abs = !g_root.empty() && (g_root[0] == '/' || (g_root.size() > 1 && g_root[1] == ':'));
             std::string where = abs ? g_root : std::string(rt_data_root()) + "/" + g_root;
@@ -875,10 +864,6 @@ extern "C" void launcher_run(const char *root) {
 
     std::string status = check_game_files(g_root);
     if (status.empty()) load_background(dev);
-    std::vector<std::string> seeds = list_seeds();
-    std::vector<std::string> choices = {"PICROSS S"};
-    choices.insert(choices.end(), seeds.begin(), seeds.end());
-    int choice = 0;
     Page page = status.empty() ? MAIN : SETUP;
     bool play = false;
     // PICRECOMP_LAUNCHER_SHOT=<frame>[:<page>] (test): save build/launcher.png at that frame and exit; page: settings[:<tab>] / askdelete / setup
@@ -926,19 +911,6 @@ extern "C" void launcher_run(const char *root) {
             g_files_deleted = false;
             status = check_game_files(g_root);
             if (!status.empty()) { g_bg = 0; bind_capture_cancel(); settings_save(); page = SETUP; }
-        }
-        if (g_play_seed_req) {  // the Randomizer tab's Play: that seed, then PLAY as if pressed (first-launch questions)
-            g_play_seed_req = false;
-            seeds = list_seeds();
-            choices = {"PICROSS S"};
-            choices.insert(choices.end(), seeds.begin(), seeds.end());
-            choice = 0;
-            for (size_t i = 0; i < seeds.size(); i++)
-                if (seeds[i] == g_play_seed) choice = (int)i + 1;
-            bind_capture_cancel();
-            settings_save();
-            page = MAIN;
-            g_play_pending = true;
         }
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -1008,7 +980,7 @@ extern "C" void launcher_run(const char *root) {
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
             ImGui::Begin("##launcher", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-            ImGui::SetScrollX(0);  // (the start screen never scrolls; a long seed name or a stray nav move mustn't shift it)
+            ImGui::SetScrollX(0);  // (the start screen never scrolls; a stray nav move mustn't shift it)
             ImGui::SetScrollY(0);
             float x0 = 90 * s;
             ImGui::SetCursorPos(ImVec2(x0, 120 * s));
@@ -1038,38 +1010,11 @@ extern "C" void launcher_run(const char *root) {
                     ImGui::SetCursorPosY(285 * s + 3 * pitch(0.35f) - 3 * pitch(g_menu_gap));
                 }
                 bool hov = false;
-                char label[192];
-                snprintf(label, sizeof label, "PLAY    \xe2\x80\xb9 %s%s \xe2\x80\xba", choice ? "Rando: " : "",
-                         choices[choice].c_str());  // (choice 0 = Vanilla)
-                ImGui::SetCursorPosX(x0);
-                // a long seed name may run past the other items (to 80% of the window); beyond that the line shrinks
-                ImGui::PushFont(g_font_menu);
-                float fit = (ds.x * 0.8f - x0) / ImGui::CalcTextSize(label).x;
-                ImGui::PopFont();
-                if (fit < 1) ImGui::SetWindowFontScale(fit < 0.55f ? 0.55f : fit);
-                // the ‹ › arrows are clickable with the mouse: they cycle Vanilla / seeds instead of starting the game
-                int arrow = 0;
-                {
-                    ImGui::PushFont(g_font_menu);
-                    ImVec2 at = ImGui::GetCursorScreenPos();
-                    const char *lt = strstr(label, "\xe2\x80\xb9"), *rt = strstr(label, "\xe2\x80\xba");
-                    float h = ImGui::CalcTextSize(label).y, pad = h * 0.35f;
-                    float lx = at.x + ImGui::CalcTextSize(label, lt).x, rx = at.x + ImGui::CalcTextSize(label, rt).x;
-                    float aw = ImGui::CalcTextSize("\xe2\x80\xb9").x;
-                    ImVec2 m = ImGui::GetIO().MousePos;
-                    bool in_y = m.y >= at.y - pad && m.y <= at.y + h + pad;
-                    if (in_y && m.x >= lx - pad && m.x <= lx + aw + pad) arrow = -1;
-                    if (in_y && m.x >= rx - pad && m.x <= rx + aw + pad) arrow = 1;
-                    ImGui::PopFont();
-                }
+                const char *label = "PLAY";
                 static bool focused_once;
                 if (!focused_once) { ImGui::SetKeyboardFocusHere(); focused_once = true; }
                 ImVec2 play_at = ImGui::GetCursorScreenPos();
-                const char *name = strstr(label, "\xe2\x80\xb9") + 4, *name_end = strstr(label, " \xe2\x80\xba");
-                bool pressed = menu_item(label, status.empty(), &hov, name,
-                                         choice ? IM_COL32(250, 250, 255, 255) : IM_COL32(246, 232, 176, 255),
-                                         name_end);  // (the choice keeps its colour when hovered: "Rando: <seed>" white,
-                                                     //  "Vanilla" vanilla cream; the arrows stay white)
+                bool pressed = menu_item(label, status.empty(), &hov);
                 if (status.empty()) {  // PLAY twinkles now and then while the game is ready
                     ImGui::PushFont(g_font_menu);
                     float w = ImGui::CalcTextSize("PLAY").x, h = ImGui::CalcTextSize("PLAY").y;
@@ -1081,12 +1026,7 @@ extern "C" void launcher_run(const char *root) {
                     sparkle(dl, ImVec2(play_at.x + w - h * 0.32f, play_at.y + h * 0.08f), h * 0.11f, k2 * 0.8f, -t * 0.8f);
                 }
                 ImGui::SetWindowFontScale(1.0f);
-                if (pressed && arrow && ImGui::IsMouseReleased(0)) {  // (a mouse click on an arrow: cycle)
-                    choice = (choice + arrow + (int)choices.size()) % (int)choices.size();
-                    pressed = false;
-                }
                 // first PLAY ever: the aspect ratio question, then how to reach our menu, then the game
-                if (g_play_pending && status.empty()) pressed = true, g_play_pending = false;
                 if (pressed) {
                     if (!g_settings.aspect_asked) ImGui::OpenPopup("##aspect");
                     else if (!g_settings.menu_tip_seen) ImGui::OpenPopup("##menutip");
@@ -1098,17 +1038,6 @@ extern "C" void launcher_run(const char *root) {
                     else ImGui::OpenPopup("##menutip");
                 }
                 if (menu_tip(s)) play = true;
-                if (hov && status.empty()) {
-                    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft))
-                        choice = (choice + (int)choices.size() - 1) % (int)choices.size();
-                    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight))
-                        choice = (choice + 1) % (int)choices.size();
-                    // left / right are ours while PLAY is selected: ImGui's navigation would otherwise take them too,
-                    // find nothing beside PLAY and scroll the window (PLAY loses its highlight, the cycling stops)
-                    ImGuiID own = ImGui::GetID("##play_lr");
-                    for (ImGuiKey k : {ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight})
-                        ImGui::SetKeyOwner(k, own);
-                }
                 ImGui::SetCursorPosX(x0);
                 if (g_refocus == SETTINGS) ImGui::SetKeyboardFocusHere(), g_refocus = MAIN;  // (back from Settings: it
                 if (menu_item("SETTINGS", true)) {                                             //  stays selected)
@@ -1172,13 +1101,6 @@ extern "C" void launcher_run(const char *root) {
                     bind_capture_cancel();
                     settings_save();
                     page = MAIN, g_refocus = SETTINGS;
-                    std::string cur = choices[choice];  // seeds made / renamed / deleted in the Randomizer tab
-                    seeds = list_seeds();
-                    choices = {"PICROSS S"};
-                    choices.insert(choices.end(), seeds.begin(), seeds.end());
-                    choice = 0;
-                    for (size_t i = 0; i < choices.size(); i++)
-                        if (choices[i] == cur) choice = (int)i;
                 }
             } else {
                 // SETUP: the game files, in a window like Settings (option rows: runtime/ui/option_rows.h) - choose the
@@ -1273,14 +1195,14 @@ extern "C" void launcher_run(const char *root) {
                     files_gb = -1;  // (re-measured after a setup)
                 } else {
                     // DELETE: frees PicRecomp's copy (runtime/paths.c removes only what the setup made, only inside
-                    // the data root). Saves, seeds, settings and the user's own files stay.
+                    // the data root). Saves, settings and the user's own files stay.
                     if (files_gb < 0) files_gb = rt_game_files_size(g_root.c_str()) / 1e9;
                     char gb[32];
                     snprintf(gb, sizeof gb, "%.1f GB", files_gb);
                     opt_section("Game files");
                     if (!g_confirm_delete) {
                         if (opt_action("Delete game files", gb, "Frees the space PicRecomp's copy of the game files takes. "
-                                       "Saves, seeds and settings are kept, and your own game files aren't touched: you can "
+                                       "Saves and settings are kept, and your own game files aren't touched: you can "
                                        "set the game files up again from them.", true))
                             g_confirm_delete = true;
                         first_row();

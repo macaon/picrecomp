@@ -52,7 +52,7 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
   MetalFX upscaler enum in `settings.[ch]`, and many comments that mention Metal, macOS or Android.
 - Phone touch controls (`runtime/ui/touch.cpp`) and the `GUEST_SHIFT` address-layout offset in `runtime/cpu.h`
   (both only mattered on Android).
-- The randomizer remnants (`rando/`, seed handling in `runtime/ui/launcher.cpp` and `runtime/paths.c`).
+- The unused mod-folder overlay in `runtime/services/fs.c` (`mod_dir()` always returns NULL).
 - `tools/linux/` (AppImage packaging, container build, smoke test) and `tools/windows/` are inherited and untested for
   PICROSS S.
 - `tools/nca_extract.py` and `runtime/nxpkg.c` read a package directly; PICROSS S is prepared with hactool instead.

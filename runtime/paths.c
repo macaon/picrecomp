@@ -104,7 +104,7 @@ void rt_paths_init(void) {
     char msg[1400];
     if (!is_dir(root) || !writable(root) || chdir(root) != 0) {
 #ifdef _WIN32
-        snprintf(msg, sizeof msg, "PicRecomp can't write to its folder:\n%s\n\nIt keeps game files, saves and seeds "
+        snprintf(msg, sizeof msg, "PicRecomp can't write to its folder:\n%s\n\nIt keeps game files, and saves "
                  "next to the program. Move the \"PicRecomp\" folder somewhere you can write to (e.g. Documents or "
                  "Desktop, not Program Files) and start it again.", root);
 #else

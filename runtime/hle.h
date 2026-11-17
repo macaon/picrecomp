@@ -24,8 +24,8 @@ typedef struct { const char *name; HostFn fn; } HleImplEntry;
     static void fn(Cpu *c)
 
 // Per-boot host state. RT_ON_RESET(fn) { ... } runs when the game is torn down for an in-place reboot (switching
-// seeds / vanilla, back to the start screen: runtime/main.c), after every guest thread has stopped and before
-// guest memory is wiped: drop guest pointers, kernel handles, seed data and lazily-initialised state, so the next
+// back to the start screen: runtime/main.c), after every guest thread has stopped and before
+// guest memory is wiped: drop guest pointers, kernel handles and lazily-initialised state, so the next
 // boot starts as from a fresh process. (Settings, the window, the GPU device and ENV() lookups stay.)
 typedef void (*ResetFn)(void);
 #if defined(__linux__)
