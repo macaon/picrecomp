@@ -1,9 +1,6 @@
 // Builds the game code library on the player's machine (runtime/gamebuild.h). Phones: the same, with the generator's
 // Python and zig's clang carried in the APK (docs/BUILD-android.md, tools/android/ondevice/; after
 // LASRecomp-Android-Plus, MIT).
-#if defined(__ANDROID__) && !defined(_GNU_SOURCE)
-#define _GNU_SOURCE  // (sched_setaffinity, cpu_set_t)
-#endif
 #include "gamebuild.h"
 
 #include <pthread.h>
@@ -17,16 +14,6 @@
 #include "paths.h"
 #include "platform.h"
 #include "rt.h"
-#ifdef __ANDROID__
-#include <dlfcn.h>
-#include <errno.h>
-#include <limits.h>
-#include <sched.h>
-#include <sys/resource.h>
-#include <unistd.h>
-
-#include "platform/android.h"
-#endif
 
 // From the Makefile: the flags the game code is compiled and linked with (as `make` builds it in a source checkout)
 #ifndef GAMELIB_CFLAGS
@@ -125,11 +112,6 @@ typedef struct {
     char implib[1100];  // the .exe's import library (the runtime functions the game code calls)
     char zig_rt[1100];  // the release's zig: its runtime built ahead of time (zig/rt, tools/zig_slim.sh), "" = none
 #endif
-#ifdef __ANDROID__
-    // the app's native library folder (programs run only from there: libeowpython.so, libzig.so; and libmain.so, to
-    // link against) and the NDK pieces unpacked from the APK's assets (files/ondevice/cckit: tools/android/ondevice/)
-    char nlib[1100], kit[1100], ondev[1100];
-#endif
 } Tools;
 
 static bool file_exists(const char *p) {
@@ -137,100 +119,8 @@ static bool file_exists(const char *p) {
     return stat(p, &st) == 0;
 }
 
-#ifdef __ANDROID__
-// The folder libmain.so was loaded from: the native library folder when the APK's libraries are extracted at install
-// (android:extractNativeLibs, the on-phone build's packaging); from inside the APK ("base.apk!/lib/...") there are
-// no programs to run.
-static bool native_lib_dir(char *out, size_t n) {
-    Dl_info di;
-    if (!dladdr((void *)&native_lib_dir, &di) || !di.dli_fname || strchr(di.dli_fname, '!')) return false;
-    snprintf(out, n, "%s", di.dli_fname);
-    char *s = strrchr(out, '/');
-    if (!s) return false;
-    *s = 0;
-    return true;
-}
-
-// Phones: the generator is libeowpython.so running tools/gen.py, the compiler zig's clang and ld.lld (libzig.so) with
-// the NDK pieces (cckit/), all from the on-phone build's packaging. ondev: where EowActivity.buildTools unpacked the
-// asset archive; NULL = not asked (only checks that the programs are there).
-static bool find_tools_android(Tools *t, const char *ondev) {
-    memset(t, 0, sizeof *t);
-    if (!native_lib_dir(t->nlib, sizeof t->nlib)) return false;
-    snprintf(t->gen, sizeof t->gen, "%s/libeowpython.so", t->nlib);
-    snprintf(t->cc, sizeof t->cc, "%s/libzig.so", t->nlib);
-    t->zig = true;
-    if (!file_exists(t->gen) || !file_exists(t->cc)) return false;
-    if (!ondev) return true;
-    snprintf(t->ondev, sizeof t->ondev, "%s", ondev);
-    snprintf(t->gen_script, sizeof t->gen_script, "%s/tools/gen.py", ondev);
-    snprintf(t->kit, sizeof t->kit, "%s/cckit", ondev);
-    snprintf(t->inc, sizeof t->inc, "%s/gamelib-src", t->kit);
-    snprintf(t->entry, sizeof t->entry, "%s/gamelib_entry.c", t->inc);
-    snprintf(t->hle, sizeof t->hle, "%s/hle_symbols.txt", t->inc);
-    return file_exists(t->gen_script) && file_exists(t->entry) && file_exists(t->hle);
-}
-
-// MemAvailable in MB (/proc/meminfo), -1 if unknown
-static long android_mem_available_mb(void) {
-    FILE *f = fopen("/proc/meminfo", "rb");
-    if (!f) return -1;
-    char line[128];
-    long kb = -1;
-    while (fgets(line, sizeof line, f))
-        if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
-    fclose(f);
-    return kb < 0 ? -1 : kb / 1024;
-}
-
-static bool copy_file(const char *from, const char *to) {
-    FILE *in = fopen(from, "rb"), *out = in ? fopen(to, "wb") : NULL;
-    bool ok = in && out;
-    static char buf[1 << 20];
-    size_t n;
-    while (ok && (n = fread(buf, 1, sizeof buf, in)) > 0) ok = fwrite(buf, 1, n, out) == n;
-    if (in) ok = ok && !ferror(in), fclose(in);
-    if (out && fclose(out) != 0) ok = false;
-    return ok;
-}
-
-// The library goes where runtime/gamelib.c looks on a phone: the app's internal storage (the game folder is on the
-// shared storage, mounted without exec). ondev = <internal>/ondevice. The external copy is removed.
-static bool install_internal(const char *game_dir, const char *ondev, char *why, size_t why_size) {
-    char internal[1100], from[1200], to[1200], tmp[1300];
-    snprintf(internal, sizeof internal, "%s", ondev);
-    char *s = strrchr(internal, '/');
-    if (s) *s = 0;
-    char a[PATH_MAX], b[PATH_MAX];
-    if (realpath(game_dir, a) && realpath(internal, b) && !strcmp(a, b)) return true;  // (the same folder)
-    static const char *const ext[2] = {"", ".id"};  // (the library first: a matching .id says it's complete)
-    for (int i = 0; i < 2; i++) {
-        snprintf(from, sizeof from, "%s/%s%s", game_dir, GAMELIB_NAME, ext[i]);
-        snprintf(to, sizeof to, "%s/%s%s", internal, GAMELIB_NAME, ext[i]);
-        snprintf(tmp, sizeof tmp, "%s.tmp", to);
-        if (i == 0) {
-            char id[1200];  // (an old pair: its id goes first, so a half-copied library never looks current)
-            snprintf(id, sizeof id, "%s/%s.id", internal, GAMELIB_NAME);
-            remove(id);
-        }
-        if (!copy_file(from, tmp) || rename(tmp, to) != 0) {
-            remove(tmp);
-            LOG("[gamebuild] installing %s: %s\n", to, strerror(errno));
-            snprintf(why, why_size, "the game code couldn't be installed (storage full?)");
-            return false;
-        }
-    }
-    snprintf(from, sizeof from, "%s/%s", game_dir, GAMELIB_NAME);
-    remove(from);
-    LOG("[gamebuild] installed %s/%s\n", internal, GAMELIB_NAME);
-    return true;
-}
-#endif
 
 static bool find_tools(Tools *t) {
-#ifdef __ANDROID__
-    return find_tools_android(t, NULL);
-#endif
     memset(t, 0, sizeof *t);
     const char *e = getenv("EOWRECOMP_GEN");
     if (e && *e) snprintf(t->gen, sizeof t->gen, "%s", e);
@@ -272,22 +162,6 @@ bool gamebuild_available(void) {
 
 static void compiler(Args *a, const Tools *t) {
     add(a, t->cc);
-#ifdef __ANDROID__
-    // zig's own clang driver (not `zig cc`: zig has no libc for Android and would build its compiler_rt from source),
-    // the headers from the kit (bionic's few + this clang's own: tools/android/ondevice/build_cckit.sh)
-    static const char *const sub[] = {"/clang/include", "/sysroot/usr/include", "/sysroot/usr/include/aarch64-linux-android"};
-    add(a, "clang");
-    add(a, "-target");
-    add(a, "aarch64-linux-android30");
-    add(a, "-nostdinc");
-    for (int i = 0; i < 3; i++) {
-        char inc[1200];
-        snprintf(inc, sizeof inc, "%s%s", t->kit, sub[i]);
-        add(a, "-isystem");
-        add(a, inc);
-    }
-    return;
-#endif
     if (t->zig) add(a, "cc");
 }
 
@@ -368,11 +242,6 @@ static void add_cflags(Args *a, const Tools *t) {
     char buf[1024];
     snprintf(buf, sizeof buf, "%s", GAMELIB_CFLAGS);
     for (char *f = strtok(buf, " "); f; f = strtok(NULL, " ")) {
-#ifdef __ANDROID__
-        if (!strcmp(f, "-Iruntime")) continue;  // (gamelib_id.sh's, for a computer's checkout: the kit's -I instead)
-        add(a, f);
-        continue;
-#endif
         if (t->zig && !strncmp(f, "-march=", 7)) {
             char cpu[128];
             snprintf(cpu, sizeof cpu, "-mcpu=%s", f + 7);
@@ -433,43 +302,10 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     static bool registered;
     if (!registered) registered = true, atexit(end_all);
     Tools t;
-#ifdef __ANDROID__
-    // the generator and the NDK pieces out of the APK's assets (once per app version: EowActivity.buildTools)
-    if (o->progress) o->progress(0, "Preparing the build tools...");
-    // (test: EOWRECOMP_ONDEVICE_DIR=<an unpacked ondevice.zip>, without the app's Java side)
-    const char *ondev = getenv("EOWRECOMP_ONDEVICE_DIR");
-    if (!ondev || !*ondev) ondev = android_build_tools();
-    if (!ondev || !find_tools_android(&t, ondev)) {
-#else
     if (!find_tools(&t)) {
-#endif
         snprintf(why, why_size, "the game code builder is missing from this copy of EoWRecomp");
         return false;
     }
-#ifdef __ANDROID__
-    int android_jobs;
-    {
-        // A phone stays usable: the compilers (they inherit this thread's niceness and CPUs) at a lower priority, one
-        // per core, the little ones too (the build is heat-bound: little cores add throughput for little heat; the
-        // biggest files go first). The generator's Python and its modules' libraries (ctypes) from the kit.
-        setpriority(PRIO_PROCESS, (id_t)gettid(), 10);
-        long n = sysconf(_SC_NPROCESSORS_CONF);
-        int ncpu = n < 1 ? 1 : n > 64 ? 64 : (int)n;
-        cpu_set_t set;
-        CPU_ZERO(&set);
-        for (int i = 0; i < ncpu; i++) CPU_SET(i, &set);
-        sched_setaffinity(0, sizeof set, &set);
-        android_jobs = ncpu;
-        char v[2400];
-        snprintf(v, sizeof v, "%s/pyhome", ondev);
-        setenv("EOWPY_HOME", v, 1);
-        snprintf(v, sizeof v, "%s/tools:%s/pyhome/lib/python3.14/site-packages", ondev, ondev);
-        setenv("EOWPY_PATH", v, 1);
-        setenv("LIBCAPSTONE_PATH", t.nlib, 1);
-        setenv("LIBUNICORN_PATH", t.nlib, 1);
-        setenv("TMPDIR", ondev, 1);
-    }
-#endif
     char work[1100], lib[1100], tmp[1100];
     snprintf(work, sizeof work, "%s" SEP ".gamebuild", game_dir);
     snprintf(lib, sizeof lib, "%s" SEP "%s", game_dir, GAMELIB_NAME);
@@ -498,11 +334,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
 #define GEN_BASE(mod, b) #b,
     Gen gens[GAME_NMODULES] = {GAME_MODULES(GEN_MOD)};
     static const char *const base[GAME_NMODULES] = {GAME_MODULES(GEN_BASE)};
-#ifdef __ANDROID__
-    const bool one_at_a_time = true;
-#else
     const bool one_at_a_time = false;
-#endif
     bool ok = true;
     for (int i = 0; i < GAME_NMODULES; i++) {
         gens[i].exit = -1;
@@ -520,12 +352,6 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     int queued[GAME_NMODULES] = {0};  // chunk files of each module put in units so far
     bool tables[GAME_NMODULES] = {false};
     int next = 0, jobs = o->jobs < 1 ? 1 : o->jobs > 64 ? 64 : o->jobs;
-#ifdef __ANDROID__
-    if (android_jobs > jobs) jobs = android_jobs;
-    uint64_t last_start = 0;  // (memory: see below)
-    long low_mem = -1;        // the lowest MemAvailable seen while starting compilers (the log, for tuning)
-    int held = 0;             // compiler starts put off for memory
-#endif
     {   // (testing / tuning: EOWRECOMP_BUILD_JOBS)
         const char *e = getenv("EOWRECOMP_BUILD_JOBS");
         if (e && atoi(e) > 0) jobs = atoi(e) > 64 ? 64 : atoi(e);
@@ -588,25 +414,10 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
 
         // compiles
         while (nrun < jobs && next < units.n) {
-#ifdef __ANDROID__
-            // Memory: the generators take GBs and the biggest compiles hundreds of MB each, on phones with 6-8 GB.
-            // Below 1.5 GB available a new compiler starts at most once a second (its memory shows in MemAvailable by
-            // then), below 700 MB not at all while two still run - the build slows down instead of the system
-            // killing it.
-            if (nrun >= 2) {
-                long avail = android_mem_available_mb();
-                uint64_t now = plat_now_ns();
-                if (avail >= 0 && (low_mem < 0 || avail < low_mem)) low_mem = avail;
-                if (avail >= 0 && (avail < 700 || (avail < 1500 && now - last_start < 1000000000ull))) { ++held; break; }
-            }
-#endif
             PlatProc p = start_compile(&t, &units.u[next]);
             if (!p) { snprintf(why, why_size, "the compiler didn't start"); ok = false; break; }
             run[nrun].p = p, run[nrun].unit = next++;
             nrun++;
-#ifdef __ANDROID__
-            last_start = plat_now_ns();
-#endif
         }
         for (int k = 0; k < nrun; k++) {
             int r = finished(run[k].p);
@@ -625,9 +436,6 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         }
         if (!ok) break;
         if (gens_done && next == units.n && nrun == 0) {
-#ifdef __ANDROID__
-            LOG("[gamebuild] lowest MemAvailable %ld MB, %d compiler starts put off for memory\n", low_mem, held);
-#endif
             break;
         }
 
@@ -665,35 +473,6 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         Args a = {0};
         char at[1200];
         snprintf(at, sizeof at, "@%s", rsp);
-#ifdef __ANDROID__
-        {   // zig's ld.lld as NDK clang runs it (cckit/link.rsp: tools/android/ondevice/build_cckit.sh), against the
-            // app's own libmain.so (the runtime functions the game code calls: it is loaded first)
-            char opt[1200];
-            static const char *const sys = "/sysroot/usr/lib/aarch64-linux-android/30";
-            add(&a, t.cc);
-            add(&a, "ld.lld");
-            snprintf(opt, sizeof opt, "@%s/link.rsp", t.kit);
-            add(&a, opt);
-            add(&a, "-o");
-            add(&a, tmp);
-            snprintf(opt, sizeof opt, "%s%s/crtbegin_so.o", t.kit, sys);
-            add(&a, opt);
-            add(&a, at);
-            snprintf(opt, sizeof opt, "-L%s", t.nlib);
-            add(&a, opt);
-            add(&a, "-lmain");
-            snprintf(opt, sizeof opt, "-L%s%s", t.kit, sys);
-            add(&a, opt);
-            snprintf(opt, sizeof opt, "%s/clang/lib/libclang_rt.builtins-aarch64-android.a", t.kit);
-            add(&a, opt);
-            add(&a, "-ldl");
-            add(&a, "-lc");
-            add(&a, opt);
-            snprintf(opt, sizeof opt, "%s%s/crtend_so.o", t.kit, sys);
-            add(&a, opt);
-        }
-        if (0)
-#endif
 #ifdef _WIN32
         if (t.zig_rt[0]) {  // the linker itself, with the runtime built ahead of time (its flags and libraries: link.rsp)
             char opt[1200];
@@ -741,9 +520,6 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         }
         if (f) fclose(f);
     }
-#ifdef __ANDROID__
-    if (ok) ok = install_internal(game_dir, t.ondev, why, why_size);
-#endif
     free(units.u);
     rt_remove_game_file(game_dir, ".gamebuild");  // the C, the objects, the logs
     LOG("[gamebuild] %s in %.0fs\n", ok ? "done" : "failed", (double)(plat_now_ns() - t0) / 1e9);

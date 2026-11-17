@@ -1,4 +1,4 @@
-#if defined(__linux__) && !defined(__ANDROID__)
+#if defined(__linux__)
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <pthread.h>
@@ -33,7 +33,7 @@ static void mark_phase(const char *phase) {
     if (trace_on) atomic_store(&trace_phase, phase);
 }
 
-#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
 static _Atomic(pthread_t) trace_render_thread;
 static _Atomic uintptr_t trace_pc;
 static bool trace_sampling;
@@ -79,7 +79,7 @@ static int SDLCALL hang_watchdog(void *unused) {
                 (unsigned long long)frame, stalled, atomic_load(&trace_phase),
                 (unsigned long long)(ui - previous_ui));
         }
-#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
         if (trace_sampling && (stalled == 3 || stalled == 10)) request_render_sample();
 #endif
         previous = frame;
@@ -108,11 +108,6 @@ static void create_instance(void) {
     uint32_t n_ext = 0;
     for (Uint32 i = 0; i < n_sdl && n_ext < 14; i++) ext[n_ext++] = sdl_ext[i];
     VkInstanceCreateFlags flags = 0;
-#ifdef __APPLE__
-    // MoltenVK is a portability driver: the loader lists it only to instances that ask for those
-    ext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
-    flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-#endif
     bool validate = getenv("EOWRECOMP_VK_VALIDATION") != NULL;
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
@@ -373,20 +368,6 @@ static void create_swapchain(void) {
     if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) xf = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     g_vk.sc_quarter = 0;
     bool turned_by_system = xf != caps.currentTransform;
-#ifdef __ANDROID__
-    // Pre-rotation: the images in the panel's own (portrait) orientation with its transform, everything drawn into
-    // them turned (vk_sc_rect, the present and UI vertex shaders). Otherwise the compositor turns the whole landscape
-    // layer with the GPU at every present: ~13% of the GPU's time on a Snapdragon 865 (LASRecomp-Android-Plus).
-    // EOWRECOMP_PRETRANSFORM=0: the system turns them.
-    static int pre = -1;
-    if (pre < 0) pre = getenv("EOWRECOMP_PRETRANSFORM") ? atoi(getenv("EOWRECOMP_PRETRANSFORM")) != 0 : 1;
-    if (pre && (caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
-                caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) {
-        xf = caps.currentTransform;
-        g_vk.sc_quarter = xf == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ? 1 : 3;
-        turned_by_system = false;
-    }
-#endif
     g_sc_turned = turned_by_system;
     if (!ext.width || !ext.height) return;  // minimised
     uint32_t nf = 0;
@@ -671,7 +652,7 @@ void backend_present(NvnTexture *t) {
     vk_end_pass();
     static const float black[4] = {0, 0, 0, 1};
     uint64_t t0 = SDL_GetTicksNS();
-#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     if (trace_on) atomic_store(&trace_render_thread, pthread_self());
 #endif
     mark_phase("window or swapchain");
@@ -830,22 +811,12 @@ static void quick_exit_handler(void) {
 // on the machine (Homebrew's: a different version, and the device listed twice); a source build has none. Before
 // SDL_Init: SDL's Vulkan loading scans the drivers too.
 static void use_bundled_driver(void) {
-#ifdef __APPLE__
-    char icd[1100];
-    if (!getenv("VK_DRIVER_FILES") && !getenv("VK_ICD_FILENAMES") &&
-        rt_resource("vulkan/icd.d/MoltenVK_icd.json", NULL, icd, sizeof icd))
-        setenv("VK_DRIVER_FILES", icd, 1);
-#endif
 }
 
 void ui_window_init(void) {
     if (window) return;
     atexit(quick_exit_handler);
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-#ifdef __ANDROID__
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
-    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");  // (Back opens the menu, not "close the app")
-#endif
     settings_load();
     use_bundled_driver();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) FATAL("SDL_Init: %s\n", SDL_GetError());
@@ -853,9 +824,6 @@ void ui_window_init(void) {
     if (getenv("EOWRECOMP_WINDOW")) sscanf(getenv("EOWRECOMP_WINDOW"), "%dx%d", &win_w, &win_h);
     SDL_WindowFlags wflags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (getenv("EOWRECOMP_HIDDEN")) wflags |= SDL_WINDOW_HIDDEN;
-#ifdef __ANDROID__
-    wflags |= SDL_WINDOW_FULLSCREEN;  // (immersive: no status / navigation bars over the game)
-#endif
     {   // scripted test runs (user input ignored: runtime/hle/input.c input_user_blocked) open without taking the
         // keyboard focus from whatever the player is doing
         const char *v = getenv("EOWRECOMP_NO_USER_INPUT");
@@ -904,7 +872,7 @@ void backend_clear_window(void) {
 int ui_run(void) {
     ui_window_init();
     if (getenv("PICROSS_HANG_TRACE")) {
-#if defined(__linux__) && !defined(__ANDROID__) && defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
         struct sigaction sample_action = {.sa_sigaction = sample_render_pc, .sa_flags = SA_SIGINFO | SA_RESTART};
         sigemptyset(&sample_action.sa_mask);
         if (sigaction(SIGUSR2, &sample_action, NULL) != 0)

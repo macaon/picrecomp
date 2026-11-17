@@ -24,17 +24,11 @@
 #endif
 #endif
 
-#ifdef __ANDROID__
-#include "platform/android.h"
-#endif
 
 #define WHY(...) (snprintf(why, why_size, __VA_ARGS__), false)
 
 // The package by path, or (Android) by the document URI the folder picker gave access to
 static int open_package(const char *path) {
-#ifdef __ANDROID__
-    if (!strncmp(path, "content://", 10)) return android_open_document(path);
-#endif
     return open(path, O_RDONLY);
 }
 
@@ -129,9 +123,7 @@ static void ctr_inc(uint8_t c[16]) {
 
 #if defined(__aarch64__)
 static bool have_arm_aes(void) {
-#if defined(__APPLE__)
-    return true;  // every Apple Silicon CPU
-#elif defined(__linux__)
+#if defined(__linux__)
     return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
 #else
     return false;

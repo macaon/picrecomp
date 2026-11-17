@@ -13,9 +13,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifdef __APPLE__
-#include <sys/clonefile.h>
-#endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -257,9 +254,6 @@ fail:
 static bool copy_file(const char *src, const char *dst, uint64_t size, uint64_t *done, uint64_t total,
                       void (*progress)(uint64_t, uint64_t)) {
     remove(dst);
-#ifdef __APPLE__
-    if (clonefile(src, dst, 0) == 0) goto linked;  // (APFS: a copy-on-write clone, instant)
-#endif
 #ifdef _WIN32
     if (CreateHardLinkA(dst, src, NULL)) goto linked;  // (same NTFS volume: a hard link)
 #else

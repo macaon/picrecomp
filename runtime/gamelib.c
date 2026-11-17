@@ -9,9 +9,6 @@
 #else
 #include <dlfcn.h>
 #endif
-#ifdef __ANDROID__
-#include <SDL3/SDL.h>  // (SDL_GetAndroidInternalStoragePath)
-#endif
 
 #include "paths.h"
 #include "rt.h"
@@ -44,13 +41,6 @@ static int candidates(const char *game_dir, char out[3][1100]) {
     int n = 0;
     const char *env = getenv("EOWRECOMP_GAME_LIB");
     if (env && *env) snprintf(out[n++], 1100, "%s", env);
-#ifdef __ANDROID__
-    (void)game_dir;
-    const char *internal = SDL_GetAndroidInternalStoragePath();
-    if (internal) snprintf(out[n++], 1100, "%s/%s", internal, GAMELIB_NAME);
-    snprintf(out[n++], 1100, "%s", GAMELIB_NAME);
-    return n;
-#endif
     char exe_side[1024];
     if (rt_resource(GAMELIB_NAME, NULL, exe_side, sizeof exe_side) && exists(exe_side))
         snprintf(out[n++], 1100, "%s", exe_side);

@@ -1,8 +1,5 @@
 // EoWRecomp entry: load modules, set up the kernel, run nn::init::Start on the main thread.
 #include <SDL3/SDL.h>
-#ifdef __ANDROID__
-#include <SDL3/SDL_main.h>  // (main() becomes the SDL_main the Java activity calls)
-#endif
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,9 +70,6 @@ static void rtld_fini(Cpu *c) { (void)c; LOG("nnMain returned\n"); }
 static bool g_guest_reserved;
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
     if ((g_guest_reserved = plat_reserve_guest(GUEST_LO, GUEST_HI))) return;
-#ifdef __ANDROID__
-    return;
-#endif
     const char *tries = getenv("EOWRECOMP_REEXEC");
     int n = tries ? atoi(tries) : 0;
     if (n >= 20) {
@@ -117,10 +111,7 @@ void reboot_test_frame(uint64_t frame) {
     rt_request_reboot(strcmp(what, "title") ? RT_REBOOT_GAME : RT_REBOOT_TITLE);
 }
 
-#ifdef __APPLE__
-extern const ResetFn __start_resets[] __asm__("section$start$__DATA$__rt_reset");
-extern const ResetFn __stop_resets[] __asm__("section$end$__DATA$__rt_reset");
-#elif defined(__linux__)
+#if defined(__linux__)
 extern const ResetFn __start_resets[], __stop_resets[];  // (ELF: defined by the linker)
 #else
 // PE/COFF: .rst$a < .rst$m (entries, hle.h) < .rst$z (the linker sorts by the text after '$')
@@ -193,24 +184,6 @@ static void boot(const char *root) {
     kernel_run_main(t, t->handle, 0, init_fn, main_fn, fini_fn);  // nn::init::Start(thread, args, init_sdk, init, fini)
 }
 
-#ifdef __ANDROID__
-// Test and debug hooks (getenv("EOWRECOMP_...")): KEY=VALUE lines of env.txt in the data folder, there being no
-// shell to start the app from.
-static void android_env_file(void) {
-    FILE *f = fopen("env.txt", "r");
-    if (!f) return;
-    char line[1024];
-    while (fgets(line, sizeof line, f)) {
-        line[strcspn(line, "\r\n")] = 0;
-        char *eq = strchr(line, '=');
-        if (line[0] == '#' || !eq) continue;
-        *eq = 0;
-        setenv(line, eq + 1, 1);
-        LOG("[env] %s=%s\n", line, eq + 1);
-    }
-    fclose(f);
-}
-#endif
 
 int main(int argc, char **argv) {
     plat_init();
@@ -229,16 +202,6 @@ int main(int argc, char **argv) {
         else if (argv[i][0] != '-') root = arg_root;
     }
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
-#ifdef __ANDROID__
-    android_env_file();
-    if (!g_guest_reserved && !plat_reserve_guest(GUEST_LO, GUEST_HI)) {
-        LOG("FATAL: guest address range %llx-%llx is not free\n", GUEST_LO, GUEST_HI);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "EoWRecomp", "The game's memory range is taken on this device. "
-                                 "Restart the phone and try again.", NULL);
-        return 1;
-    }
-    if (getenv("EOWRECOMP_NO_LAUNCHER") || getenv("EOWRECOMP_INPUT")) skip_launcher = true;
-#endif
     for (bool title = !skip_launcher;;) {
         if (title) {  // start screen (runtime/ui/launcher.mm): game files setup, settings
             extern void launcher_run(const char *root);

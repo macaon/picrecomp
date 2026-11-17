@@ -1,5 +1,4 @@
-# EoWRecomp build (derived from LAS Recomp, MIT)
-# macOS: Homebrew clang/SDL3/FFmpeg, Metal renderer.
+# PicRecomp build
 # Windows: MSYS2 UCRT64 shell (see docs/BUILD-windows.md), clang + Vulkan renderer.
 # Linux: clang + Vulkan renderer, x86-64 or aarch64 (see docs/linux.md).
 # Windows from Linux: WINCROSS=1 (tools/windows/build.sh): zig cc for x86_64-windows-gnu, deps from tools/windows/fetch_deps.sh.
@@ -12,7 +11,7 @@ PLATFORM := windows
 else ifeq ($(UNAME),Linux)
 PLATFORM := linux
 else
-PLATFORM := macos
+$(error PicRecomp builds on Linux and Windows)
 endif
 
 # Linux: ARCH (x86_64 / aarch64, default this machine's) picks the target, separately from PLATFORM. The generated code
@@ -30,14 +29,11 @@ endif
 GENSIMD  := --simd $(if $(filter aarch64,$(ARCH)),asm,c)
 endif
 
-# B: build dir. MACOS_MIN: oldest macOS to run on (default: this one). DEPS: prefix with SDL3 / FFmpeg instead of
-# Homebrew's (make deps). `make app` sets all three (build/mac15, 15.0, build/deps); plain `make` uses none.
+# B: build dir. DEPS: prefix with SDL3 / FFmpeg / shaderc instead of the system's.
 B         ?= build
-MACOS_MIN ?=
 DEPS      ?=
-MINFLAG  := $(if $(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN))
-CC       := clang $(MINFLAG) $(CROSS)
-CXX      := clang++ $(MINFLAG) $(CROSS)
+CC       := clang $(CROSS)
+CXX      := clang++ $(CROSS)
 ifeq ($(WINCROSS),1)
 ZIG      ?= build/zig-full/zig
 CC       := $(ZIG) cc -target x86_64-windows-gnu
@@ -59,43 +55,12 @@ RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runti
             $(wildcard runtime/nvn/*.c) $(wildcard runtime/nvn/maxwell/*.c) runtime/platform/$(PLATFORM).c
 RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) \
             $(wildcard runtime/nvn/maxwell/*.h) $(wildcard runtime/nvn/vulkan/*.h) $(wildcard runtime/ui/*.h)
-UI_SRC   := $(wildcard runtime/ui/*.mm)
-UI_OBJ   := $(patsubst runtime/%.mm,$(B)/rt/%.o,$(UI_SRC))
+UI_SRC   := $(wildcard runtime/ui/*.cpp)
+UI_OBJ   := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(UI_SRC))
 IMGUI_OBJ := $(B)/imgui/imgui.o $(B)/imgui/imgui_draw.o $(B)/imgui/imgui_tables.o $(B)/imgui/imgui_widgets.o \
              $(B)/imgui/imgui_impl_sdl3.o
 
-ifeq ($(PLATFORM),macos)
-SDL      := $(or $(DEPS),/opt/homebrew/opt/sdl3)
-FFMPEG   := $(or $(DEPS),/opt/homebrew/opt/ffmpeg)
-# MACOS_BACKEND: vulkan (default: the backend every other platform runs, through MoltenVK; Homebrew's molten-vk,
-# vulkan-loader, vulkan-headers, shaderc) or metal (LAS's renderer, not yet carried over to EoW)
-MACOS_BACKEND ?= vulkan
-# (MoltenVK and the Vulkan headers: from Homebrew; the loader and shaderc too, or from DEPS when set: make app)
-VKSDK    ?= /opt/homebrew
-EXE      := $(B)/eowrecomp
-DEPINC   := -I$(SDL)/include -I$(FFMPEG)/include
-LDFLAGS  := -L$(SDL)/lib -lSDL3 -Wl,-rpath,$(SDL)/lib -L$(FFMPEG)/lib -lavformat -lavcodec -lavutil -lswscale -Wl,-rpath,$(FFMPEG)/lib \
-            -framework CoreFoundation -framework Foundation -framework QuartzCore -framework AppKit -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
-ifeq ($(MACOS_BACKEND),metal)
-OSFLAGS  := -DEOW_METAL
-LDFLAGS  += -framework Metal -framework MetalFX
-BACKEND_SRC := $(wildcard runtime/nvn/*.m)
-BACKEND_OBJ := $(patsubst runtime/%.m,$(B)/rt/%.o,$(BACKEND_SRC))
-IMGUI_OBJ += $(B)/imgui/imgui_impl_metal.o
-UIFLAGS  := -fobjc-arc -DEOW_METAL
-else
-OSFLAGS  := -Wno-format -Wno-nullability-completeness  # (VMA's header)
-DEPINC   += -I$(VKSDK)/include -Ibuild/deps-macos/include
-LDFLAGS  += -L$(VKSDK)/lib -lvulkan -lshaderc_combined -Wl,-rpath,$(VKSDK)/lib
-BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
-BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
-IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-UIFLAGS  := -fobjc-arc
-endif
-GAMELIB  := $(B)/eowgame.dylib
-GAMELIB_LDFLAGS := -dynamiclib -undefined dynamic_lookup  # (the runtime functions it calls: the app's own)
-GAMELIB_SHARED := -shared -Wl,-undefined,dynamic_lookup  # (the same, for the start screen's build: zig cc)
-else ifeq ($(PLATFORM),linux)
+ifeq ($(PLATFORM),linux)
 EXE      := $(B)/eowrecomp
 # (pkg-config: Fedora keeps FFmpeg's headers in /usr/include/ffmpeg; Debian / Ubuntu in /usr/include, where it adds nothing)
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include) $(shell pkg-config --cflags libavcodec libavformat libavutil libswscale 2>/dev/null)
@@ -111,7 +76,6 @@ LDFLAGS  := -fuse-ld=lld -rdynamic $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-UIFLAGS  := -x c++  # the .mm UI sources are plain C++ apart from __APPLE__ blocks
 GAMELIB  := $(B)/eowgame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld  # (the runtime functions it calls: the app's own, -rdynamic)
 GAMELIB_SHARED := -shared
@@ -129,7 +93,6 @@ BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/
 BACKEND_OBJ += $(if $(wildcard docs/icon/icon.ico),$(B)/rt/platform/windows_rc.o)  # the .exe's icon (none yet)
 WINDRES  ?= windres
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
-UIFLAGS  := -x c++ $(OSFLAGS)  # the .mm UI sources are plain C++ apart from __APPLE__ blocks
 GAMELIB  := $(B)/eowgame.dll
 # the runtime functions it calls (RT_API in runtime/cpu.h): exported by the .exe, imported through an import library
 # made from tools/windows/eowrecomp.def
@@ -190,7 +153,7 @@ $(B)/rt/%.o: runtime/%.c $(RT_HDRS)
 
 # SMAA (third_party/smaa, MIT): the reference shader as a C string for runtime/nvn/smaa_data.c (both backends build
 # their passes from it); the non-ASCII bytes in its comments become '?', and its CRLF line ends plain LF (a CR left in
-# the string literals ends them early on macOS clang)
+# the string literals ends them early)
 $(B)/inc/smaa_hlsl.inc: third_party/smaa/SMAA.hlsl
 	@mkdir -p $(dir $@)
 	LC_ALL=C tr -d '\r' < $< | LC_ALL=C tr '\200-\377' '?' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' > $@
@@ -200,10 +163,6 @@ $(B)/rt/nvn/smaa_data.o: RTFLAGS += -I$(B)/inc -Ithird_party/smaa/Textures
 $(B)/rt/%.o: runtime/%.cpp $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(OSFLAGS) -c $< -o $@
-
-$(B)/rt/%.o: runtime/%.m $(RT_HDRS)
-	@mkdir -p $(dir $@)
-	$(CC) $(RTFLAGS) -fobjc-arc -c $< -o $@
 
 # linked to a temp file, then renamed over: a copy of the game still running keeps its (old) file - relinking in
 # place gets running copies killed by macOS (code signature of the changed pages). The temp file keeps the real name
@@ -226,10 +185,6 @@ $(GAMELIB): $(GEN_OBJ) | $(EXE)
 	mv -f $@.tmp $@
 	echo $(GAMELIB_ID) > $@.id
 
-$(B)/rt/ui/%.o: runtime/ui/%.mm $(RT_HDRS)
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(UIFLAGS) -c $< -o $@
-
 $(B)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -238,11 +193,7 @@ $(B)/imgui/imgui_impl_%.o: $(IMGUI)/backends/imgui_impl_%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(B)/imgui/imgui_impl_metal.o: $(IMGUI)/backends/imgui_impl_metal.mm
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -fobjc-arc -c $< -o $@
-
-# Python: tools/venv (macOS, Linux: bin/python, Windows: Scripts/python.exe)
+# Python: tools/venv (Linux: bin/python, Windows: Scripts/python.exe)
 PY := $(firstword $(wildcard tools/venv/bin/python) $(wildcard tools/venv/Scripts/python.exe))
 
 gen:
@@ -260,8 +211,7 @@ $(B)/rt/platform/windows_rc.o: runtime/platform/windows.rc docs/icon/icon.ico
 	$(WINDRES) -I docs/icon -O coff $< -o $@
 
 # The game code generator as a standalone helper (PyInstaller, tools/eowgen.spec): build/helper/eowgen/, for the start
-# screen's setup on the player's machine (runtime/gamebuild.c). GEN_VENV: its venv (make app: one on build/deps'
-# Python, which runs on older macOS than Homebrew's).
+# screen's setup on the player's machine (runtime/gamebuild.c). GEN_VENV: its venv.
 GEN_PY  ?= $(if $(filter windows,$(PLATFORM)),py -3.12,python3)
 GEN_VENV ?= build/gen-venv
 GEN_VPY := $(if $(filter windows,$(PLATFORM)),$(GEN_VENV)/Scripts/python.exe,$(GEN_VENV)/bin/python)
@@ -278,17 +228,4 @@ $(GEN_VENV)/.ok:
 	$(GEN_VPY) -m pip install -q capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 pyinstaller==6.22.3
 	touch $@
 
-# make app (macOS): build/EoWRecomp.app to ship - the runtime built against build/deps (tools/build_deps_macos.sh:
-# LGPL-only FFmpeg, SDL3), MoltenVK, and what the start screen builds the game code with (the generator helper, zig).
-# No game code or files inside (tools/bundle_macos.sh checks). For macOS 15+ (build/deps' minimum) unless MACOS_MIN.
-APP_MIN := $(or $(MACOS_MIN),15.0)
-app:
-	$(MAKE) B=build/rel DEPS=$(CURDIR)/build/deps MACOS_MIN=$(APP_MIN) build/rel/eowrecomp
-	$(MAKE) gen-helper GEN_PY=build/deps/python/bin/python3 GEN_VENV=build/gen-venv-rel
-	[ -x build/zig/zig ] || tools/fetch_zig.sh
-	MACOS_MIN=$(APP_MIN) tools/bundle_macos.sh build/rel/eowrecomp
-
-.PHONY: all gen gen-helper gen-objs runtime-objs app
-
-build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
-	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
+.PHONY: all gen gen-helper gen-objs runtime-objs

@@ -2,9 +2,6 @@
 //
 // Threads: SDL events arrive on the main thread and are queued; the menu is laid out and drawn on the
 // render thread inside backend_present, after the game image, into the same drawable.
-#ifdef EOW_METAL
-#import <Metal/Metal.h>
-#endif
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <pthread.h>
@@ -15,12 +12,8 @@
 #include "option_rows.h"
 #include "imgui_internal.h"  // (NavCursorVisible)
 #include "osk.h"
-#ifdef EOW_METAL
-#include "imgui_impl_metal.h"
-#else
 #include "imgui_impl_vulkan.h"
 extern "C" bool vk_imgui_backend_init(void);  // runtime/nvn/vulkan/imgui_glue.cpp
-#endif
 
 extern "C" {
 #include "../hle.h"
@@ -312,11 +305,7 @@ static void style_init(void) {
 }
 
 
-#ifdef EOW_METAL
-static void init(id<MTLDevice> dev) {
-#else
 static void init(void) {
-#endif
     IMGUI_CHECKVERSION();
     g_ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(g_ctx);
@@ -347,11 +336,7 @@ static void init(void) {
     if (!g_font_big) g_font_big = g_font;
     if (!g_menu_font || !g_menu_font_big) g_menu_font = g_font, g_menu_font_big = g_font_big;
     style_init();
-#ifdef EOW_METAL
-    ImGui_ImplMetal_Init(dev);
-#else
     vk_imgui_backend_init();
-#endif
     g_inited = true;
 }
 
@@ -465,15 +450,9 @@ static void tab_display(void) {
         if (opt_choice("Internal resolution", &ri, res, NRES, RES_MATCH_AT, d, false)) g_settings.res_mode = res_mode[ri];
     }
     {   // each OS's own upscaler next to bilinear (UPSCALE_SHARP: MetalFX on macOS, AMD FSR 1 on Windows)
-#ifdef EOW_METAL
-        static const char *ups[] = {"Bilinear", "MetalFX"};
-        const char *ud = "How the image is scaled up to the window when it renders at a lower resolution. MetalFX: Apple's "
-                         "upscaler, sharper. Bilinear: plain and soft.";
-#else
         static const char *ups[] = {"Bilinear", "AMD FSR 1"};
         const char *ud = "How the image is scaled up to the window when it renders at a lower resolution. AMD FSR 1: "
                          "edge-aware upscaling and sharpening, sharper. Bilinear: plain and soft.";
-#endif
         int ui = g_settings.upscaler == UPSCALE_BILINEAR ? 0 : 1;
         char udm[512];
         if (g_settings.res_mode == RES_MATCH) {  // (renders at the window's size: nothing to scale up)
@@ -755,24 +734,15 @@ void menu_tabs_draw(float scale, ImFont *font, ImFont *font_big, bool in_game, v
     g_font = f0, g_font_big = f1;
 }
 
-#ifdef EOW_METAL
-void menu_render(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> target) {
-    const double tw = target.width, th = target.height;
-#else
 void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     const double tw = target_w, th = target_h;
-#endif
     bool open = g_open.load();
     bool kbd = g_kbd.load() == 1;
     if (!open && !kbd && !g_settings.show_fps && !touch_visible()) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         return;
     }
-#ifdef EOW_METAL
-    if (!g_inited) init(dev);
-#else
     if (!g_inited) init();
-#endif
     ImGui::SetCurrentContext(g_ctx);
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)tw, (float)th);
@@ -787,12 +757,6 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (scale < 0.45f) scale = 0.45f;
     io.FontGlobalScale = scale;
 
-#ifdef EOW_METAL
-    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-    rp.colorAttachments[0].texture = target;
-    rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
-    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-#endif
     // spacing/rounding follow the output size too (style tuned for 1080 p)
     static ImGuiStyle base;
     static float style_scale = -1;
@@ -802,11 +766,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         ImGui::GetStyle().ScaleAllSizes(scale);
         style_scale = scale;
     }
-#ifdef EOW_METAL
-    ImGui_ImplMetal_NewFrame(rp);
-#else
     ImGui_ImplVulkan_NewFrame();
-#endif
     ImGui::NewFrame();
 
     if (g_settings.show_fps) {
@@ -868,11 +828,5 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (!open && !kbd) touch_draw();  // (phones: the on-screen controls)
     ImGui::Render();
     g_text_busy = open && ui_text_busy();
-#ifdef EOW_METAL
-    id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
-    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cb, enc);
-    [enc endEncoding];
-#else
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);  // inside the window image's rendering
-#endif
 }

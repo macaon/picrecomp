@@ -67,11 +67,7 @@ static inline void rt_set_fpsr(uint64_t v) { (void)v; }
 // libraries and heaps there on 39-bit kernels), the whole guest layout sits GUEST_SHIFT lower. Recompiled functions and
 // labels keep their unshifted names (f_7000...), and so do patches and runtime/modules.h: only the values move.
 // tools/gen.py --shift must match (as in LASRecomp-Android-Plus).
-#if defined(__ANDROID__)
-#define GUEST_SHIFT 0x6000000000ull
-#else
 #define GUEST_SHIFT 0ull
-#endif
 #define GUEST(a) ((uint64_t)(a) - GUEST_SHIFT)  // an address of the unshifted (Switch) layout
 typedef uint16_t __attribute__((aligned(1), may_alias)) u16u;
 typedef uint32_t __attribute__((aligned(1), may_alias)) u32u;

@@ -5,10 +5,6 @@
 //
 // Skipped with --play, EOWRECOMP_NO_LAUNCHER=1, or any scripted test run (EOWRECOMP_INPUT): tests boot straight in.
 // The in-game menu's "Title screen" comes back here without leaving the process (runtime/main.c reboots the game).
-#ifdef EOW_METAL
-#import <Metal/Metal.h>
-#import <QuartzCore/CAMetalLayer.h>
-#endif
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -24,11 +20,7 @@
 #include "imgui_internal.h"  // (SetKeyOwner)
 #include "option_rows.h"
 #include "osk.h"
-#ifdef EOW_METAL
-#include "imgui_impl_metal.h"
-#else
 #include "imgui_impl_vulkan.h"
-#endif
 #include "imgui_impl_sdl3.h"
 
 extern "C" {
@@ -41,19 +33,12 @@ extern "C" {
 #include "gamelib.h"
 #include "nxpkg.h"
 #include "touch.h"
-#ifdef __ANDROID__
-#include "platform/android.h"
-#endif
 #include "romfs_build.h"
 #include "settings.h"
 #include "input_bind.h"
 void controls_bindings_draw(float scale);  // ui/controls_ui.mm
 void ui_window_init(void);
 SDL_Window *ui_window(void);
-#ifdef EOW_METAL
-void *ui_metal_layer(void);
-void *ui_metal_device(void);
-#else
 // runtime/nvn/vulkan: window frames and ImGui plumbing
 bool vk_frame_begin(const float clear[4]);
 void vk_frame_end(const char *shot_path);
@@ -61,31 +46,7 @@ void *vk_frame_cmd(void);
 bool vk_imgui_backend_init(void);
 void vk_imgui_backend_shutdown(void);
 uint64_t vk_imgui_texture_rgba(const void *rgba, int w, int h);
-#endif
 }
-#ifdef EOW_METAL
-#import <ImageIO/ImageIO.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-
-// (test) BGRA texture -> PNG (the game renderer's saver isn't up yet before the game boots)
-static void save_png(id<MTLTexture> tex, const char *path) {
-    size_t w = tex.width, h = tex.height;
-    std::vector<uint8_t> px(w * h * 4);
-    [tex getBytes:px.data() bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(px.data(), w, h, 8, w * 4, cs,
-                                             kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
-    CGImageRef img = CGBitmapContextCreateImage(ctx);
-    CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, strlen(path), false);
-    CGImageDestinationRef dest = CGImageDestinationCreateWithURL(url, (__bridge CFStringRef)UTTypePNG.identifier, 1, NULL);
-    if (dest) {  // (NULL when the file can't be created, e.g. its folder isn't there: CFRelease(NULL) traps)
-        CGImageDestinationAddImage(dest, img, NULL);
-        CGImageDestinationFinalize(dest);
-        CFRelease(dest);
-    } else fprintf(stderr, "[launcher] can't write %s\n", path);
-    CFRelease(url), CGImageRelease(img), CGContextRelease(ctx), CGColorSpaceRelease(cs);
-}
-#endif
 
 static const uint8_t BUILD_ID[8] = {0xa5, 0x81, 0x40, 0x6b, 0xc9, 0x85, 0x86, 0x51};  // Echoes of Wisdom v1.0.0 main (docs/STATUS.md)
 // The release tag this build is (also names the release files; Makefile / tools/bundle_macos.sh / make_dmg.sh read
@@ -293,12 +254,6 @@ static bool g_copy_skipped;                  // (only the game code to build: th
 static void setup_progress(uint64_t done, uint64_t) { g_done = g_phase_base + done; }
 static void build_progress(double f, const char *step) {
     g_build_frac = (float)f;
-#ifdef __ANDROID__
-    {   // (the notification: whole percents only)
-        static int last_pct = -1;
-        if ((int)(f * 100) != last_pct) last_pct = (int)(f * 100), android_build_progress(last_pct, step);
-    }
-#endif
     static const char *last;
     if (step != last) last = step, set_job(step);
 }
@@ -310,27 +265,11 @@ static float extract_progress(void) {
 
 // Builds the game code from the copied files (a few minutes); false = failed (the job line says so)
 static bool build_game_code(void) {
-#ifdef __ANDROID__
-    // A personal APK carries the game code already; the public one builds it on the phone (when it carries the
-    // builder: android/app/build.gradle onDeviceBuild), inside a foreground service so it goes on with the screen off
-    if (gamelib_present(g_root.c_str())) return true;
-    if (!gamebuild_available()) {
-        set_job("The game code isn't in this app", true, "Build your personal APK on a computer from your own game files: "
-                "tools/android/build_game.sh <game folder> --apk (docs/BUILD-android.md).");
-        return false;
-    }
-#endif
     int cores = SDL_GetNumLogicalCPUCores(), ram_gb = SDL_GetSystemRAM() / 1024;
     GameBuildOpts o = {build_progress, cores < ram_gb - 2 ? cores : ram_gb - 2 > 1 ? ram_gb - 2 : 1};
     char why[256] = "";
     g_build_frac = 0;
-#ifdef __ANDROID__
-    android_build_service(true, "Recompiling the game");
-#endif
     bool ok = gamebuild_run(g_root.c_str(), &o, why, sizeof why);
-#ifdef __ANDROID__
-    android_build_service(false, NULL);
-#endif
     if (!ok) {
         fprintf(stderr, "[launcher] game code: %s\n", why);
         set_failure(FAIL_BUILD);
@@ -353,26 +292,6 @@ static void *extract_thread(void *) {
         goto check;
     }
     set_job("Looking for the game files...");
-#ifdef __ANDROID__
-    if (!src.compare(0, 8, "android:")) {  // the picked document tree: the package read in place, the keys copied
-        char uri[2048];
-        rt_remove_game_files(g_root.c_str());
-        mkdir(g_root.c_str(), 0755);
-        cleaned = true;
-        // (absolute: the Java side has another working directory)
-        std::string kdir = (g_root[0] == '/' ? g_root : std::string(rt_data_root()) + "/" + g_root) + "/keys";
-        const char *err = android_find_game_package(kdir.c_str(), uri, sizeof uri);
-        if (err) {
-            fprintf(stderr, "[launcher] %s\n", err);
-            if (!strcmp(err, "nokeys"))
-                set_job("No prod.keys beside the game package", true, "Put the keys file from your own Switch (prod.keys) "
-                        "in the same folder as the game and choose it again.");
-            else set_failure(FAIL_NOT_FOUND);
-            goto done;
-        }
-        package = uri, keys = kdir + "/prod.keys";
-    } else
-#endif
     find_game(src, 0, exefs, romfs, package, keys, unusable);
     if ((exefs.empty() || romfs.empty()) && !package.empty()) {  // the game package: ExeFS out, RomFS read in place
         if (keys.empty()) {
@@ -451,16 +370,6 @@ static void SDLCALL picked(void *, const char *const *files, int) {
     pthread_mutex_unlock(&g_lock);
 }
 
-#ifdef __ANDROID__
-// (the system's folder picker: a tree of documents, read through EowActivity; ANDROID_SRC marks it in g_src)
-#define ANDROID_SRC "android:"
-static void picked_android(const char *name) {
-    if (!name) return;
-    pthread_mutex_lock(&g_lock);
-    g_src = std::string(ANDROID_SRC) + name;
-    pthread_mutex_unlock(&g_lock);
-}
-#endif
 
 // ------------------------------------------------------------------ the user's own Nintendo fonts (not shipped)
 // runtime/hle/pl.c loads fonts/ first, else a close substitute (Hiragino Sans). Import copies recognized files only.
@@ -519,15 +428,9 @@ static void remove_fonts() {
 }
 
 // ------------------------------------------------------------------ background: a title movie frame
-#ifdef EOW_METAL
-static id<MTLTexture> g_bg;
-#define BG_TEXID ((ImTextureID)(__bridge void *)g_bg)
-typedef id<MTLDevice> GpuDevice;
-#else
 static uint64_t g_bg;  // ImGui texture id (Vulkan descriptor set)
 #define BG_TEXID ((ImTextureID)g_bg)
 typedef void *GpuDevice;
-#endif
 static int g_bg_w, g_bg_h;
 
 static void load_background(GpuDevice dev) {
@@ -560,15 +463,8 @@ static void load_background(GpuDevice dev) {
                 int dst_ls[1] = {w * 4};
                 sws_scale(sws, fr->data, fr->linesize, 0, h, dst, dst_ls);
                 sws_freeContext(sws);
-#ifdef EOW_METAL
-                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                                              width:w height:h mipmapped:NO];
-                g_bg = [dev newTextureWithDescriptor:td];
-                [g_bg replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:rgba.data() bytesPerRow:w * 4];
-#else
                 (void)dev;
                 g_bg = vk_imgui_texture_rgba(rgba.data(), w, h);
-#endif
                 g_bg_w = w, g_bg_h = h;
             }
             av_frame_free(&fr);
@@ -938,21 +834,7 @@ extern "C" void launcher_run(const char *root) {
     ui_window_init();
     SDL_Window *win = ui_window();
     g_launcher_win = win;
-#ifdef __ANDROID__
-    {   // (the folder picked in an earlier session: its read permission is kept)
-        const char *saved = android_saved_game_folder();
-        pthread_mutex_lock(&g_lock);
-        if (saved && g_src.empty()) g_src = std::string(ANDROID_SRC) + saved;
-        pthread_mutex_unlock(&g_lock);
-    }
-#endif
-#ifdef EOW_METAL
-    CAMetalLayer *layer = (__bridge CAMetalLayer *)ui_metal_layer();
-    id<MTLDevice> dev = (__bridge id<MTLDevice>)ui_metal_device();
-    id<MTLCommandQueue> queue = [dev newCommandQueue];
-#else
     GpuDevice dev = NULL;
-#endif
 
     IMGUI_CHECKVERSION();
     ImGuiContext *prev_ctx = ImGui::GetCurrentContext();  // the in-game menu's, when back here after a reboot
@@ -985,13 +867,8 @@ extern "C" void launcher_run(const char *root) {
     st.Colors[ImGuiCol_HeaderActive] = ImVec4(1, 1, 1, 0.14f);
     st.Colors[ImGuiCol_NavCursor] = ImVec4(0.95f, 0.78f, 0.35f, 1);
     st.FrameRounding = st.WindowRounding = 10;
-#ifdef EOW_METAL
-    ImGui_ImplSDL3_InitForMetal(win);
-    ImGui_ImplMetal_Init(dev);
-#else
     ImGui_ImplSDL3_InitForVulkan(win);
     vk_imgui_backend_init();
-#endif
     ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, NULL, 0);  // (controllers: launcher_pad_event)
     launcher_pad_open_all();
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
@@ -1007,9 +884,6 @@ extern "C" void launcher_run(const char *root) {
     // EOWRECOMP_LAUNCHER_SHOT=<frame>[:<page>] (test): save build/launcher.png at that frame and exit; page: settings[:<tab>] / askdelete / setup
     long shot_at = getenv("EOWRECOMP_LAUNCHER_SHOT") ? atol(getenv("EOWRECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     if (shot_at) {
-#ifdef EOW_METAL
-        layer.framebufferOnly = NO;
-#endif
         const char *pg = strchr(getenv("EOWRECOMP_LAUNCHER_SHOT"), ':');
         if (pg && (!strncmp(pg + 1, "settings", 8) || !strcmp(pg + 1, "askdelete"))) page = SETTINGS, menu_tabs_focus(true);
         if (pg && !strcmp(pg + 1, "setup")) page = SETUP;
@@ -1083,22 +957,6 @@ extern "C" void launcher_run(const char *root) {
         }
         was_busy = busy;
 
-#ifdef EOW_METAL
-        int w, h;
-        SDL_GetWindowSizeInPixels(win, &w, &h);
-        layer.drawableSize = CGSizeMake(w, h);
-        @autoreleasepool {
-            id<CAMetalDrawable> drawable = [layer nextDrawable];
-            if (!drawable) { SDL_Delay(16); continue; }
-            MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-            rp.colorAttachments[0].texture = drawable.texture;
-            rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-            rp.colorAttachments[0].clearColor = MTLClearColorMake(0.04, 0.05, 0.06, 1);
-            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-            id<MTLCommandBuffer> cb = [queue commandBuffer];
-            id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
-            ImGui_ImplMetal_NewFrame(rp);
-#else
         {
             // one frame per refresh of the window's display: the swapchain presents without waiting (mailbox, for the
             // game's own pacing: device.c), so the start screen alone would draw as fast as the GPU goes
@@ -1111,7 +969,6 @@ extern "C" void launcher_run(const char *root) {
             static const float clear_col[4] = {0.04f, 0.05f, 0.06f, 1};
             if (!vk_frame_begin(clear_col)) { SDL_Delay(16); continue; }
             ImGui_ImplVulkan_NewFrame();
-#endif
             ImGui_ImplSDL3_NewFrame();
             // the backend (manual mode, no gamepads of its own) clears HasGamepad every frame, and ImGui then drops the
             // controller presses launcher_pad_event fed in and turns gamepad navigation off: set it again while a
@@ -1400,11 +1257,7 @@ extern "C" void launcher_run(const char *root) {
                     opt_section("Your copy of the game");
                     if (busy) opt_disable_next();
                     if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
-#ifdef __ANDROID__
-                        android_pick_game_folder(picked_android);
-#else
                         SDL_ShowOpenFolderDialog(picked, NULL, win, NULL, false);
-#endif
                     check_left_of_value(src_v);
                     first_row();
                     opt_section("Set up");
@@ -1580,41 +1433,15 @@ extern "C" void launcher_run(const char *root) {
 
             if (getenv("EOWRECOMP_TOUCH_PREVIEW")) touch_preview(), touch_draw();  // (test: the controls' look)
             ImGui::Render();
-#ifdef EOW_METAL
-            ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cb, enc);
-            [enc endEncoding];
-            id<MTLTexture> shot = nil;
-            if (shot_at && ++frame == shot_at) {
-                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:drawable.texture.pixelFormat
-                                             width:drawable.texture.width height:drawable.texture.height mipmapped:NO];
-                td.storageMode = MTLStorageModeShared;
-                shot = [dev newTextureWithDescriptor:td];
-                id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
-                [bl copyFromTexture:drawable.texture toTexture:shot];
-                [bl endEncoding];
-            }
-            [cb presentDrawable:drawable];
-            [cb commit];
-            if (shot) {
-                [cb waitUntilCompleted];
-                save_png(shot, getenv("EOWRECOMP_SHOT_PATH") ? getenv("EOWRECOMP_SHOT_PATH") : "build/launcher.png");
-                exit(0);
-            }
-#else
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)vk_frame_cmd());
             bool shot = shot_at && ++frame == shot_at;
             vk_frame_end(shot ? getenv("EOWRECOMP_SHOT_PATH") ? getenv("EOWRECOMP_SHOT_PATH") : "build/launcher.png" : NULL);
             if (shot) exit(0);
-#endif
         }
     }
     // play: hand the window to the game
     settings_save();
-#ifdef EOW_METAL
-    ImGui_ImplMetal_Shutdown();
-#else
     vk_imgui_backend_shutdown();
-#endif
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev_ctx);
