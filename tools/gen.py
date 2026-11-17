@@ -125,9 +125,40 @@ class Module:
         r = self._jump_table_fallthrough(br_pc, entry, end)
         if r is None:
             r = self._jump_table_taken(br_pc, entry, end)
+        self.table_exact = r is not None  # (the entry count is the compare's: every index was emulated)
         if r is None:
             r = self._jump_table_compact(br_pc, entry)
         return r
+
+    def _indexes_table(self, frm, br_pc, regs):
+        """Is the register that indexes a table load in frm..br still the compared index (one of regs, or a plain copy of
+        it)? Tells a table's own guard from another switch's compare 20 instructions up, whose register only feeds the
+        index through arithmetic (a bit reader's size, S2 main 0x7000109d28)."""
+        md = getattr(self, '_cs', None)
+        if md is None:
+            import capstone
+            md = self._cs = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
+            md.detail = True
+        from capstone import arm64
+        direct = set(regs)
+
+        def num(ins, r):
+            n = ins.reg_name(r) or ''
+            return int(n[1:]) if n[:1] in 'xw' and n[1:].isdigit() else None
+        for a in range(frm, br_pc, 4):
+            for ins in md.disasm(struct.pack('<I', self.word(a)), a, 1):
+                for op in ins.operands:
+                    if op.type == arm64.ARM64_OP_MEM and op.mem.index and num(ins, op.mem.index) in direct:
+                        return True
+                _, written = ins.regs_access()
+                dst = {num(ins, r) for r in written} - {None}
+                src = [op for op in ins.operands if op.type == arm64.ARM64_OP_REG and num(ins, op.reg) in direct]
+                if ins.mnemonic in ('mov', 'uxtw', 'sxtw') and len(ins.operands) == 2 and src and \
+                        ins.operands[1].type == arm64.ARM64_OP_REG and num(ins, ins.operands[1].reg) in direct:
+                    direct |= dst
+                else:
+                    direct -= dst
+        return False
 
     def _index_regs(self, start, at, idx):
         """The index register plus registers holding the same value in start..at: sources it was
@@ -228,7 +259,7 @@ class Module:
         # find the guarding b.hi / b.hs and its cmp, scanning backwards
         a = br_pc - 4
         guard = cmp = None
-        while a >= entry and br_pc - a <= 4 * 16:
+        while a >= entry and br_pc - a <= 4 * 40:  # (the compiler schedules vector setup between the guard and the br)
             w = self.word(a)
             if (w & 0xFF000010) == 0x54000000 and bits(w, 0, 4) in (8, 2):
                 guard = a
@@ -263,6 +294,10 @@ class Module:
         while start - 4 >= entry and cmp - (start - 4) <= 4 * 12 and self.lift(start - 4).kind in ('op', 'asm'):
             start -= 4
         idx_regs = self._index_regs(start, cmp, idx)
+        # The compare must be this table's: the table load is indexed by the compared register (a b.hi 20 instructions up
+        # is often another switch's)
+        if not self._indexes_table(guard + 4, br_pc, idx_regs):
+            return None
         mu = self.emu()
         targets = []
 
@@ -397,7 +432,7 @@ class Module:
             elif ins.kind == 'br':
                 jt = self.jump_table(a, entry, end)
                 if jt:
-                    tables[a] = jt
+                    tables[a] = jt if self.table_exact else Guessed(jt)
                     labels.update(t for t in jt if entry <= t < end)
                     ext.update(t for t in jt if not entry <= t < end)
                     self.stats['jumptables'] += 1
@@ -467,9 +502,11 @@ class Module:
             refs.add(t)
             return f'__attribute__((musttail)) return {fname(t)}(c);'
 
-        # Functions with jump tables also get the all-instruction fallback: a table whose emulation
-        # missed some cases then still reaches the right instruction instead of aborting.
-        all_labels = bool(tables)
+        # A function with a jump table gets an all-instruction fallback: a case the table missed still reaches the right
+        # instruction instead of aborting. Not a big function whose tables are all exact (the compare's own count,
+        # every index emulated): that switch made one 2,900-instruction function take eight minutes to compile.
+        all_labels = any(jt == 'all' or isinstance(jt, Guessed) for jt in tables.values()) or \
+            (bool(tables) and (end - entry) // 4 <= SAFETY_NET_MAX)
         if all_labels:
             labels = set(range(entry, end, 4))
         last = None
@@ -520,7 +557,10 @@ class Module:
                 if jt:
                     cases = ' '.join(f'case {hx(t)}: {jump(t)}' for t in jt)
                     out.append(f'    switch ({ins.target}) {{ {cases} default: break; }}')
-                    out.append(f'    c->pc = {ins.target}; goto L_dispatch;')
+                    if all_labels:
+                        out.append(f'    c->pc = {ins.target}; goto L_dispatch;')
+                    else:
+                        out.append(f'    c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);')
                     continue
                 out.append(f'    c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);')
             elif k == 'ret':
@@ -540,6 +580,13 @@ class Module:
 
 
 from patches import PATCHES
+
+
+SAFETY_NET_MAX = 1500  # instructions: bigger functions with exact tables go without the all-instruction fallback
+
+
+class Guessed(list):
+    """Targets of a jump table whose entry count was guessed (gen.Module._jump_table_compact)."""
 
 
 def pcrel(w, pc):

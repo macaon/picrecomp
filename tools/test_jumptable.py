@@ -54,6 +54,26 @@ def build(guard_distance, masked):
     return w, br_at, cases, table
 
 
+def classic(filler):
+    """cmp w8, #5 ; b.hi default ; filler ; adrp/add table ; ldrsw x8, [x9, x8, lsl #2] ; add x8, x8, x9 ; nops ; br x8.
+    PICROSS S main 0x7000fa4348: the compiler put 17 vector setup instructions between the guard and the br."""
+    w = [0x7100001F | 5 << 10 | 8 << 5, 0]  # cmp w8, #5 ; b.hi default (patched below)
+    w += [NOP] * filler
+    w += [0xB0000009, 0x91000129]  # adrp x9, +1 page (BASE + 0x1000) ; add x9, x9, #0
+    w += [0xB8A07800 | 8 << 16 | 9 << 5 | 8]  # ldrsw x8, [x9, x8, lsl #2]
+    w += [0x8B090108]  # add x8, x8, x9
+    w += [NOP] * 6
+    w.append(0xD61F0100)  # br x8
+    br_at = len(w) - 1
+    cases = len(w)
+    w += [RET] * 6
+    default = len(w)
+    w.append(RET)
+    w[1] = 0x54000008 | ((default - 1) & 0x7FFFF) << 5
+    table = struct.pack('<6i', *[4 * (cases + k) - 0x1000 for k in range(6)])
+    return w, br_at, cases, table
+
+
 def module(words, table):
     text = struct.pack(f'<{len(words)}I', *words)
     image = bytearray((text.ljust(0x1000, b'\0') + table).ljust(0x2000, b'\0'))  # (Unicorn maps whole pages)
@@ -76,6 +96,23 @@ def main():
         want = sorted({BASE + 4 * (cases + v) for v in (TABLE if not masked else TABLE + [0] * 10)})
         assert got == want, (masked, dist, got and [hex(t) for t in got], [hex(t) for t in want])
         print(f'ok: {"mask" if masked else f"guard {dist + 3} insns up"}: {len(got)} cases')
+    for filler in (3, 16):
+        words, br_at, cases, table = classic(filler)
+        m = module(words, table)
+        got = m.jump_table(BASE + br_at * 4, BASE, m.hi)
+        want = [BASE + 4 * (cases + k) for k in range(6)]
+        assert got == want, (filler, got and [hex(t) for t in got], [hex(t) for t in want])
+        print(f'ok: guard {br_at - 1} insns before the br: {len(got)} cases')
+    # a b.hi that belongs to another switch, 22 instructions up, must not be taken for this table's bound (S2 main
+    # 0x7000109d28: it resolved the br to one target)
+    words, br_at, cases, table = build(0, True)
+    pre = [0x7100001F | 0 << 10 | 1 << 5, 0] + [NOP] * 20  # cmp w1, #0 ; b.hi <end> ; nops
+    pre[1] = 0x54000008 | ((len(pre) + len(words) - 1 - 1) & 0x7FFFF) << 5
+    m = module(pre + words, table)
+    got = m.jump_table(BASE + (len(pre) + br_at) * 4, BASE, m.hi)
+    want = sorted({BASE + 4 * (len(pre) + cases + v) for v in TABLE + [0] * 10})
+    assert got == want and not m.table_exact, (got and [hex(t) for t in got], [hex(t) for t in want])
+    print(f'ok: another switch\'s guard is ignored: {len(got)} cases, size guessed')
     # the adr -> br distance that split the function at its cases: 13 insns apart (float), 7 (hash), 13 (decoder)
     words, br_at, cases, table = build(19, False)
     adr_at = next(i for i, w in enumerate(words) if (w & 0x9F000000) == 0x10000000)
