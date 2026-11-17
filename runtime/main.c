@@ -37,8 +37,8 @@ static void picross_startup_complete(Cpu *c) { (void)c; }
 
 static void rtld_init_sdk(Cpu *c) {
     Module *sdk = loader_module("sdk");
-    if (getenv("PICROSS_EARLY_HEAP")) {
-        // PICROSS S v524288 SDK relocation for nninitStartup.
+    {   // Always: without this the game starts with an uninitialised allocator and sends the GPU garbage
+        // (a run without it hung an RTX 5070 Ti, see docs/STATUS.md). PICROSS S v524288 SDK relocation for nninitStartup.
         uint64_t *startup = (uint64_t *)(sdk->base + 0xcdd210);
         uint64_t entry = loader_find_symbol("nninitStartup");
         if (!entry || *startup != entry) FATAL("unexpected PICROSS S startup relocation\n");
@@ -52,7 +52,7 @@ static void rtld_init_sdk(Cpu *c) {
     module_init(c, sdk);
 }
 static void rtld_init_main(Cpu *c) {
-    if (getenv("PICROSS_INIT_VAMM")) {
+    {   // Always, for the same reason as the early heap in rtld_init_sdk
         uint64_t entry = loader_find_symbol("_ZN2nn2os30InitializeVirtualAddressMemoryEv");
         if (!entry) FATAL("InitializeVirtualAddressMemory not found\n");
         LOG("initializing SDK virtual address memory before game constructors\n");
