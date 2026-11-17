@@ -39,11 +39,16 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   (`docs/ARCHITECTURE.md`, "Debugging a hang").
 - `tools/picross/fix-exception-resume.py` splices C into the generated code. It belongs in `tools/patches.py` or the
   lifter.
-- The start screen shows a card for each installed game and a "+" card. "+" opens a page that tells the user to run
-  `tools/picross/prepare.py`; Back rescans. The inherited in-app setup (`SETUP` page, `extract_thread`, the XCI reader)
-  is no longer reachable and still checks the old Zelda title ID. Importing from the start screen is a rewrite of it.
-  Layout checked by screenshots (no game, S only, all three, the + page); clicking a card, "+" and Back, and gamepad
-  navigation have not been tried.
+- The start screen shows a card for each installed game and a "+" card. "+" opens the importer: pick a folder with the
+  two `.nsp` files (and a `prod.keys` if it is not beside them or in `~/.switch`), Import. `runtime/importer.c` runs
+  `tools/picross/prepare.py --folder` as a child process (so it needs python3 and the built `hactool`, found from the
+  checkout) and shows the `@step n/7` lines it prints as a step list and a segmented bar. Importing takes well under a
+  second on a fast disk, so the steps flash by; the long waits are code generation and compiling, which the importer
+  does not do yet. The inherited in-app setup (`SETUP` page, `extract_thread`, the XCI reader) is unreachable and still
+  checks the old Zelda title ID; it can be deleted.
+  Layout checked by screenshots (no game, S only, all three, the importer idle, running, done and failed); an import of
+  S3 was run end to end and gave a card. Clicking the buttons and the file dialogs, and gamepad navigation, have not
+  been tried.
 
 - **Other titles.** `titles/picross-s2.json` and `picross-s3.json` exist and `prepare.py` prepares both from the user's
   packages (checked: S, S2 and S3 each give a card with the Switch icon). Their `sdk` and `subsdk0` modules are

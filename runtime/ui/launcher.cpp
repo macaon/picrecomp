@@ -31,6 +31,7 @@ extern "C" {
 #include "paths.h"
 #include "gamebuild.h"
 #include "gamelib.h"
+#include "importer.h"
 #include "nxpkg.h"
 #include "touch.h"
 #include "romfs_build.h"
@@ -185,6 +186,9 @@ static std::string check_game_files(const std::string &root) {
 // (runtime/romfs_build.c).
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static std::string g_src;           // the picked folder
+static std::string g_add_keys;      // its prod.keys, when not beside them
+static std::string g_add_dir;       // the folder chosen on the Add a game page
+static bool g_add_auto;             // (test) start the import at once
 static std::string g_job;           // current setup step / result for the status line
 static std::string g_job_hint;      // a failure: what to do about it (shown under it)
 static bool g_busy, g_job_failed;
@@ -405,6 +409,18 @@ static bool have_font(const char *const *names, int n) {
     return false;
 }
 
+static void SDLCALL picked_add(void *, const char *const *files, int) {
+    if (!files || !files[0]) return;
+    pthread_mutex_lock(&g_lock);
+    g_add_dir = files[0];
+    pthread_mutex_unlock(&g_lock);
+}
+static void SDLCALL picked_keys(void *, const char *const *files, int) {
+    if (!files || !files[0]) return;
+    pthread_mutex_lock(&g_lock);
+    g_add_keys = files[0];
+    pthread_mutex_unlock(&g_lock);
+}
 static void SDLCALL picked_fonts(void *, const char *const *files, int) {
     if (!files) return;
     pthread_mutex_lock(&g_lock);
@@ -959,6 +975,10 @@ extern "C" void launcher_run(const char *root) {
         if (pg && (!strncmp(pg + 1, "settings", 8) || !strcmp(pg + 1, "askdelete"))) page = SETTINGS, menu_tabs_focus(true);
         if (pg && !strcmp(pg + 1, "setup")) page = SETUP;
         if (pg && !strcmp(pg + 1, "add")) page = ADD;
+        if (const char *d = getenv("PICRECOMP_LAUNCHER_IMPORT")) {  // (test) <folder>[:<keys file>]
+            g_add_dir = d, g_add_auto = true, page = ADD;
+            if (const char *k = strchr(d, '|')) g_add_keys = k + 1, g_add_dir.resize(k - d);
+        }
         if (pg && !strncmp(pg + 1, "fail", 4)) page = SETUP, set_failure(atoi(pg + 5));  // (the failure messages)
         if (pg && !strncmp(pg + 1, "settings", 8) && pg[9] == ':') g_tab_request_ext = atoi(pg + 10);  // settings:<tab>
         if (pg && !strcmp(pg + 1, "delete")) page = SETUP, g_confirm_delete = true;
@@ -1189,27 +1209,87 @@ extern "C" void launcher_run(const char *root) {
                 if (menu_item("QUIT", true)) exit(0);
                 g_menu_gap = 0.35f;
             } else if (page == ADD) {
-                std::string games = std::string(rt_data_root()) + "/games";
+                ImportState is;
+                importer_poll(&is);
+                bool idle = !is.running && !is.done && !is.failed;
+                pthread_mutex_lock(&g_lock);
+                std::string dir = g_add_dir, keys = g_add_keys;
+                pthread_mutex_unlock(&g_lock);
+                if (g_add_auto && !dir.empty() && idle) g_add_auto = false, importer_start(dir.c_str(), keys.empty() ? NULL : keys.c_str());  // (test)
+                auto text = [&](const char *fmt, const char *arg, ImVec4 col) {
+                    ImGui::SetCursorPosX(x0);
+                    ImGui::PushTextWrapPos(ds.x * 0.55f);
+                    ImGui::TextColored(col, fmt, arg);
+                    ImGui::PopTextWrapPos();
+                };
+                const ImVec4 white(1, 1, 1, 1), gold(0.93f, 0.76f, 0.33f, 1), grey(0.7f, 0.74f, 0.85f, 1);
                 ImGui::PushFont(g_font_small);
-                ImGui::PushTextWrapPos(ds.x * 0.55f);
-                ImGui::SetCursorPosX(x0);
-                ImGui::TextUnformatted("Add a game");
-                ImGui::Spacing();
-                ImGui::SetCursorPosX(x0);
-                ImGui::TextWrapped("Prepare it from your own copy of the game. In the PicRecomp folder run:");
-                ImGui::SetCursorPosX(x0);
-                ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1),
-                                   "tools/picross/prepare.py BASE.nsp UPDATE.nsp %s/<name> --prod-keys prod.keys", games.c_str());
-                ImGui::SetCursorPosX(x0);
-                ImGui::TextWrapped("Press Back when it is done: the game shows up as a card.");
-                ImGui::PopTextWrapPos();
+                if (idle) {
+                    text("%s", "Add a game", gold);
+                    text("%s", "Choose the folder with your game's two .nsp files, the base game and its update. "
+                         "Your prod.keys is read from that folder or from ~/.switch, or choose it below. Nothing leaves your computer.", white);
+                    text("%s", dir.empty() ? "No folder chosen yet." : dir.c_str(), grey);
+                    if (!keys.empty()) text("keys: %s", keys.c_str(), grey);
+                } else {
+                    text("%s", is.failed ? "The import failed" : is.done ? "Game added" : "Adding the game...",
+                         is.failed ? ImVec4(1, 0.5f, 0.4f, 1) : gold);
+                    ImGui::Dummy(ImVec2(0, 6 * s));
+                    for (int k = 0; k < is.steps && k < IMPORT_MAX_STEPS; k++) {
+                        if (!is.texts[k][0]) continue;
+                        bool cur = is.running && k + 1 == is.step;
+                        bool bad = is.failed && k + 1 == is.step;
+                        ImGui::SetCursorPosX(x0);
+                        ImVec2 m = ImGui::GetCursorScreenPos();
+                        float fs = ImGui::GetFontSize(), cy = m.y + fs * 0.55f, u = fs * 0.5f;
+                        ImDrawList *mk = ImGui::GetWindowDrawList();
+                        if (cur) mk->AddCircleFilled(ImVec2(m.x + u * 0.6f, cy), u * 0.38f, IM_COL32(255, 200, 80, 255));
+                        else if (bad) mk->AddCircleFilled(ImVec2(m.x + u * 0.6f, cy), u * 0.38f, IM_COL32(255, 128, 100, 255));
+                        else {  // done: a check mark
+                            ImU32 g = IM_COL32(120, 220, 120, 255);
+                            mk->AddLine(ImVec2(m.x, cy), ImVec2(m.x + u * 0.4f, cy + u * 0.4f), g, fs * 0.12f);
+                            mk->AddLine(ImVec2(m.x + u * 0.4f, cy + u * 0.4f), ImVec2(m.x + u * 1.2f, cy - u * 0.5f), g, fs * 0.12f);
+                        }
+                        ImGui::SetCursorPosX(x0 + fs * 1.3f);
+                        ImGui::TextColored(cur ? gold : grey, "%s", is.texts[k]);
+                    }
+                    // one segment per step: done ones filled, the running one pulsing (the script reports steps, not percent)
+                    ImGui::Dummy(ImVec2(0, 10 * s));
+                    ImGui::SetCursorPosX(x0);
+                    ImVec2 at = ImGui::GetCursorScreenPos();
+                    float bw = ds.x * 0.45f, bh = 14 * s, sw = bw / (float)is.steps, t = (float)ImGui::GetTime();
+                    ImDrawList *dl = ImGui::GetWindowDrawList();
+                    for (int k = 0; k < is.steps; k++) {
+                        bool done_k = is.done || k + 1 < is.step, run_k = is.running && k + 1 == is.step;
+                        float a = done_k ? 1.0f : run_k ? 0.45f + 0.4f * sinf(t * 5) * 0.5f + 0.2f : 0.0f;
+                        ImU32 col = is.failed && k + 1 == is.step ? IM_COL32(255, 128, 100, 255) : IM_COL32(255, 200, 80, (int)(255 * a));
+                        ImVec2 p0(at.x + k * sw + 2 * s, at.y), p1(at.x + (k + 1) * sw - 2 * s, at.y + bh);
+                        dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 30), 4 * s);
+                        if (a > 0 || (is.failed && k + 1 == is.step)) dl->AddRectFilled(p0, p1, col, 4 * s);
+                    }
+                    ImGui::Dummy(ImVec2(bw, bh + 8 * s));
+                    if (is.failed) text("%s", is.error, ImVec4(1, 0.65f, 0.55f, 1));
+                    if (is.done) text("%s", "It is in your library now. Press Back to see it.", white);
+                }
                 ImGui::PopFont();
                 ImGui::Dummy(ImVec2(0, 20 * s));
                 ImGui::SetCursorPosX(x0);
-                if (menu_item("OPEN GAMES FOLDER", true)) reveal_folder(games);
-                ImGui::SetCursorPosX(x0);
-                if (menu_item("BACK", true) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+                if (idle) {
+                    if (menu_item("CHOOSE FOLDER", true)) SDL_ShowOpenFolderDialog(picked_add, NULL, win, NULL, false);
+                    ImGui::SetCursorPosX(x0);
+                    if (menu_item("CHOOSE KEYS FILE", true)) SDL_ShowOpenFileDialog(picked_keys, NULL, win, NULL, 0, NULL, false);
+                    ImGui::SetCursorPosX(x0);
+                    if (menu_item("IMPORT", !dir.empty())) importer_start(dir.c_str(), keys.empty() ? NULL : keys.c_str());
+                    ImGui::SetCursorPosX(x0);
+                }
+                bool back = false;
+                if (is.running) {
+                    if (menu_item("CANCEL", true)) importer_cancel();
+                } else {
+                    back = menu_item("BACK", true) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                           ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+                }
+                if (back) {
+                    importer_cancel();  // (forgets a finished one)
                     page = MAIN;
                     scan_cards(g_root);
                     status = check_game_files(g_root);
