@@ -204,7 +204,38 @@ static void dump(const char *dir, const char *tag, long n, const char *src, cons
     fclose(f);
 }
 
+// EXIT.FCSM_TR (condition code 0x1c) is not taken, a plain EXIT is: PICROSS S+'s vertex shaders have the first one before the
+// code that writes the position. A program is [EXIT, an attribute store of gl_Position.x, EXIT, padding]; there must be a
+// break before the store only when the first EXIT is a plain one.
+static int check_conditional_exit(void) {
+    int fails = 0;
+    for (int fcsm = 0; fcsm < 2; fcsm++) {
+        static uint8_t buf[0x80 + 16 * 8 + 64];  // (a graphics program: a 0x80 byte header, then the code, as gen_program makes it)
+        memset(buf, 0, sizeof buf);
+        uint64_t *code = (uint64_t *)(buf + 0x80);
+        code[0] = 0;  // scheduling word
+        code[1] = fcsm ? 0xe30000000007001cull : 0xe30000000007000full;  // pc 8
+        code[2] = 0xeff07f800707ff0aull;  // pc 0x10: AST gl_Position[0] = r10
+        code[3] = 0x50b0000000070f00ull;  // NOP
+        code[4] = 0x001f8000fc0007e0ull;
+        code[5] = 0xe30000000007000full;  // EXIT
+        code[6] = code[7] = 0xe2400fffff87000full;  // BRA self: the end of the program
+        ShaderKey key;
+        memset(&key, 0, sizeof key);
+        key.glsl = 1;
+        ShaderInfo *a = maxwell_translate(buf, 0x80 + 8 * 8 + 64, STAGE_VERTEX, &key);
+        const char *body = a->msl ? strstr(a->msl, "do {") : NULL, *next = body ? strstr(body, "gl_Position[0]") : NULL;
+        bool broke = false;
+        for (const char *q = body; q && next && q < next; q++) broke |= !strncmp(q, "break;", 6);
+        if (!body || !next) { printf("FAIL: EXIT test (fcsm %d): no translation (%s)\n%s\n", fcsm, a->error, a->msl ? strstr(a->msl, "void main") : "(none)"); fails++; }
+        else if (broke == (fcsm != 0)) { printf("FAIL: EXIT%s %s the program\n", fcsm ? ".FCSM_TR" : "", broke ? "ended" : "did not end"); fails++; }
+        maxwell_free(a);
+    }
+    return fails;
+}
+
 int main(int argc, char **argv) {
+    if (check_conditional_exit()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);

@@ -927,7 +927,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
     if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
-        sp(&c->body, c->branchy ? "    exit_now = true; break;\n" : "    break;\n");
+        // EXIT.FCSM_TR (condition code 0x1c) is a conditional exit that is not taken here: Eden / yuzu stub its flow test to
+        // false. PICROSS S+'s vertex shaders have one after the attribute stores of their first half and compute the
+        // position in the second; taking it left every vertex at the origin (nothing was drawn).
+        if (bits(w, 0, 5) != 0x1c) sp(&c->body, c->branchy ? "    exit_now = true; break;\n" : "    break;\n");
     } else if (OPM(0xe330000000000000ull, 0xfff0000000000000ull)) {  // KIL
         c->info->uses_discard = true;
         if (getenv("PICRECOMP_NO_DISCARD")) {
@@ -954,8 +957,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xe350000000000000ull, 0xfff0000000000000ull)) {  // CONT
         sp(&c->body, "    pc = pcnt[pcnt_n - 1]; continue;\n");
     } else if (OPM(0xf0f0000000000000ull, 0xfff8000000000000ull) || OPM(0x50b0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0xef98000000000000ull, 0xfff8000000000000ull)) {
-        // DEPBAR / NOP / MEMBAR
+               OPM(0xef98000000000000ull, 0xfff8000000000000ull) || OPM(0x50e0000000000000ull, 0xfff8000000000000ull)) {
+        // DEPBAR / NOP / MEMBAR / VOTE.VTG: a vote variant of the vertex / tessellation / geometry stages, with a mode (r, a,
+        // ra) and a 24-bit immediate and no register to write. Eden and yuzu leave it empty too (a stub that only logs); two of
+        // PICROSS S+'s vertex shaders have one, and without it they would not translate (every draw was skipped)
     } else if (OPM(0xe00000000000ff00ull, 0xff0000400000ff00ull) || OPM(0xe000004000000000ull, 0xff00004000000000ull)) {
         // IPA: interpolate fragment input
         bool idx = bits(w, 38, 1);
