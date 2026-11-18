@@ -39,6 +39,15 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   `OpenSaveDataFileSystem` with another title's program id in the attribute (what S2 would send to read S's saves) mounts
   that title's folder read-only, or returns ResultTargetNotFound (for S4; no title here calls it).
 
+- PICROSS S4, S5, S6, S7 and S8 have manifests. Each was installed here (prepare, generate, compile, about four minutes)
+  and started to its title screen: 60 fps, no fatal error, no unimplemented call, in a scratch data root. S4 to S6 and
+  S8 use the same `sdk` and `subsdk0` as S; **S7's are different** (a newer SDK), which works because the sdk's import
+  of `nninitStartup` and the unwinder's resume function are found by what they are (`loader_import_slot`,
+  `fix-exception-resume.py`), not by address. S8 has no update package (the base game is the whole game; `prepare.py`
+  takes a manifest without `update_id`). The exception landings of each were derived by matching S's two patched
+  functions in its `main`; the same method reproduces S2's and S3's manifests exactly. Nothing past the title screen
+  has been played on S4 to S8.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
@@ -110,6 +119,18 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 3. Finish the launcher: set a game up from the start screen (it still has the base project's setup flow), tell the user
    why a card cannot be played, and test the cards with a gamepad.
 4. The cleanup above, then Windows.
+
+## PICROSS S+ (not supported yet)
+
+An older build (its `sdk`, `subsdk0` and `main` all differ; SDK of the 2019 generation), manifest kept out of
+`titles/` until it runs (id `0100d7b01ae58000`, update `0100d7b01ae58800` v65536, main build ID `5eb832c8...`). With the
+generic fixes in this commit it generates, compiles and starts, then stops: the game throws a C++ exception during
+startup (`f_70001b79d4` in `main` calls `__cxa_throw`, right after `aoc:u` cmd 50) and the unwinder finds no handler, so
+`__cxa_throw` falls into `__cxa_begin_catch` and faults. Not known yet: whether the exception comes from a service
+answer the older SDK reads differently (the `aoc:u` / `ectx:aw` replies are the first suspects), or from a landing
+patch S+ needs (S's two sites are not in its `main`: the code differs). Also: `rtld` normally sets
+`nn::ro::detail::g_pLookupGlobalManualFunctionPointer`; `boot()` now gives it a scratch word. Its DLC packages
+(`Picross e2` to `e9`) are not handled at all.
 
 ## What to test and watch for
 

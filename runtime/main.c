@@ -159,6 +159,11 @@ static void boot(const char *root) {
     char why[512];
     if (!gamelib_load(root, why, sizeof why)) FATAL("%s\n", why);
     loader_load(exefs);
+    {   // What rtld sets up for the sdk's nn::ro: the place its LookupGlobalManual function pointer goes. The sdk of
+        // PICROSS S+ initialises nn::ro itself and stores through this (null without rtld: a crash at start).
+        uint64_t *slot = (uint64_t *)loader_find_symbol("_ZN2nn2ro6detail36g_pLookupGlobalManualFunctionPointerE");
+        if (slot && !*slot) *slot = (uint64_t)hle_alloc(8);
+    }
     { extern void settings_load(void); settings_load(); }
     kernel_init();
     dispatch_init();
