@@ -70,8 +70,31 @@ bool settings_language_supported(int index) {
 // -> our indices. Portuguese (Portugal) is served as Brazilian Portuguese, the one Portuguese in the list.
 static const int8_t k_flag_to_index[16] = {2, 3, 1, 4, 6, 9, 8, 7, 10, 5, 15, 11, 12, 14, 13, 15};
 
+// The add-on content the game's title.json lists ("addons": [1, 2, ...], the importer found their packages): aoc:u
+static uint32_t g_addons[64];
+static int g_addon_count;
+
+int settings_addons(const uint32_t **list) {
+    *list = g_addons;
+    return g_addon_count;
+}
+
+static void load_addons(const char *text) {
+    g_addon_count = 0;
+    const char *k = strstr(text, "\"addons\"");
+    if (!k || !(k = strchr(k, '['))) return;
+    for (k++; g_addon_count < 64 && *k && *k != ']'; ) {
+        char *end;
+        unsigned long v = strtoul(k, &end, 10);
+        if (end == k) { k++; continue; }
+        g_addons[g_addon_count++] = (uint32_t)v;
+        k = end;
+    }
+}
+
 void settings_game_languages(const char *game_root) {
     g_game_languages = 0;
+    g_addon_count = 0;
     char path[1100], text[2048] = {0};
     snprintf(path, sizeof path, "%s/title.json", game_root);
     FILE *f = fopen(path, "rb");
@@ -79,6 +102,7 @@ void settings_game_languages(const char *game_root) {
     size_t n = fread(text, 1, sizeof text - 1, f);
     fclose(f);
     text[n] = 0;
+    load_addons(text);
     const char *k = strstr(text, "\"language_flags\"");
     if (!k || !(k = strchr(k + 16, ':'))) return;
     for (k++; *k == ' ' || *k == '"'; k++) {}

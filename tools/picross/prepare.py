@@ -109,6 +109,18 @@ def find_packages(folder):
     return games[0]
 
 
+def addon_indices(folder, base_id):
+    """The add-on indices installed beside the game. A DLC package's title ID is the game's with the 12 low bits an index
+    and the rest one above it (PICROSS S+ 0100D7B01AE58000: Picross e2 is 0100D7B01AE59001). The puzzles themselves are
+    in the game's own RomFS: the package is only the entitlement (its data NCA is a banner text), which aoc:u reports."""
+    want, found = (int(base_id, 16) >> 12) + 1, set()
+    for nsp in sorted(folder.glob("*.nsp")):
+        for name in pfs0_names(nsp):
+            if name.endswith(".tik") and int(name[:16], 16) >> 12 == want and int(name[:16], 16) & 0xfff:
+                found.add(int(name[:16], 16) & 0xfff)
+    return sorted(found)
+
+
 def find_hactool(override):
     if override:
         tool = shutil.which(override)
@@ -282,6 +294,9 @@ def prepare(args):
         control = (content_nca(update, update_meta, CONTENT_CONTROL) if args.update else None) \
             or content_nca(base, base_meta, CONTENT_CONTROL)
         info = dict(title)
+        if getattr(args, "addons", None):
+            info["addons"] = args.addons
+            print(f"Add-on content: {len(args.addons)} package(s)", flush=True)
         if control:
             icons = work / "control"
             step(6, "Reading the game's icon and artwork")
@@ -313,6 +328,7 @@ def resolve_folder(args):
     step(1, "Looking for the game's packages")
     title, args.base, args.update = find_packages(args.folder)
     args.output = args.games / title["slug"]
+    args.addons = addon_indices(args.folder, title["base_id"])
     if not args.prod_keys:  # beside the packages, else where Switch tools keep it
         args.prod_keys = next((k for k in (args.folder / "prod.keys", Path.home() / ".switch" / "prod.keys")
                                if k.is_file()), None)

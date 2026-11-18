@@ -247,7 +247,14 @@ been played. What it took, in order:
   (a plain EXIT still ends the program, an `FCSM_TR` one does not); its pinned reference commit was missing from this
   repository, so run it as `GLSL=0 REF=HEAD tools/test_translate.sh 16000 8 msl` (needs a clang build only; the sampled
   differences are all programs with those two instructions).
-Its DLC packages (`Picross e2` to `e9`) are not handled at all. S+ comes last on the start screen (the cards sort "+" after
+Its DLC (`Picross e2` to `e9`) are entitlements only: the puzzles (`Title_E2`..`E9`, `IdxRes_Unlock_Aoc`) are in the game's
+own RomFS and each package's data NCA is a 322-byte text banner. The importer lists the packages it finds beside the
+game as `"addons": [1..8]` in `title.json` (`addon_indices()` in prepare.py; id = game's with the low 12 bits cleared + 0x1000
++ index) and `aoc:u` reports them (count / list / base id). Seen: all eight listed in a run (the game asked "8 of 8");
+a game imported before this needs a re-import (or `"addons"` added by hand). An unowned DLC's "go to the store" opens
+the Shop applet (id 0x14) and the game aborted: it wants a 0x1010-byte output storage back (am.c now gives that;
+seen working by the user with an empty save and no add-ons: Yes returns to the menu, no crash). The game keeps an unlocked DLC
+in its save, so removing a package later does not lock it again (test the shop with `PICRECOMP_DATA_ROOT` pointing at a fresh folder). S+ comes last on the start screen (the cards sort "+" after
 the digits).
 
 ## What to test and watch for

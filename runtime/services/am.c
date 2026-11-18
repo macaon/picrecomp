@@ -175,7 +175,11 @@ static void library_applet_accessor(Service *s, IpcReq *req, IpcResp *resp) {
         applet_finish(a);
         break;
     case 30: break;                                              // GetResult: success
-    case 101: case 104: ipc_return_object(resp, new_am_storage(NULL, 0x1000)); break;  // PopOutData / PopInteractiveOutData
+    case 101: case 104:  // PopOutData / PopInteractiveOutData
+        // The shop (id 0x14, opened by an unowned DLC's "go to the store?"): the game checks that the storage it gets
+        // back is 0x1010 bytes (sdk f_700c2f989c in S+) and aborts with the result otherwise. Zeros: nothing bought.
+        ipc_return_object(resp, new_am_storage(NULL, a->id == 0x14 ? 0x1010 : 0x1000));
+        break;
     case 105: case 106: resp->copy_handles[resp->ncopy++] = a->ev_r; break;  // GetPopOutDataEvent / ...InteractiveInDataEvent
     case 110: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;    // NeedsToExitProcess
     default: break;  // (PushInData and the rest: accepted, ignored)
