@@ -121,8 +121,7 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
   ResultTargetNotFound), which is what the SDK's `IsSaveDataExisting` / `MountSaveDataReadOnly` need (read in Ghidra).
 
 - Pick another game card on the start screen: the window should stay and go straight into that game (checked by the
-  user with the cards; also tested with `PICRECOMP_SWITCH_TO`). The validation layer still logs a few one-pixel copy clamps at the
-  deepest mip level of a scaled image after a reboot (harmless so far).
+  user with the cards; also tested with `PICRECOMP_SWITCH_TO`). The Vulkan validation layer logs nothing after a switch (S to S2, checked).
 
 - Run `tools/picross/play.sh .picrecomp/prepared-game` from a terminal and play through a few puzzles, quitting and
   relaunching once to check that progress is kept.
