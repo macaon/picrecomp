@@ -4,6 +4,7 @@
 
 #include "../kernel.h"
 #include "nvn.h"
+#include "../settings.h"
 
 void renderer_sync(void);
 
@@ -12,6 +13,9 @@ static uint64_t next_debug_id = 1;
 // ================================================================== device
 // NVNdeviceInfo -> value
 static uint32_t device_integer(uint32_t which) {
+    // the API minor version a game is told: 207 unless its manifest says it was built for a newer driver
+    // ("nvn_api_minor": PICROSS LORD OF THE NAZARICK checks for more than 309 and traps otherwise)
+    if (which == 1) return (uint32_t)settings_title_int("nvn_api_minor", 207);
     static const uint32_t v[] = {
         [0] = 53, [1] = 207,           // API version
         [2] = 14, [3] = 65536, [4] = 256, [5] = 8, [6] = 16, [7] = 4, [8] = 16, [9] = 32,

@@ -41,4 +41,5 @@ const char *settings_language_name(void);
 // language is offered. settings_language() then never serves one the game lacks: the host language or the setting
 // falls back to English (US), else the game's first.
 void settings_game_languages(const char *game_root);
+int settings_title_int(const char *key, int def);  // a number from the game's title.json, or def
 bool settings_language_supported(int index);  // index into g_language_codes (LANG_AUTO is always)
