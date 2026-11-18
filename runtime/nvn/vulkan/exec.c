@@ -2983,11 +2983,20 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             for (int k = 0; k < 16; k++) LOG(" %.4g", v[k]);
             LOG("\n");
         }
-        for (int c = 0; c < 18; c++) {
-            if (!((pr->fi->cbuf_mask >> c) & 1) || !st.ubuf[1][c].addr) continue;
-            const float *u = (const float *)(uintptr_t)st.ubuf[1][c].addr;
-            LOG("[draw]   fcb%d %llx size %u:", c, (unsigned long long)st.ubuf[1][c].addr, (unsigned)st.ubuf[1][c].size);
-            for (int k = 0; k < 96 && k * 4 < (int)st.ubuf[1][c].size; k++) LOG(" %.6g", u[k]);
+        for (int c = 3; c < 18; c++) {  // (shader cbuf k is user binding k - 3)
+            if (!((pr->fi->cbuf_mask >> c) & 1)) continue;
+            if (!st.ubuf[1][c - 3].addr) { LOG("[draw]   fcb%d unbound\n", c); continue; }
+            const float *u = (const float *)(uintptr_t)st.ubuf[1][c - 3].addr;
+            LOG("[draw]   fcb%d %llx size %u:", c, (unsigned long long)st.ubuf[1][c - 3].addr, (unsigned)st.ubuf[1][c - 3].size);
+            for (int k = 0; k < 96 && k * 4 < (int)st.ubuf[1][c - 3].size; k++) LOG(" %.6g", u[k]);
+            LOG("\n");
+        }
+        for (int c = 3; c < 18; c++) {  // (shader cbuf k is user binding k - 3)
+            if (!((pr->vi->cbuf_mask >> c) & 1)) continue;
+            if (!st.ubuf[0][c - 3].addr) { LOG("[draw]   vcb%d unbound\n", c); continue; }
+            const float *u = (const float *)(uintptr_t)st.ubuf[0][c - 3].addr;
+            LOG("[draw]   vcb%d %llx size %u:", c, (unsigned long long)st.ubuf[0][c - 3].addr, (unsigned)st.ubuf[0][c - 3].size);
+            for (int k = 0; k < 96 && k * 4 < (int)st.ubuf[0][c - 3].size; k++) LOG(" %.6g", u[k]);
             LOG("\n");
         }
     }
@@ -3179,7 +3188,31 @@ static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t fl
         vkCmdResolveImage(cb, s->image, VK_IMAGE_LAYOUT_GENERAL, d->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rv);
         return;
     }
-    if (s->samples != d->samples) return;
+    if (s->samples > 1 && d->samples == 1 && s->format == d->format && !((sa | da) & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
+        // a multisampled target resolved into a texture of another size (KEMONO FRIENDS PICROSS: its 2x 1080p scene into
+        // the texture the output pass samples, which the internal resolution scales): resolve into a single-sample
+        // image of the source's size, then scale that into the target
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = s->format,
+                                .extent = {(uint32_t)sw, (uint32_t)sh, 1}, .mipLevels = 1, .arrayLayers = 1,
+                                .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VkImage tmp;
+        VmaAllocation tmem;
+        VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &tmp, &tmem, NULL));
+        vk_image_init_layout(cb, tmp, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageResolve rv = {.srcSubresource = {sa, slv, sly, 1}, .srcOffset = {sx0, sy0, 0},
+                             .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffset = {0, 0, 0},
+                             .extent = {(uint32_t)sw, (uint32_t)sh, 1}};
+        vkCmdResolveImage(cb, s->image, VK_IMAGE_LAYOUT_GENERAL, tmp, VK_IMAGE_LAYOUT_GENERAL, 1, &rv);
+        vk_full_barrier(cb);
+        VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {sw, sh, 1}},
+                          .dstSubresource = {da, dlv, dly, 1}, .dstOffsets = {{dx0, dy0, 0}, {dx0 + dw, dy0 + dh, 1}}};
+        vkCmdBlitImage(cb, tmp, VK_IMAGE_LAYOUT_GENERAL, d->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
+        vk_defer_image(tmp, tmem);
+        return;
+    }
+    if (s->samples != d->samples) { if (g_debug_frame) LOG("[copytex] dropped: %u samples -> %u samples, %dx%d -> %dx%d\n", (unsigned)s->samples, (unsigned)d->samples, sw, sh, dw, dh); return; }
     if (sw == dw && sh == dh && s->format == d->format) {
         VkImageCopy c = {.srcSubresource = {sa, slv, sly, 1}, .srcOffset = {sx0, sy0, 0}, .dstSubresource = {da, dlv, dly, 1},
                          .dstOffset = {dx0, dy0, 0}, .extent = {(uint32_t)sw, (uint32_t)sh, 1}};

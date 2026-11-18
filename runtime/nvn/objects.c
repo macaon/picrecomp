@@ -706,6 +706,17 @@ NVN(nvnQueuePresentTexture) {
     int i = (int)A(2);
     static int first = 1;  // (milestone marker: the game got as far as showing a frame)
     if (first) { first = 0; LOG("[nvn] first nvnQueuePresentTexture (window %llx, texture %d of %d)\n", A(1), i, w->num); }
+    // A present is at most one a vsync: on the console it waits for the display. PICRECOMP's presents don't, and a game
+    // that doesn't wait for the vsync itself (KEMONO FRIENDS PICROSS: no vsync event, nothing blocking) runs at
+    // 1000 fps, with the clock-driven parts of its start-up gone in a second. A game that does wait is a frame
+    // apart already: the 1 ms of slack keeps a vsync timer's jitter from costing it a frame.
+    {
+        static uint64_t last_present;
+        uint64_t now = plat_now_ns();
+        const uint64_t period = 16666667 - 1000000;
+        if (last_present && now < last_present + period) plat_sleep_until_ns(last_present + period), now = last_present + period;
+        last_present = now;
+    }
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }
 
