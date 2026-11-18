@@ -4,7 +4,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from nso import Nso
+from pad_labels import label_pads
 
 
 def patch(module, decl, *edits):
@@ -30,13 +32,31 @@ def patch(module, decl, *edits):
 root = Path(sys.argv[1]).resolve()
 sites = json.loads(Path(sys.argv[2]).read_text()).get("exception_landings")  # the title's manifest (titles/*.json)
 main, sdk = root / "lift/main", root / "lift/sdk"
-if sites and "call" in sites:
-    call = sites["call"]
+def groups(sites, kind):
+    """The manifest's sites of a kind: one group, or a list of them (a title can need several)."""
+    found = (sites or {}).get(kind, [])
+    return found if isinstance(found, list) else [found]
+
+
+# A "call" group ({"return", "landing"}, a blr; plus "callee" for a direct bl) resumes at the landing pad itself (the
+# unwinder has set x0 and x1): the pad gets its label first (pad_labels.py). With "resume" (S, S+, Kemono: the pad is one
+# jump to a shared handler) it goes there. "catch" groups are the older form of a direct call, whose pad code is
+# labelled by editing the text.
+label_pads(main, root / "exefs/main", 0x7000000000, "main",
+           [int(c["landing"], 16) for c in groups(sites, "call") if "resume" not in c])
+for call in groups(sites, "call"):
     A = {k: v[2:] for k, v in call.items()}
+    after = f'goto L_{A["resume"]};' if "resume" in A else f'goto L_{A["landing"]};'
+    if "callee" in A:  # a direct call (bl): the call itself, with the landing pad registered
+        patch(main, '_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *));',
+              (f'c->x[30] = 0x{A["return"]}ull; f_{A["callee"]}(c);',
+               f'c->x[30] = 0x{A["return"]}ull;\n'
+               f'    if (rt_invoke_with_landing(c, 0x{A["landing"]}ull, f_{A["callee"]})) {{ {after} }}'))
+        continue
     patch(main, '_Bool rt_call_with_landing(Cpu *c, uint64_t pc);',
           (f'c->x[30] = 0x{A["return"]}ull; rt_dispatch(c);',
            f'c->x[30] = 0x{A["return"]}ull;\n'
-           f'    if (rt_call_with_landing(c, 0x{A["landing"]}ull)) goto L_{A["resume"]};'))
+           f'    if (rt_call_with_landing(c, 0x{A["landing"]}ull)) {{ {after} }}'))
 
 
 def sdk_resume_function(path):
@@ -60,8 +80,7 @@ def sdk_resume_function(path):
 resume, before = sdk_resume_function(root / "exefs/sdk")
 patch(sdk, '_Noreturn void rt_resume_landing(Cpu *c);',
       (before + '    return;\n}\nvoid ' + resume, before + '    rt_resume_landing(c);\n}\nvoid ' + resume))
-if sites and "catch" in sites:
-    catch = sites["catch"]
+for catch in groups(sites, "catch"):
     B = {k: v[2:] for k, v in catch.items()}
     patch(main, '_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *));',
           (f'c->x[30] = 0x{B["return"]}ull; f_{B["callee"]}(c);',
