@@ -517,6 +517,7 @@ static void load_background(GpuDevice dev) {
 struct Card { std::string root, name; uint64_t tex = 0; };
 static std::vector<Card> g_cards;
 static size_t g_card;  // the selected one; g_root is its folder
+static bool g_pad_last;  // the last button pressed was a controller's
 static bool g_all_added;  // every game the importer knows (titles/*.json) has a card: nothing left for "+" to add
 
 static uint64_t load_icon(const std::string &path) {
@@ -1044,10 +1045,34 @@ extern "C" void launcher_run(const char *root) {
             status = check_game_files(g_root);
             if (!status.empty()) { g_bg = 0; bind_capture_cancel(); settings_save(); page = SETUP; }
         }
+        {   // (test) PICRECOMP_LAUNCHER_KEYS="frame:<SDL key name>,...": a key pressed on the start screen at that frame, held two
+            static const char *next = getenv("PICRECOMP_LAUNCHER_KEYS");
+            static long tick, release_at = -1;
+            static SDL_Scancode held = SDL_SCANCODE_UNKNOWN;
+            tick++;
+            auto push = [&](SDL_Scancode sc, bool down) {
+                SDL_Event k = {};
+                k.key.windowID = SDL_GetWindowID(win);
+                k.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                k.key.scancode = sc, k.key.down = down, k.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+                SDL_PushEvent(&k);
+            };
+            long at;
+            char name[64];
+            if (held != SDL_SCANCODE_UNKNOWN && tick >= release_at) push(held, false), held = SDL_SCANCODE_UNKNOWN;
+            if (next && *next && held == SDL_SCANCODE_UNKNOWN && sscanf(next, "%ld:%63[^,]", &at, name) == 2 && tick >= at) {
+                held = SDL_GetScancodeFromName(name);
+                if (held != SDL_SCANCODE_UNKNOWN) push(held, true), release_at = tick + 2;
+                next = strchr(next, ',');
+                if (next) next++;
+            }
+        }
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (page == SETTINGS && bind_capture_event(&e)) continue;  // (waiting for a new binding: controls_ui.mm)
             if (!launcher_pad_event(e)) ImGui_ImplSDL3_ProcessEvent(&e);
+            if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) g_pad_last = true;  // (the hint line names that device's buttons)
+            else if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) g_pad_last = false;
             if (e.type == SDL_EVENT_QUIT) exit(0);
         }
         // extraction finished: re-check, load the background
@@ -1115,14 +1140,15 @@ extern "C" void launcher_run(const char *root) {
             ImGui::SetScrollX(0);  // (the start screen never scrolls; a stray nav move mustn't shift it)
             ImGui::SetScrollY(0);
             float x0 = 90 * s;
-            ImGui::SetCursorPos(ImVec2(x0, 120 * s));
             ImGui::PushFont(g_font_title);
-            if (page == MAIN) {  // gold to orange, shadowed (not behind the Settings / Game Files windows)
+            if (page == MAIN) {  // gold to orange, shadowed, top middle (not behind the Settings / Game Files windows)
                 const char *t = "PicRecomp";
+                ImVec2 tsz = ImGui::CalcTextSize(t);
+                ImGui::SetCursorPos(ImVec2((ds.x - tsz.x) * 0.5f, 44 * s));
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 text_fx(ImGui::GetWindowDrawList(), ImGui::GetFont(), ImGui::GetFontSize(), p, IM_COL32(255, 232, 120, 255),
                         IM_COL32(255, 138, 48, 255), t, 3 * s);
-                ImGui::Dummy(ImGui::CalcTextSize(t));
+                ImGui::Dummy(tsz);
             }
             ImGui::PopFont();
             ImGui::SetCursorPos(ImVec2(x0, 285 * s));
@@ -1131,22 +1157,39 @@ extern "C" void launcher_run(const char *root) {
             static bool typed_before;
             bool typing = typed_before || ui_text_busy();
 
-            if (page == MAIN) {  // the games: the Switch's icon, the name under it, gold when chosen; "+" adds one
+            // The main page: the games are the menu. The chosen card follows the cursor (d-pad, arrows, mouse click); A /
+            // Enter / Start play it, Select / - / F1 open Settings, "+" adds a game; SETTINGS and QUIT are small links
+            // at the lower right (mouse, or down from the cards).
+            static Page last_page = MAIN;
+            bool pad_hint = g_pad_last;  // the last input was a controller's (the hint line names its buttons)
+            bool refocus = last_page != MAIN;  // (back from another page: the cursor returns to the chosen card)
+            last_page = page;
+            static bool first_frame = true;
+            refocus |= first_frame;
+            first_frame = false;
+            bool launch = false;
+            if (page == MAIN) {
                 // At most 5 to a row (the "+" counts), more wrap to a second row on the same columns. "+" is left out
-                // when every supported game is already here.
-                float cs = 150 * s, gap = 24 * s, row_h = cs + 36 * s + 18 * s;
+                // when every supported game is already here. The block is centred under the title.
                 size_t slots = g_cards.size() + (g_all_added ? 0 : 1), per_row = 5, cols = std::min(slots, per_row);
-                float cx = ds.x - (float)cols * cs - (float)(cols - 1) * gap - 70 * s, cy = 250 * s;
+                size_t rows = (slots + per_row - 1) / per_row;
+                float cs = (rows > 1 ? 150 : 184) * s, gap = (rows > 1 ? 26 : 30) * s, row_gap = 18 * s, row_h = cs + 36 * s + row_gap;
+                float gw = (float)cols * cs + (float)(cols - 1) * gap, gh = (float)rows * row_h - row_gap;
+                float top = 150 * s, bottom = ds.y - 150 * s;
+                float cx = (ds.x - gw) * 0.5f, cy = top + fmaxf(0, (bottom - top - gh) * 0.5f);
                 ImDrawList *dl = ImGui::GetWindowDrawList();
                 for (size_t i = 0; i < slots; i++) {
                     bool plus = i == g_cards.size();
-                    ImGui::SetCursorPos(ImVec2(cx + (float)(i % per_row) * (cs + gap), cy + (float)(i / per_row) * row_h));
+                    size_t in_row = std::min(per_row, slots - i / per_row * per_row);  // (each row is centred on its own)
+                    float row_x = cx + (gw - ((float)in_row * cs + (float)(in_row - 1) * gap)) * 0.5f;
+                    ImGui::SetCursorPos(ImVec2(row_x + (float)(i % per_row) * (cs + gap), cy + (float)(i / per_row) * row_h));
                     ImVec2 at = ImGui::GetCursorScreenPos();
                     ImGui::PushID((int)i);
                     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
+                    if (refocus && (plus ? g_cards.empty() : i == g_card)) ImGui::SetKeyboardFocusHere();
                     bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + 36 * s), ImGuiButtonFlags_EnableNav);
                     ImGui::PopStyleColor();
-                    bool hot = ImGui::IsItemFocused() || ImGui::IsItemHovered(), sel = !plus && i == g_card;
+                    bool focused = ImGui::IsItemFocused(), hot = focused || ImGui::IsItemHovered(), sel = !plus && i == g_card;
                     ImGui::PopID();
                     if (plus) {  // a blank card with a +
                         ImVec2 br(at.x + cs, at.y + cs), m((at.x + br.x) * 0.5f, (at.y + br.y) * 0.5f);
@@ -1165,13 +1208,14 @@ extern "C" void launcher_run(const char *root) {
                         }
                         continue;
                     }
-                    if (clicked && !sel && !busy) {
+                    if ((focused || clicked) && !sel && !busy) {  // the cursor chooses (a click chooses, a second one plays)
                         g_card = i;
                         g_root = g_cards[i].root;
                         status = check_game_files(g_root);
                         g_bg = 0;
                         if (status.empty()) load_background(dev);
-                    }
+                        sel = true;
+                    } else if (clicked && sel && !busy) launch = status.empty();
                     ImVec2 br(at.x + cs, at.y + cs);
                     if (g_cards[i].tex) dl->AddImageRounded((ImTextureID)g_cards[i].tex, at, br, ImVec2(0, 0), ImVec2(1, 1),
                                                             sel || hot ? IM_COL32_WHITE : IM_COL32(200, 200, 210, 255), 14 * s);
@@ -1184,58 +1228,75 @@ extern "C" void launcher_run(const char *root) {
                                 g_cards[i].name.c_str());
                     ImGui::PopFont();
                 }
-            }
-            if (page == MAIN) {
-                {  // the four items close together, the block anchored where QUIT always was (the gap to the status
-                   // line stays)
-                    ImGui::PushFont(g_font_menu);
-                    float h = ImGui::CalcTextSize("A").y, sp = ImGui::GetStyle().ItemSpacing.y;
+                // lower right: SETTINGS and QUIT as small links (the cards are the menu)
+                auto link = [&](const char *label, float right) {
+                    ImGui::PushFont(g_font_small);
+                    ImVec2 sz = ImGui::CalcTextSize(label), p(ImGui::GetWindowPos().x + right - sz.x, ImGui::GetWindowPos().y + ds.y - 70 * s);
+                    ImGui::SetCursorScreenPos(p);
+                    ImGui::PushID(label);
+                    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
+                    bool c = ImGui::InvisibleButton("##link", sz, ImGuiButtonFlags_EnableNav);
+                    ImGui::PopStyleColor();
+                    bool hot = ImGui::IsItemFocused() || ImGui::IsItemHovered();
+                    ImGui::PopID();
+                    ImU32 col = hot ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 230), col_b = hot ? IM_COL32(255, 160, 50, 255) : col;
+                    text_fx(dl, ImGui::GetFont(), ImGui::GetFontSize(), p, col, col_b, label, 1.5f * s);
+                    if (hot) dl->AddLine(ImVec2(p.x, p.y + sz.y), ImVec2(p.x + sz.x, p.y + sz.y), col, 1.5f * s);
                     ImGui::PopFont();
-                    auto pitch = [&](float gap) { return h + 6 + gap * h + (gap >= 0 ? 2 : 1) * sp; };
-                    g_menu_gap = -0.18f;
-                    ImGui::SetCursorPosY(285 * s + 3 * pitch(0.35f) - 3 * pitch(g_menu_gap));
-                }
-                bool hov = false;
-                const char *label = "PLAY";
-                ImGui::SetCursorPosX(x0);
-                static bool focused_once;
-                if (!focused_once) { ImGui::SetKeyboardFocusHere(); focused_once = true; }
-                ImVec2 play_at = ImGui::GetCursorScreenPos();
-                bool pressed = menu_item(label, status.empty(), &hov);
-                if (status.empty()) {  // PLAY twinkles now and then while the game is ready
-                    ImGui::PushFont(g_font_menu);
-                    float w = ImGui::CalcTextSize("PLAY").x, h = ImGui::CalcTextSize("PLAY").y;
+                    return c;
+                };
+                ImGui::PushFont(g_font_small);
+                float quit_w = ImGui::CalcTextSize("QUIT").x;
+                ImGui::PopFont();
+                float right = ds.x - 60 * s;
+                bool quit = link("QUIT", right);
+                bool settings_link = link("SETTINGS", right - quit_w - 36 * s);
+                if (quit) exit(0);
+                // the hint line, centred: the buttons that play and open Settings (those of the last device used)
+                {
+                    ImGui::PushFont(g_font_small);
+                    struct Hint { const char *key, *what; };
+                    Hint hints[2] = {{pad_hint ? "Start" : "Enter", "Play"}, {pad_hint ? "Select" : "F1", "Settings"}};
+                    int nh = status.empty() ? 2 : 1;
+                    float total = 0, sp = 44 * s, kw = 10 * s;
+                    for (int i = 2 - nh; i < 2; i++)
+                        total += ImGui::CalcTextSize(hints[i].key).x + kw + ImGui::CalcTextSize(hints[i].what).x + (i < 1 ? sp : 0);
+                    float x = ImGui::GetWindowPos().x + (ds.x - total) * 0.5f, y = ImGui::GetWindowPos().y + ds.y - 70 * s;
+                    for (int i = 2 - nh; i < 2; i++) {
+                        ImVec2 ks = ImGui::CalcTextSize(hints[i].key);
+                        dl->AddText(ImVec2(x, y), IM_COL32(255, 214, 64, 255), hints[i].key);
+                        dl->AddText(ImVec2(x + ks.x + kw, y), IM_COL32(235, 238, 250, 235), hints[i].what);
+                        x += ks.x + kw + ImGui::CalcTextSize(hints[i].what).x + sp;
+                    }
                     ImGui::PopFont();
-                    float t = (float)ImGui::GetTime(), ph = fmodf(t, 3.6f), ph2 = fmodf(t + 0.45f, 3.6f);
-                    float k1 = ph < 0.9f ? sinf(ph / 0.9f * 3.14159265f) : 0, k2 = ph2 < 0.7f ? sinf(ph2 / 0.7f * 3.14159265f) : 0;
-                    ImDrawList *dl = ImGui::GetWindowDrawList();
-                    sparkle(dl, ImVec2(play_at.x + w + h * 0.05f, play_at.y + h * 0.22f), h * 0.2f, k1, t * 0.6f);
-                    sparkle(dl, ImVec2(play_at.x + w - h * 0.32f, play_at.y + h * 0.08f), h * 0.11f, k2 * 0.8f, -t * 0.8f);
                 }
-                ImGui::SetWindowFontScale(1.0f);
-                // first PLAY ever: the aspect ratio question, then how to reach our menu, then the game
-                if (pressed) {
-                    if (!g_settings.aspect_asked) ImGui::OpenPopup("##aspect");
-                    else if (!g_settings.menu_tip_seen) ImGui::OpenPopup("##menutip");
-                    else play = true;
+                bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+                if (!popup && status.empty() && !busy && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) launch = true;
+                bool want_settings = settings_link;
+                if (!popup && (ImGui::IsKeyPressed(ImGuiKey_GamepadBack, false) || ImGui::IsKeyPressed(ImGuiKey_F1, false) ||
+                               ImGui::IsKeyPressed(ImGuiKey_Minus, false)))
+                    want_settings = true;
+                {
+                    bool pressed = launch;
+                    // first PLAY ever: the aspect ratio question, then how to reach our menu, then the game
+                    if (pressed) {
+                        if (!g_settings.aspect_asked) ImGui::OpenPopup("##aspect");
+                        else if (!g_settings.menu_tip_seen) ImGui::OpenPopup("##menutip");
+                        else play = true;
+                    }
+                    if (g_tip_test) ImGui::OpenPopup(g_settings.aspect_asked ? "##menutip" : "##aspect"), g_tip_test = false;
+                    if (aspect_prompt(s)) {
+                        if (g_settings.menu_tip_seen) play = true;
+                        else ImGui::OpenPopup("##menutip");
+                    }
+                    if (menu_tip(s)) play = true;
                 }
-                if (g_tip_test) ImGui::OpenPopup(g_settings.aspect_asked ? "##menutip" : "##aspect"), g_tip_test = false;
-                if (aspect_prompt(s)) {
-                    if (g_settings.menu_tip_seen) play = true;
-                    else ImGui::OpenPopup("##menutip");
-                }
-                if (menu_tip(s)) play = true;
-                ImGui::SetCursorPosX(x0);
-                if (g_refocus == SETTINGS) ImGui::SetKeyboardFocusHere(), g_refocus = MAIN;  // (back from Settings: it
-                if (menu_item("SETTINGS", true)) {                                             //  stays selected)
+                if (want_settings) {
                     static bool opened;
                     menu_tabs_focus(!opened);  // (first time this session: Prelaunch; later: the selected tab)
                     opened = true;
                     page = SETTINGS;
                 }
-                ImGui::SetCursorPosX(x0);
-                if (menu_item("QUIT", true)) exit(0);
-                g_menu_gap = 0.35f;
             } else if (page == ADD) {
                 // (no title here and a tight line spacing: the ten steps, the bar and the buttons fit without scrolling)
                 ImGui::SetCursorPos(ImVec2(x0, 56 * s));
