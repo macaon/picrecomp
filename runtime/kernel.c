@@ -108,7 +108,7 @@ static bool kwait(int64_t timeout_ns, const struct timespec *ts) {
 
 // ------------------------------------------------------------------ memory map
 typedef struct { uint64_t addr, size; uint32_t type, perm; } Region;
-static Region regions[1024];
+static Region regions[4096];
 static int nregions;
 static uint64_t heap_size;
 static uint64_t tls_next = TLS_BASE;
@@ -124,12 +124,51 @@ int kernel_data_regions(uint64_t *addr, uint64_t *size, int max) {
     return n;
 }
 
-static void region_add(uint64_t addr, uint64_t size, uint32_t type, uint32_t perm) {
-    if (nregions == 1024) FATAL("too many regions\n");
-    plat_commit(addr, size);  // back it before the OS writes there (Windows: file reads into the heap)
+static void region_insert(uint64_t addr, uint64_t size, uint32_t type, uint32_t perm) {
     int i = nregions++;
     while (i > 0 && regions[i - 1].addr > addr) { regions[i] = regions[i - 1]; i--; }
     regions[i] = (Region){addr, size, type, perm};
+}
+
+static void region_add(uint64_t addr, uint64_t size, uint32_t type, uint32_t perm) {
+    if (type == 0x7) {  // physical memory, mapped a page at a time (PICROSS S+'s SDK: by the hundred): touching pieces are one region
+        for (int i = 0; i < nregions; i++) {
+            Region *r = &regions[i];
+            if (r->type == type && r->perm == perm && r->addr + r->size == addr) {
+                plat_commit(addr, size);
+                r->size += size;
+                if (i + 1 < nregions && regions[i + 1].type == type && regions[i + 1].perm == perm && r->addr + r->size == regions[i + 1].addr) {
+                    r->size += regions[i + 1].size;
+                    memmove(&regions[i + 1], &regions[i + 2], (nregions - i - 2) * sizeof(Region));
+                    nregions--;
+                }
+                return;
+            }
+        }
+    }
+    if (nregions == (int)(sizeof regions / sizeof *regions)) {
+        int by_type[16] = {0};
+        for (int i = 0; i < nregions; i++) by_type[regions[i].type & 15]++;
+        for (int t = 0; t < 16; t++)
+            if (by_type[t]) fprintf(stderr, "[kernel] regions of type 0x%x: %d\n", t, by_type[t]);
+        FATAL("too many regions (adding %llx, %llx bytes, type 0x%x)\n", (unsigned long long)addr, (unsigned long long)size, type);
+    }
+    plat_commit(addr, size);  // back it before the OS writes there (Windows: file reads into the heap)
+    region_insert(addr, size, type, perm);
+}
+
+// UnmapPhysicalMemory(addr, size): what is mapped there goes, a region cut in two if only a part of it does
+static void region_unmap_physical(uint64_t addr, uint64_t size) {
+    uint64_t end = addr + size;
+    for (int i = 0; i < nregions;) {
+        Region r = regions[i];
+        if (r.type != 0x7 || r.addr + r.size <= addr || r.addr >= end) { i++; continue; }
+        memmove(&regions[i], &regions[i + 1], (nregions - i - 1) * sizeof(Region));
+        nregions--;
+        if (r.addr < addr) region_insert(r.addr, addr - r.addr, r.type, r.perm);
+        if (r.addr + r.size > end) region_insert(end, r.addr + r.size - end, r.type, r.perm);
+        i = 0;  // (inserted pieces move the table: start over, there are few of them)
+    }
 }
 
 static void region_remove(uint64_t addr) {
@@ -810,8 +849,8 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         region_add(x[0], x[1], 0x7, 3);
         x[0] = R_OK;
         break;
-    case 0x2D:  // UnmapPhysicalMemory
-        region_remove(x[0]);
+    case 0x2D:  // UnmapPhysicalMemory(addr, size)
+        region_unmap_physical(x[0], x[1]);
         x[0] = R_OK;
         break;
     case 0x32: {  // SetThreadActivity: cooperatively pause at guest safe points.
