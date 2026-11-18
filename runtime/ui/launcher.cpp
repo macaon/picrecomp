@@ -517,6 +517,7 @@ static void load_background(GpuDevice dev) {
 struct Card { std::string root, name; uint64_t tex = 0; };
 static std::vector<Card> g_cards;
 static size_t g_card;  // the selected one; g_root is its folder
+static bool g_all_added;  // every game the importer knows (titles/*.json) has a card: nothing left for "+" to add
 
 static uint64_t load_icon(const std::string &path) {
     AVFormatContext *fmt = NULL;
@@ -574,6 +575,25 @@ static void scan_cards(const std::string &current) {
         g_cards.push_back(c);
     }
     if (!found && !g_cards.empty()) g_card = 0, g_root = g_cards[0].root;  // (the folder given isn't a game)
+    // The games the importer supports are the manifests next to it (a checkout; without them "+" stays).
+    char probe[1100];
+    g_all_added = false;
+    if (rt_resource(NULL, "titles/picross-s.json", probe, sizeof probe)) {
+        std::string titles(probe, strlen(probe) - strlen("picross-s.json"));
+        int supported = 0, added = 0;
+        if (DIR *d = opendir(titles.c_str())) {
+            while (dirent *e = readdir(d)) {
+                size_t n = strlen(e->d_name);
+                if (n < 6 || strcmp(e->d_name + n - 5, ".json")) continue;
+                std::string slug = json_str(titles + e->d_name, "slug");
+                supported++;
+                for (auto &c : g_cards)
+                    if (json_str(c.root + "/title.json", "slug") == slug) { added++; break; }
+            }
+            closedir(d);
+        }
+        g_all_added = supported > 0 && added == supported;
+    }
 }
 
 // ------------------------------------------------------------------ screen
@@ -1107,12 +1127,15 @@ extern "C" void launcher_run(const char *root) {
             bool typing = typed_before || ui_text_busy();
 
             if (page == MAIN) {  // the games: the Switch's icon, the name under it, gold when chosen; "+" adds one
-                float cs = 150 * s, gap = 24 * s, n = (float)g_cards.size() + 1;
-                float cx = ds.x - n * cs - (n - 1) * gap - 70 * s, cy = 250 * s;
+                // At most 5 to a row (the "+" counts), more wrap to a second row on the same columns. "+" is left out
+                // when every supported game is already here.
+                float cs = 150 * s, gap = 24 * s, row_h = cs + 36 * s + 18 * s;
+                size_t slots = g_cards.size() + (g_all_added ? 0 : 1), per_row = 5, cols = std::min(slots, per_row);
+                float cx = ds.x - (float)cols * cs - (float)(cols - 1) * gap - 70 * s, cy = 250 * s;
                 ImDrawList *dl = ImGui::GetWindowDrawList();
-                for (size_t i = 0; i <= g_cards.size(); i++) {
+                for (size_t i = 0; i < slots; i++) {
                     bool plus = i == g_cards.size();
-                    ImGui::SetCursorPos(ImVec2(cx + (float)i * (cs + gap), cy));
+                    ImGui::SetCursorPos(ImVec2(cx + (float)(i % per_row) * (cs + gap), cy + (float)(i / per_row) * row_h));
                     ImVec2 at = ImGui::GetCursorScreenPos();
                     ImGui::PushID((int)i);
                     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));

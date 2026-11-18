@@ -48,6 +48,11 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   functions in its `main`; the same method reproduces S2's and S3's manifests exactly. Nothing past the title screen
   has been played on S4 to S8.
 
+- The start screen's game cards wrap: at most five to a row (the "+" counts), more go to a second row on the same
+  columns, and "+" is left out once every game with a manifest in `titles/` has a card (without the manifests next to
+  the program, as in a package, it stays). Seen in screenshots with 8 cards (5 + 3, no "+") and 6 (5 + 1 + "+"); moving
+  between the rows with a gamepad or the arrow keys has not been tried.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
