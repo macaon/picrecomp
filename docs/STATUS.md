@@ -35,7 +35,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - Save data is kept per title: `<data root>/save/<program id>/save_<type>/`. Before, every title shared
   `save/save_0/all.dat`, so booting S2 over S's file rewrote it. The old `save/save_<type>` is copied into PICROSS S's
-  folder on its first run (the old folder stays as a backup). Seen with scratch data roots: S and S2 each write their own.
+  folder on its first run (the old folder stays as a backup). Checked by the user for S, S2 and S3 (saves kept and separate).
   `OpenSaveDataFileSystem` with another title's program id in the attribute (what S2 would send to read S's saves) mounts
   that title's folder read-only, or returns ResultTargetNotFound (for S4; no title here calls it).
 
