@@ -1208,14 +1208,15 @@ extern "C" void launcher_run(const char *root) {
                         }
                         continue;
                     }
-                    if ((focused || clicked) && !sel && !busy) {  // the cursor chooses (a click chooses, a second one plays)
+                    if ((focused || clicked) && !sel && !busy) {  // the cursor chooses; a click chooses and plays
                         g_card = i;
                         g_root = g_cards[i].root;
                         status = check_game_files(g_root);
                         g_bg = 0;
                         if (status.empty()) load_background(dev);
                         sel = true;
-                    } else if (clicked && sel && !busy) launch = status.empty();
+                    }
+                    if (clicked && !busy) launch = status.empty();
                     ImVec2 br(at.x + cs, at.y + cs);
                     if (g_cards[i].tex) dl->AddImageRounded((ImTextureID)g_cards[i].tex, at, br, ImVec2(0, 0), ImVec2(1, 1),
                                                             sel || hot ? IM_COL32_WHITE : IM_COL32(200, 200, 210, 255), 14 * s);
@@ -1245,13 +1246,9 @@ extern "C" void launcher_run(const char *root) {
                     ImGui::PopFont();
                     return c;
                 };
-                ImGui::PushFont(g_font_small);
-                float quit_w = ImGui::CalcTextSize("QUIT").x;
-                ImGui::PopFont();
                 float right = ds.x - 60 * s;
-                bool quit = link("QUIT", right);
-                bool settings_link = link("SETTINGS", right - quit_w - 36 * s);
-                if (quit) exit(0);
+                if (link("QUIT", right)) exit(0);
+                bool settings_link = false;
                 // the hint line, centred: the buttons that play and open Settings (those of the last device used)
                 {
                     ImGui::PushFont(g_font_small);
@@ -1263,10 +1260,18 @@ extern "C" void launcher_run(const char *root) {
                         total += ImGui::CalcTextSize(hints[i].key).x + kw + ImGui::CalcTextSize(hints[i].what).x + (i < 1 ? sp : 0);
                     float x = ImGui::GetWindowPos().x + (ds.x - total) * 0.5f, y = ImGui::GetWindowPos().y + ds.y - 70 * s;
                     for (int i = 2 - nh; i < 2; i++) {
-                        ImVec2 ks = ImGui::CalcTextSize(hints[i].key);
+                        ImVec2 ks = ImGui::CalcTextSize(hints[i].key), ws = ImGui::CalcTextSize(hints[i].what);
+                        bool hot = false;
+                        if (i == 1) {  // "Settings": the mouse's way in (a click opens it)
+                            ImGui::SetCursorScreenPos(ImVec2(x, y));
+                            if (ImGui::InvisibleButton("##settings_hint", ImVec2(ks.x + kw + ws.x, ks.y))) settings_link = true;
+                            hot = ImGui::IsItemHovered();
+                            if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        }
                         dl->AddText(ImVec2(x, y), IM_COL32(255, 214, 64, 255), hints[i].key);
-                        dl->AddText(ImVec2(x + ks.x + kw, y), IM_COL32(235, 238, 250, 235), hints[i].what);
-                        x += ks.x + kw + ImGui::CalcTextSize(hints[i].what).x + sp;
+                        dl->AddText(ImVec2(x + ks.x + kw, y), hot ? IM_COL32(255, 238, 150, 255) : IM_COL32(235, 238, 250, 235), hints[i].what);
+                        if (hot) dl->AddLine(ImVec2(x, y + ks.y), ImVec2(x + ks.x + kw + ws.x, y + ks.y), IM_COL32(255, 214, 64, 255), 1.5f * s);
+                        x += ks.x + kw + ws.x + sp;
                     }
                     ImGui::PopFont();
                 }
@@ -1635,7 +1640,9 @@ extern "C" void launcher_run(const char *root) {
                 }
                 ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1), "Game files ready.");
                 ImGui::SetCursorPosX(x0);
-                ImGui::TextColored(ImVec4(0.66f, 0.76f, 0.98f, 1), "Nintendo Switch  \xc2\xb7  v1.0.0");
+                static std::string ver, ver_root;  // the game's own version (its NACP, read when it was added)
+                if (ver_root != g_root) ver_root = g_root, ver = json_str(g_root + "/title.json", "display_version");
+                if (!ver.empty()) ImGui::TextColored(ImVec4(0.66f, 0.76f, 0.98f, 1), "Game version %s", ver.c_str());
             } else {
                 ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Setting up the game files..." : g_cards.empty() ? "No game added" : status.c_str());
                 ImGui::SetCursorPosX(x0);

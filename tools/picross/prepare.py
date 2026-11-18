@@ -116,6 +116,15 @@ def pick_meta(metas, kind, title_id, version):
     return found[0]
 
 
+def display_version(nacp):
+    """The version string the Switch shows for the game (the NACP's DisplayVersion, 16 bytes at 0x3060), or ''."""
+    try:
+        raw = Path(nacp).read_bytes()[0x3060:0x3070]
+    except OSError:
+        return ""
+    return raw.split(b"\0")[0].decode("ascii", "replace").strip()
+
+
 def prepare(args):
     output = args.output.resolve()
     if output.exists() or output.is_symlink():
@@ -203,9 +212,12 @@ def prepare(args):
                              (header[0x40:0x60].rstrip(b"\0").hex(), title["main_build_id"]))
         if not romfs.is_file() or romfs.stat().st_size == 0:
             raise ValueError("hactool did not produce an updated RomFS image")
-        (prepared / "title.json").write_text(json.dumps(title, indent=2) + "\n")
-        control = content_nca(base, base_meta, CONTENT_CONTROL)
-        if control:  # the card image the Switch shows (a JPEG in the control data)
+        # The control data (card image, and the NACP with the version the Switch shows): the update's when it has
+        # one, else the base game's
+        control = (content_nca(update, update_meta, CONTENT_CONTROL) if args.update else None) \
+            or content_nca(base, base_meta, CONTENT_CONTROL)
+        info = dict(title)
+        if control:
             icons = work / "control"
             step(6, "Reading the game's icon")
             try:
@@ -213,6 +225,10 @@ def prepare(args):
                 shutil.copyfile(icons / "icon_AmericanEnglish.dat", prepared / "icon.jpg")
             except (ValueError, OSError):
                 print("No icon found; the start screen will show the name only", flush=True)
+            version = display_version(icons / "control.nacp")
+            if version:
+                info["display_version"] = version
+        (prepared / "title.json").write_text(json.dumps(info, indent=2) + "\n")  # (the manifest, and the game's own version)
         step(7, "Saving the game files")
         prepared.rename(output)
     print(f"Prepared game data in {output}", flush=True)
