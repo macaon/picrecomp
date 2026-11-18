@@ -524,9 +524,6 @@ static void tab_quit(float scale, bool in_game) {
 }
 
 static void tab_about(void) {
-    header("Movement");
-    toggle("D-pad moves like the left stick", &g_settings.dpad_move);
-    ImGui::Spacing();
     header("System language");
     {
         // what the game is told the console's language is: its text follows this (runtime/settings.c)

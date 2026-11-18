@@ -23,7 +23,6 @@ typedef struct {
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
     bool show_fps;
-    bool dpad_move;      // the d-pad (and arrow keys) also act as the left stick
     int language;        // LANG_AUTO or an index into g_language_codes: the game's text language
     bool aspect_asked;   // the start screen's one-time "authentic 16:9 or unlocked?" question was answered
     bool menu_tip_seen;  // the start screen's one-time "how to open the menu" note was shown (first PLAY ever)

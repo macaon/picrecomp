@@ -133,7 +133,6 @@ void settings_load(void) {
         }
         else if (!strcmp(key, "upscaler")) g_settings.upscaler = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : UPSCALE_SHARP;  // (metalfx / fsr1: this OS's)
         else if (!strcmp(key, "antialias")) g_settings.antialias = !strcmp(val, "off") ? AA_OFF : AA_SMAA;  // ("fxaa": SMAA now)
-        else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
         else if (!strcmp(key, "language")) {  // ("auto" or one of the game's codes; anything else: auto)
             g_settings.language = LANG_AUTO;
             for (int i = 1; i < N_LANGUAGES; i++)
@@ -167,7 +166,6 @@ void settings_save(void) {
     else if (g_settings.res_mode == RES_Q50) fprintf(f, "resolution = 50%%\n");
     else if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8) fprintf(f, "resolution = %dx\n", g_settings.res_mode);
     else fprintf(f, "resolution = match\n");
-    fprintf(f, "dpad_move = %d\n", g_settings.dpad_move);
     fprintf(f, "language = %s\n", g_language_codes[g_settings.language > LANG_AUTO && g_settings.language < N_LANGUAGES
                                                      ? g_settings.language : LANG_AUTO]);
     fprintf(f, "aspect_asked = %d\n", g_settings.aspect_asked);

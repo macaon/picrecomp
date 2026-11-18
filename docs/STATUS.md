@@ -102,7 +102,10 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   games use `audout:u` only, plain PCM with the volume applied: no `audren`, so no reverb, and no nnMedia movie player).
   Old `reverb` / `movie_audio` lines in `picrecomp.ini` are ignored. The audren reverb and the nnMedia movie HLE
   (`runtime/hle/movie.c`) are still in the runtime, unused by these games. The settings pages showed the last page's
-  description until a row was selected (Audio showed Video's); each page starts with its own now.
+  description until a row was selected (Audio showed Video's); each page starts with its own now. The Controls tab's
+  "D-pad moves like the left stick" is gone too (a Zelda need: PICROSS reads the d-pad itself; Right once at S4's main
+  menu moved the cursor one step with the setting on and off), with the stick-from-d-pad code in `hle/input.c`; an old
+  `dpad_move` line in `picrecomp.ini` is ignored.
 
 - Each game has its own muted background on the start screen (and behind Settings): the colour wash behind its title
   screen, `Common_BG000` in `Data/sharedassets5.assets` of its RomFS (found in all eight games: S a rainbow wheel, S2 a
