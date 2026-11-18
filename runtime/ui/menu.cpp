@@ -269,6 +269,12 @@ static int g_focus_frames;
 // later on the tab that's selected
 void menu_tabs_focus(bool first_tab) { g_focus_tab = first_tab ? -1 : -100, g_focus_frames = 0; }
 int g_tab_request_ext = -1;
+// The game's own "Controller Settings" (Plus and Minus together at its main menu starts the console's controller applet, which
+// the runtime doesn't have): our menu on its Controls tab, where the layout and the bindings are.
+extern "C" void menu_open_controls(void) {
+    g_tab_request_ext = 8;  // Controls (tab ids: tabs_body)
+    set_open(true);
+}
 
 static void style_init(void) {
     ImGuiStyle &s = ImGui::GetStyle();

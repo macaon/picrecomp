@@ -149,8 +149,9 @@ static Service *new_am_storage(const void *data, uint64_t size) {
 }
 
 // ------------------------------------------------------------------ ILibraryAppletCreator / ILibraryAppletAccessor
-// The game launches a system applet (PICROSS S: Plus at the main menu). None is emulated: the applet is created, and
-// finishes as soon as it is started, with no output. The log names the applet id (nn::applet::AppletId) and every
+// The game launches a system applet (PICROSS S: Plus and Minus at the main menu: the controller applet, id 0xc). None
+// is emulated: the applet is created, and finishes as soon as it is started, with no output (the controller one also
+// opens our menu on its Controls tab). The log names the applet id (nn::applet::AppletId) and every
 // call, so which applet it is and what the game does with it can be read from there.
 typedef struct { uint32_t id, mode; KEvent *ev; uint32_t ev_r; } LibApplet;
 
@@ -166,7 +167,13 @@ static void library_applet_accessor(Service *s, IpcReq *req, IpcResp *resp) {
     switch (req->cmd) {
     case 0: resp->copy_handles[resp->ncopy++] = a->ev_r; break;  // GetAppletStateChangedEvent
     case 1: OUT(uint8_t, 0) = 1; resp_size(resp, 1); break;      // IsCompleted
-    case 10: case 20: case 25: applet_finish(a); break;          // Start / RequestExit / Terminate
+    case 10: case 20: case 25:                                   // Start / RequestExit / Terminate
+        if (req->cmd == 10 && a->id == 0xc) {  // the controller applet: our Controls tab instead (Settings > Controls)
+            extern void menu_open_controls(void);
+            menu_open_controls();
+        }
+        applet_finish(a);
+        break;
     case 30: break;                                              // GetResult: success
     case 101: case 104: ipc_return_object(resp, new_am_storage(NULL, 0x1000)); break;  // PopOutData / PopInteractiveOutData
     case 105: case 106: resp->copy_handles[resp->ncopy++] = a->ev_r; break;  // GetPopOutDataEvent / ...InteractiveInDataEvent
