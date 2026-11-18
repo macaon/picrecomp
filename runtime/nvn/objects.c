@@ -711,15 +711,17 @@ NVN(nvnQueuePresentTexture) {
     static int first = 1;  // (milestone marker: the game got as far as showing a frame)
     if (first) { first = 0; LOG("[nvn] first nvnQueuePresentTexture (window %llx, texture %d of %d)\n", A(1), i, w->num); }
     // A present is at most one a vsync: on the console it waits for the display. PICRECOMP's presents don't, and a game
-    // that doesn't wait for the vsync itself (KEMONO FRIENDS PICROSS: no vsync event, nothing blocking) runs at
-    // 1000 fps, with the clock-driven parts of its start-up gone in a second. A game that does wait is a frame
-    // apart already: the 1 ms of slack keeps a vsync timer's jitter from costing it a frame.
+    // that doesn't wait for the vsync itself (KEMONO FRIENDS PICROSS, PICROSS LORD OF THE NAZARICK: no vsync event, nothing
+    // blocking) ran at 1000 fps, with the clock-driven parts of its start-up gone in a second. It waits for the next tick
+    // of the 60 Hz timer (runtime/hle/vi.c) since its last present; a game that waits for the vsync itself is already past
+    // one, and a late frame is not delayed further.
     {
-        static uint64_t last_present;
-        uint64_t now = plat_now_ns();
-        const uint64_t period = 16666667 - 1000000;
-        if (last_present && now < last_present + period) plat_sleep_until_ns(last_present + period), now = last_present + period;
-        last_present = now;
+        extern volatile uint64_t g_vsync_count;
+        extern void vi_vsync_start(void);
+        static uint64_t seen;
+        vi_vsync_start();
+        while (__atomic_load_n(&g_vsync_count, __ATOMIC_RELAXED) == seen) plat_sleep_until_ns(plat_now_ns() + 200000);
+        seen = __atomic_load_n(&g_vsync_count, __ATOMIC_RELAXED);
     }
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }

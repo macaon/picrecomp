@@ -67,11 +67,22 @@ RT_ON_RESET(vi_reset) {
     g_native_window = 0;  // (HLE heap)
 }
 
-HLE_FUNC("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", vi_get_vsync_event) {
+// The 60 Hz timer and its event, started by the first user: a game asking for the event, or a present that is held to
+// the vsync (nvnQueuePresentTexture, runtime/nvn/objects.c)
+void vi_vsync_start(void) {
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&lock);
     if (!vsync_event) {
         vsync_event = kernel_create_event_pair(&vsync_w, &vsync_r);
         pthread_t t;
         pthread_create(&t, NULL, vsync_thread, NULL);
+    }
+    pthread_mutex_unlock(&lock);
+}
+
+HLE_FUNC("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", vi_get_vsync_event) {
+    if (!vsync_event) {
+        vi_vsync_start();
     } else if (!vsync_r) {
         vsync_w = kernel_new_handle(vsync_event);
         vsync_r = kernel_new_handle(vsync_event);
