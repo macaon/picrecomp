@@ -13,6 +13,8 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 
+import art
+
 
 ROOT = Path(__file__).resolve().parents[2]
 STEPS = 7
@@ -274,7 +276,7 @@ def prepare(args):
         info = dict(title)
         if control:
             icons = work / "control"
-            step(6, "Reading the game's icon")
+            step(6, "Reading the game's icon and artwork")
             try:
                 hactool("icon", "-t", "nca", f"--romfsdir={icons}", control)
                 shutil.copyfile(icons / "icon_AmericanEnglish.dat", prepared / "icon.jpg")
@@ -283,6 +285,10 @@ def prepare(args):
             version = display_version(icons / "control.nacp")
             if version:
                 info["display_version"] = version
+        try:  # the colour wash behind the game's title screen, for the start screen (needs UnityPy; optional)
+            art.extract_background(prepared)
+        except Exception as error:  # (a background is a nicety: it never fails an import)
+            print(f"No background: {error}", flush=True)
         (prepared / "title.json").write_text(json.dumps(info, indent=2) + "\n")  # (the manifest, and the game's own version)
         step(7, "Saving the game files")
         prepared.rename(output)

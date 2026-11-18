@@ -104,6 +104,15 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   (`runtime/hle/movie.c`) are still in the runtime, unused by these games. The settings pages showed the last page's
   description until a row was selected (Audio showed Video's); each page starts with its own now.
 
+- Each game has its own muted background on the start screen (and behind Settings): the colour wash behind its title
+  screen, `Common_BG000` in `Data/sharedassets5.assets` of its RomFS (found in all eight games: S a rainbow wheel, S2 a
+  beach, S3 green light, S4 a sunset, S5 a night city, S6 a sunlit room, S7 snow, S8 a nebula), read at import time by
+  `tools/picross/art.py` into `<game>/background.jpg` (never committed; UnityPy, optional: `pip install UnityPy==1.25.4`
+  into `tools/venv`). `art.py <game folder>...` adds it to a game added before (done here for the eight installed). The
+  start screen keeps one texture per game, dims it evenly (more for a bright picture) and fades the bottom for the lower
+  line; without a `background.jpg` the plain gradient stays. The old shadow banners (for the left-hand menu) are gone, and
+  the title-movie frame it used to look for (`romfs/region_common/movie/title.webm`, a Zelda path) with them.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.

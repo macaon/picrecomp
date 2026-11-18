@@ -54,6 +54,7 @@ SDL3 3.2 or newer is required. These package names have not been tested by the m
 ```bash
 python3 -m venv tools/venv
 tools/venv/bin/pip install lz4 capstone unicorn
+tools/venv/bin/pip install UnityPy==1.25.4   # optional: the start screen's per-game backgrounds (tools/picross/art.py)
 
 make hactool                       # the bundled extractor, built with gcc
 make -j"$(nproc)"                  # the runtime (and the game library, once the code is generated)
@@ -140,4 +141,5 @@ not cover PICROSS S or any other game. Third-party components keep their own lic
 | [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | MIT |
 | [Capstone](https://www.capstone-engine.org), [LZ4](https://github.com/lz4/lz4) (Python, build tools only) | BSD |
 | [Unicorn](https://www.unicorn-engine.org) (Python, build tools only) | GPL-2.0 |
+| [UnityPy](https://github.com/K0lb3/UnityPy) and its dependencies, such as Pillow (Python, optional, import only: reads a game's own background picture out of its own files) | MIT |
 | [Zig](https://ziglang.org) (Windows cross build only) | MIT |

@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <map>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -407,53 +408,14 @@ static void SDLCALL picked_keys(void *, const char *const *files, int) {
     g_add_keys = files[0];
     pthread_mutex_unlock(&g_lock);
 }
-// ------------------------------------------------------------------ background: a title movie frame
+// ------------------------------------------------------------------ background: the chosen game's own colour wash
 static uint64_t g_bg;  // ImGui texture id (Vulkan descriptor set)
 #define BG_TEXID ((ImTextureID)g_bg)
 typedef void *GpuDevice;
 static int g_bg_w, g_bg_h;
+static float g_bg_lum;  // how bright the picture is, 0..1 (how much it is dimmed)
 
-static void load_background(GpuDevice dev) {
-    std::string path = g_root + "/romfs/region_common/movie/title.webm";
-    AVFormatContext *fmt = NULL;
-    if (avformat_open_input(&fmt, path.c_str(), NULL, NULL) < 0) return;
-    int si = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    if (si >= 0 && avformat_find_stream_info(fmt, NULL) >= 0) {
-        AVStream *st = fmt->streams[si];
-        const AVCodec *codec = avcodec_find_decoder(st->codecpar->codec_id);
-        AVCodecContext *cc = avcodec_alloc_context3(codec);
-        avcodec_parameters_to_context(cc, st->codecpar);
-        if (codec && avcodec_open2(cc, codec, NULL) == 0) {
-            AVPacket *pkt = av_packet_alloc();
-            AVFrame *fr = av_frame_alloc();
-            int64_t want = (int64_t)(6.0 / av_q2d(st->time_base));  // a few seconds in: the island, not black
-            av_seek_frame(fmt, si, want, AVSEEK_FLAG_BACKWARD);
-            bool got = false;
-            while (!got && av_read_frame(fmt, pkt) >= 0) {
-                if (pkt->stream_index == si && avcodec_send_packet(cc, pkt) == 0)
-                    while (avcodec_receive_frame(cc, fr) == 0)
-                        if (fr->best_effort_timestamp >= want) { got = true; break; }
-                av_packet_unref(pkt);
-            }
-            if (got) {
-                int w = fr->width, h = fr->height;
-                std::vector<uint8_t> rgba((size_t)w * h * 4);
-                SwsContext *sws = sws_getContext(w, h, (AVPixelFormat)fr->format, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
-                uint8_t *dst[1] = {rgba.data()};
-                int dst_ls[1] = {w * 4};
-                sws_scale(sws, fr->data, fr->linesize, 0, h, dst, dst_ls);
-                sws_freeContext(sws);
-                (void)dev;
-                g_bg = vk_imgui_texture_rgba(rgba.data(), w, h);
-                g_bg_w = w, g_bg_h = h;
-            }
-            av_frame_free(&fr);
-            av_packet_free(&pkt);
-        }
-        avcodec_free_context(&cc);
-    }
-    avformat_close_input(&fmt);
-}
+static void load_background(GpuDevice dev);  // (after load_icon)
 
 // ------------------------------------------------------------------ game cards
 // One card per prepared game: <data root>/games/<name>/ (what tools/picross/prepare.py writes: title.json, icon.jpg, exefs,
@@ -467,7 +429,7 @@ static bool g_goto_update;       // Settings asks the main loop for the Add page
 static int g_scan_gen;           // counts scan_cards runs (what is shown for a card, like its version, is read again after one)
 static bool g_all_added;  // every game the importer knows (titles/*.json) has a card: nothing left for "+" to add
 
-static uint64_t load_icon(const std::string &path) {
+static uint64_t load_icon(const std::string &path, int *out_w = NULL, int *out_h = NULL, float *out_lum = NULL) {
     AVFormatContext *fmt = NULL;
     uint64_t tex = 0;
     if (avformat_open_input(&fmt, path.c_str(), NULL, NULL) < 0) return 0;
@@ -488,6 +450,14 @@ static uint64_t load_icon(const std::string &path) {
             sws_scale(sws, fr->data, fr->linesize, 0, h, dst, dst_ls);
             sws_freeContext(sws);
             tex = vk_imgui_texture_rgba(rgba.data(), w, h);
+            if (out_w) *out_w = w;
+            if (out_h) *out_h = h;
+            if (out_lum) {  // the mean brightness, from a sample of the pixels
+                double sum = 0;
+                size_t n = 0;
+                for (size_t i = 0; i + 3 < rgba.size(); i += 4 * 37, n++) sum += (0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2]) / 255.0;
+                *out_lum = n ? (float)(sum / (double)n) : 0.5f;
+            }
         }
         av_frame_free(&fr);
         av_packet_free(&pkt);
@@ -495,6 +465,22 @@ static uint64_t load_icon(const std::string &path) {
     }
     avformat_close_input(&fmt);
     return tex;
+}
+
+// The chosen game's background.jpg (tools/picross/art.py), kept per game so that moving the cursor along the cards
+// doesn't load it again (none: the plain gradient).
+static void load_background(GpuDevice dev) {
+    struct Bg { uint64_t tex; int w, h, gen; float lum; };
+    static std::map<std::string, Bg> cache;
+    auto it = cache.find(g_root);
+    if (it == cache.end() || it->second.gen != g_scan_gen) {  // (read again after a scan: the game may have been updated)
+        Bg b = {0, 0, 0, g_scan_gen, 0.5f};
+        b.tex = load_icon(g_root + "/background.jpg", &b.w, &b.h, &b.lum);
+        cache[g_root] = b;
+        it = cache.find(g_root);
+    }
+    g_bg = it->second.tex, g_bg_w = it->second.w, g_bg_h = it->second.h, g_bg_lum = it->second.lum;
+    (void)dev;
 }
 
 static void scan_cards(const std::string &current) {
@@ -1107,17 +1093,10 @@ extern "C" void launcher_run(const char *root) {
                 bg->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(18, 34, 40, 255), IM_COL32(40, 70, 64, 255),
                                             IM_COL32(12, 20, 24, 255), IM_COL32(8, 12, 16, 255));
             }
-            {  // a shadow banner fading in from the left behind the menu, and one from the right behind the version
-                const float stops[][2] = {{0.0f, 225}, {0.3f, 215}, {0.44f, 165}, {0.55f, 95}, {0.64f, 35}, {0.74f, 0}};
-                for (int i = 0; i + 1 < (int)(sizeof stops / sizeof stops[0]); i++) {
-                    ImU32 a = IM_COL32(6, 10, 34, (int)stops[i][1]), b = IM_COL32(6, 10, 34, (int)stops[i + 1][1]);
-                    bg->AddRectFilledMultiColor(ImVec2(ds.x * stops[i][0], 0), ImVec2(ds.x * stops[i + 1][0], ds.y), a, b, b, a);
-                }
-                float y0 = ds.y - 190 * s, y1 = ds.y - 135 * s, y2 = ds.y - 40 * s, y3 = ds.y, x0r = ds.x * 0.5f;
-                ImU32 c0 = IM_COL32(6, 10, 34, 0), c1 = IM_COL32(6, 10, 34, 235);
-                bg->AddRectFilledMultiColor(ImVec2(x0r, y0), ImVec2(ds.x, y1), c0, c0, c1, c0);  // (feathered top)
-                bg->AddRectFilledMultiColor(ImVec2(x0r, y1), ImVec2(ds.x, y2), c0, c1, c1, c0);
-                bg->AddRectFilledMultiColor(ImVec2(x0r, y2), ImVec2(ds.x, y3), c0, c1, c0, c0);  // (feathered bottom)
+            if (g_bg) {  // muted: an even dim (more for a bright picture), and a fade at the bottom for the lower line
+                bg->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(6, 10, 34, (int)(110 + 110 * g_bg_lum)));
+                ImU32 clear = IM_COL32(6, 10, 34, 0), dark = IM_COL32(6, 10, 34, 200);
+                bg->AddRectFilledMultiColor(ImVec2(0, ds.y * 0.7f), ds, clear, clear, dark, dark);
             }
 
             ImGui::SetNextWindowPos(ImVec2(0, 0));
