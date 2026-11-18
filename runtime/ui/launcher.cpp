@@ -667,6 +667,42 @@ static void text_fx(ImDrawList *dl, ImFont *font, float size, ImVec2 p, ImU32 to
     }
 }
 
+// A page arrow in the title's own look: rounded corners, the same soft two-step drop shadow, the same gold-to-orange
+// top-to-bottom gradient (an anti-aliased fill: the fringe keeps its alpha). dir -1 points left, 1 right; k scales the
+// alpha (a dimmed arrow at the first / last page); hot lightens it
+static void arrow_fx(ImDrawList *dl, ImVec2 c, float w, float h, int dir, float k, bool hot, float shadow) {
+    const ImVec2 v[3] = {ImVec2(c.x + w * (float)dir, c.y), ImVec2(c.x - w * (float)dir, c.y - h), ImVec2(c.x - w * (float)dir, c.y + h)};
+    std::vector<ImVec2> pts;
+    const float cut = 0.18f;  // how far along each edge the rounding starts
+    for (int i = 0; i < 3; i++) {
+        ImVec2 a = v[(i + 2) % 3], b = v[i], n = v[(i + 1) % 3];
+        ImVec2 p0(b.x + (a.x - b.x) * cut, b.y + (a.y - b.y) * cut), p1(b.x + (n.x - b.x) * cut, b.y + (n.y - b.y) * cut);
+        for (int j = 0; j <= 6; j++) {  // a quadratic curve from p0 to p1 with the corner as its control point
+            float t = (float)j / 6, u = 1 - t;
+            pts.push_back(ImVec2(u * u * p0.x + 2 * u * t * b.x + t * t * p1.x, u * u * p0.y + 2 * u * t * b.y + t * t * p1.y));
+        }
+    }
+    auto poly = [&](float dx, float dy, ImU32 col) {
+        std::vector<ImVec2> q(pts);
+        for (auto &pt : q) pt.x += dx, pt.y += dy;
+        dl->AddConvexPolyFilled(q.data(), (int)q.size(), col);
+    };
+    int a_sh = (int)(110 * k);
+    if (shadow > 0)
+        for (float d : {shadow, shadow * 0.5f}) poly(d, d, IM_COL32(4, 8, 30, a_sh));
+    int v0 = dl->VtxBuffer.Size;
+    poly(0, 0, IM_COL32_WHITE);
+    ImVec4 top = hot ? ImVec4(1, 0.96f, 0.67f, 1) : ImVec4(1, 0.91f, 0.47f, 1), bot = hot ? ImVec4(1, 0.72f, 0.36f, 1) : ImVec4(1, 0.54f, 0.19f, 1);
+    float y0 = c.y - h, y1 = c.y + h;
+    for (int i = v0; i < dl->VtxBuffer.Size; i++) {
+        float f = (dl->VtxBuffer[i].pos.y - y0) / (y1 - y0);
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        int alpha = (int)((dl->VtxBuffer[i].col >> IM_COL32_A_SHIFT & 0xff) * k);  // (0 on the fringe)
+        dl->VtxBuffer[i].col = ImGui::ColorConvertFloat4ToU32(ImVec4(top.x + (bot.x - top.x) * f, top.y + (bot.y - top.y) * f,
+                                                                      top.z + (bot.z - top.z) * f, (float)alpha / 255.0f));
+    }
+}
+
 // A four-point sparkle (PLAY's twinkle): k = 0..1 grows and fades it
 static void sparkle(ImDrawList *dl, ImVec2 c, float r, float k, float spin) {
     if (k <= 0) return;
@@ -937,7 +973,7 @@ extern "C" void launcher_run(const char *root) {
     const char *fonts[] = {getenv("PICRECOMP_LAUNCHER_FONT") ? getenv("PICRECOMP_LAUNCHER_FONT") : "",  // (test)
                            own.c_str(), "fonts/nintendo_udsgr_std_003.ttf", "/System/Library/Fonts/Avenir Next.ttc",
                            "/System/Library/Fonts/Helvetica.ttc", "C:/Windows/Fonts/segoeui.ttf"};
-    static const ImWchar ranges[] = {0x20, 0xFF, 0x2039, 0x203A, 0x2192, 0x2192, 0x2713, 0x2713, 0x25B8, 0x25B8, 0};  // + ‹ › → ✓ ▸
+    static const ImWchar ranges[] = {0x20, 0xFF, 0x2039, 0x203A, 0x2192, 0x2192, 0x2713, 0x2713, 0x25B8, 0x25B8, 0x25B6, 0x25B6, 0x25C0, 0x25C0, 0};  // + ‹ › → ✓ ▸ ▶ ◀ (the page arrows)
     for (const char *p : fonts) {
         if (g_font_menu || !*p || !file_exists(p)) continue;
         bool b2 = p == own.c_str() || getenv("PICRECOMP_LAUNCHER_FONT");
@@ -1265,10 +1301,20 @@ extern "C" void launcher_run(const char *root) {
                         ImGui::PopID();
                         bool hot = can && ImGui::IsItemHovered();
                         if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                        // filled, in the title's gold (dimmed at the first / last page), pointing the way it turns
-                        ImU32 col = !can ? IM_COL32(255, 200, 64, 50) : hot ? IM_COL32(255, 232, 140, 255) : IM_COL32(255, 200, 64, 255);
-                        float mx = a.x + aw * 0.5f, my = a.y + ah * 0.5f, h = 24 * s, w = 14 * s * (float)dir;
-                        dl->AddTriangleFilled(ImVec2(mx + w, my), ImVec2(mx - w, my - h), ImVec2(mx - w, my + h), col);
+                        float mx = a.x + aw * 0.5f, my = a.y + ah * 0.5f;
+                        // the title's own letters (a glyph of the font: the same anti-aliasing, gradient and shadow); a
+                        // fallback font without the glyph gets a drawn triangle
+                        const char *gl = dir < 0 ? "\xE2\x97\x80" : "\xE2\x96\xB6";  // U+25C0, U+25B6
+                        ImFont *tf = g_font_title ? g_font_title : ImGui::GetFont();
+                        if (tf->FindGlyphNoFallback(dir < 0 ? 0x25C0 : 0x25B6)) {
+                            float fs = 130 * s;
+                            ImVec2 gs = tf->CalcTextSizeA(fs, 1e9f, 0, gl);
+                            ImU32 top = !can ? IM_COL32(255, 232, 120, 50) : hot ? IM_COL32(255, 244, 170, 255) : IM_COL32(255, 232, 120, 255);
+                            ImU32 bot = !can ? IM_COL32(255, 138, 48, 50) : hot ? IM_COL32(255, 184, 92, 255) : IM_COL32(255, 138, 48, 255);
+                            text_fx(dl, tf, fs, ImVec2(mx - gs.x * 0.5f, my - gs.y * 0.5f), top, bot, gl, can ? 3 * s : 0);
+                        } else {
+                            arrow_fx(dl, ImVec2(mx, my), 17 * s, 30 * s, dir, can ? 1.0f : 0.2f, hot, 3 * s);
+                        }
                         if (click && can) flip = dir;
                     }
                     float dot = 5 * s, dgap = 18 * s, dx = ImGui::GetWindowPos().x + (ds.x - (float)(pages - 1) * dgap) * 0.5f;
