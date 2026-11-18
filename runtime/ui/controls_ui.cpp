@@ -68,12 +68,30 @@ extern "C" void controls_bindings_draw(float scale) {
         else if (kind == 2)
             snprintf(msg, sizeof msg, "%s is now %s; %s moved to %s (swapped).", bind_input_name(rslot), now,
                      bind_input_name(rother), rdev == BIND_DEV_PAD ? bind_pad_label(g_bind_pad[rother], fam) : bind_key_label(g_bind_key[rother]));
+        else if (kind == 6) snprintf(msg, sizeof msg, "Face buttons: %s layout.", rslot ? "Xbox" : "Switch");
         else if (kind == 3) snprintf(msg, sizeof msg, "Cancelled: %s unchanged.", bind_input_name(rslot));
         else if (kind == 4) snprintf(msg, sizeof msg, "Nothing pressed: %s unchanged.", bind_input_name(rslot));
-        if (kind == 1 || kind == 2 || kind == 5) settings_save();
+        if (kind == 1 || kind == 2 || kind == 5 || kind == 6) settings_save();
     }
     if (msg[0]) ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", msg);
 
+    {   // the face buttons in one go: where A, B, X and Y are on the controller
+        int layout = bind_face_layout();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Face buttons");
+        for (int l = 0; l < 2; l++) {
+            ImGui::SameLine();
+            if (layout == l) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.82f, 0.38f, 1));
+            if (ImGui::Button(l ? "Xbox layout" : "Switch layout")) { bind_capture_cancel(); bind_face_layout_set(l); }
+            if (layout == l) ImGui::PopStyleColor();
+        }
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("Switch layout: the buttons are where they are on a Switch (A on the right, B at the bottom). "
+                            "Xbox layout: A at the bottom, B on the right, so the letters on your controller match the "
+                            "letters the game shows.");
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+    }
     if (ImGui::BeginTable("##binds", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
         ImGui::TableSetupColumn("Switch", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Controller", ImGuiTableColumnFlags_WidthStretch, 1.3f);

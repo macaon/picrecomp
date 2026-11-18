@@ -519,15 +519,6 @@ static void tab_about(void) {
     header("Movement");
     toggle("D-pad moves like the left stick", &g_settings.dpad_move);
     ImGui::Spacing();
-    header("Button prompts");
-    {
-        static const char *const fam[] = {"Nintendo", "Xbox", "PlayStation"};
-        char autol[64];
-        snprintf(autol, sizeof autol, "Auto (%s)", fam[input_pad_family() % 3]);
-        const char *names[] = {autol, "Nintendo", "Xbox", "PlayStation"};
-        choice("Button icons", &g_settings.prompts, names, 4);
-    }
-    ImGui::Spacing();
     header("System language");
     {
         // what the game is told the console's language is: its text follows this (runtime/settings.c)

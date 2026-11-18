@@ -110,7 +110,6 @@ bool bind_is_default_slot(int dev, int slot) {
     return dev == BIND_DEV_PAD ? g_bind_pad[slot] == k_def_pad[slot] : g_bind_key[slot] == k_def_key[slot];
 }
 
-int bind_prompt_host(int slot) { return slot >= 0 && slot < BIND_PAD_COUNT ? g_bind_pad[slot] : -1; }
 
 // ------------------------------------------------------------------ capture
 static _Atomic int cap_dev = -1, cap_slot = -1;
@@ -164,6 +163,22 @@ static void assign(int dev, int slot, int host) {
         other >= 0 ? k_names[other] : "", other >= 0 ? ")" : "");
     if (other >= 0) LOG("[input]   %s -> %s\n", k_names[other], dev == BIND_DEV_PAD ? k_pad_ini[t[other]] : bind_key_label(t[other]));
     result(other >= 0 ? 2 : 1, dev, slot, other);
+}
+
+// The face buttons' two layouts (controller buttons for BIND_A, BIND_B, BIND_X, BIND_Y, which are slots 0 to 3)
+static const int16_t k_face[2][4] = {
+    {SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_NORTH, SDL_GAMEPAD_BUTTON_WEST},  // Switch: A right, B bottom, X top, Y left
+    {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_BUTTON_NORTH},  // Xbox: A bottom, B right, X left, Y top
+};
+int bind_face_layout(void) {
+    for (int l = 0; l < 2; l++)
+        if (!memcmp(g_bind_pad, k_face[l], sizeof k_face[l])) return l;
+    return -1;
+}
+void bind_face_layout_set(int layout) {
+    if (layout < 0 || layout > 1) return;
+    for (int i = 0; i < 4; i++) assign(BIND_DEV_PAD, i, k_face[layout][i]);  // (a face button given to another input swaps over)
+    result(6, BIND_DEV_PAD, layout, -1);
 }
 
 bool bind_capture_event(const SDL_Event *e) {

@@ -113,6 +113,13 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   line; without a `background.jpg` the plain gradient stays. The old shadow banners (for the left-hand menu) are gone, and
   the title-movie frame it used to look for (`romfs/region_common/movie/title.webm`, a Zelda path) with them.
 
+- Controls: Settings > Controls has a "Face buttons" row, Switch layout (A on the right, the default) or Xbox layout (A at
+  the bottom, so the letters on a PC controller match the game's): it applies the four swaps to the controller bindings
+  (anything else bound to those buttons swaps over; the table below still rebinds each input) and saves them as
+  `bind_pad_a..y` in `picrecomp.ini`. Seen with a scripted click: `A -> south, B -> east, X -> west, Y -> north`.
+  The "Button icons" setting is gone: it fed `texpatch`, an empty stub (no PICROSS texture was ever patched), removed
+  with its hooks in the Vulkan upload path. The game still draws its own Switch prompts.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.

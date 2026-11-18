@@ -46,7 +46,8 @@ void bind_capture_cancel(void);
 bool bind_capture_active(int *dev, int *slot, int *ms_left);
 // Main thread, before anything else sees the event: true = consumed by a capture
 bool bind_capture_event(const SDL_Event *e);
-// Last change for the UI: 0 none, 1 set, 2 swapped (with *other), 3 cancelled, 4 timed out, 5 reset; *serial bumps
+// Last change for the UI: 0 none, 1 set, 2 swapped (with *other), 3 cancelled, 4 timed out, 5 reset, 6 a face-button layout
+// (*slot = which); *serial bumps
 int bind_last_result(int *dev, int *slot, int *other, int *serial);
 
 // picrecomp.ini: bind_pad_<input> / bind_key_<input> (only the ones that differ from the defaults are written)
@@ -57,8 +58,10 @@ void bind_settings_save(FILE *f);
 int bind_slot_from_name(const char *name);
 int bind_pad_from_name(const char *name);
 
-// Button prompts (runtime/nvn/texpatch.c): the controller button now driving Switch input `slot` (BIND_A..)
-int bind_prompt_host(int slot);
+// The face buttons by layout: 0 the Switch's (A on the right, as the console), 1 the Xbox's (A at the bottom, so the
+// letters on the controller match the game's), -1 anything else (hand-edited). bind_face_layout_set applies one.
+int bind_face_layout(void);
+void bind_face_layout_set(int layout);
 
 #ifdef __cplusplus
 }
