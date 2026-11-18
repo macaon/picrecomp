@@ -1219,7 +1219,7 @@ extern "C" void launcher_run(const char *root) {
                 // At most 5 to a row and two rows (kPage) to a page, the "+" counting as a card; more games make pages.
                 // The page follows the marker: Right past a page's last card turns the page, so do L / R, PageUp /
                 // PageDown, the mouse wheel and the arrows at the sides. "+" is left out when every supported game is
-                // already here. The block is centred under the title; its size is the same on every page.
+                // already here. The block is centred under the title and its size is the same on every page; the cards fill it from the top left.
                 size_t slots = g_cards.size() + 1, per_row = 5;
                 size_t pages = (slots + kPage - 1) / kPage, rows_all = std::min(slots, kPage) > per_row ? 2 : 1;
                 static size_t seen_card = (size_t)-1;
@@ -1227,20 +1227,18 @@ extern "C" void launcher_run(const char *root) {
                 if (g_card != seen_card) g_page = g_card / kPage, seen_card = g_card;  // (chosen some other way: import, switch)
                 if (g_page >= pages) g_page = pages ? pages - 1 : 0;
                 size_t first = g_page * kPage, last = std::min(slots, first + kPage), on_page = last - first;
-                size_t cols = std::min(on_page, per_row), cols_all = std::min(std::min(slots, kPage), per_row);
+                size_t cols_all = std::min(std::min(slots, kPage), per_row);
                 float cs = (rows_all > 1 ? 160 : 190) * s, gap = (rows_all > 1 ? 24 : 30) * s, row_gap = 14 * s, lab = 50 * s, row_h = cs + lab + row_gap;  // (lab: the name's two lines)
                 float gw = (float)cols_all * cs + (float)(cols_all - 1) * gap, gh = (float)rows_all * row_h - row_gap;
                 float top = 112 * s, bottom = ds.y - 128 * s;
                 float cx = (ds.x - gw) * 0.5f, cy = top + fmaxf(0, (bottom - top - gh) * 0.5f);
-                (void)cols;
                 ImDrawList *dl = ImGui::GetWindowDrawList();
                 int flip = 0, edge = 0, step = 0;
                 size_t focus_i = 0;  // a page turn asked for; 1 / -1: by Right / Left at the page's edge (lands on its end)
                 for (size_t i = first; i < last; i++) {
                     size_t li = i - first;
                     bool plus = i == g_cards.size();
-                    size_t in_row = std::min(per_row, on_page - li / per_row * per_row);  // (each row is centred on its own)
-                    float row_x = cx + (gw - ((float)in_row * cs + (float)(in_row - 1) * gap)) * 0.5f;
+                    float row_x = cx;  // (a short row or page fills from the left, as the full one does)
                     ImGui::SetCursorPos(ImVec2(row_x + (float)(li % per_row) * (cs + gap), cy + (float)(li / per_row) * row_h));
                     ImVec2 at = ImGui::GetCursorScreenPos();
                     ImGui::PushID((int)i);
