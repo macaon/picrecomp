@@ -444,7 +444,22 @@ static uint64_t load_icon(const std::string &path, int *out_w = NULL, int *out_h
             (avcodec_send_packet(cc, NULL), avcodec_receive_frame(cc, fr) == 0))) {
             int w = fr->width, h = fr->height;
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            SwsContext *sws = sws_getContext(w, h, (AVPixelFormat)fr->format, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+            // (a JPEG decodes to one of the "yuvj" formats, which are deprecated: the same picture in the plain format, with
+            // its full colour range said outright)
+            AVPixelFormat src = (AVPixelFormat)fr->format;
+            bool full = fr->color_range == AVCOL_RANGE_JPEG;
+            switch (src) {
+            case AV_PIX_FMT_YUVJ420P: src = AV_PIX_FMT_YUV420P, full = true; break;
+            case AV_PIX_FMT_YUVJ422P: src = AV_PIX_FMT_YUV422P, full = true; break;
+            case AV_PIX_FMT_YUVJ444P: src = AV_PIX_FMT_YUV444P, full = true; break;
+            case AV_PIX_FMT_YUVJ440P: src = AV_PIX_FMT_YUV440P, full = true; break;
+            default: break;
+            }
+            SwsContext *sws = sws_getContext(w, h, src, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+            if (full) {
+                const int *coefficients = sws_getCoefficients(SWS_CS_DEFAULT);
+                sws_setColorspaceDetails(sws, coefficients, 1, coefficients, 1, 0, 1 << 16, 1 << 16);
+            }
             uint8_t *dst[1] = {rgba.data()};
             int dst_ls[1] = {w * 4};
             sws_scale(sws, fr->data, fr->linesize, 0, h, dst, dst_ls);
