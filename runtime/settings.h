@@ -23,8 +23,6 @@ typedef struct {
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (MetalFX: macOS, FSR 1: others)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
-    bool reverb;         // room reverb effect
-    bool movie_audio;
     bool show_fps;
     bool dpad_move;      // the d-pad (and arrow keys) also act as the left stick
     int language;        // LANG_AUTO or an index into g_language_codes: the game's text language

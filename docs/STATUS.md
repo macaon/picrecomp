@@ -97,6 +97,13 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   returns to the cards (or the "+") instead of the old SET UP GAME FILES page. Seen in scratch libraries with scripted
   clicks (`PICRECOMP_LAUNCHER_KEYS=click_<x>_<y>`): delete S7, S8 stays with the "+".
 
+- Zelda leftovers out of Settings: the "Game font" section (PICROSS never asks for the system fonts: no `pl:u` call in any
+  boot log; the games are Unity and bring their own fonts), and the Audio tab's "Room reverb" and "Movie audio" (the
+  games use `audout:u` only, plain PCM with the volume applied: no `audren`, so no reverb, and no nnMedia movie player).
+  Old `reverb` / `movie_audio` lines in `picrecomp.ini` are ignored. The audren reverb and the nnMedia movie HLE
+  (`runtime/hle/movie.c`) are still in the runtime, unused by these games. The settings pages showed the last page's
+  description until a row was selected (Audio showed Video's); each page starts with its own now.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.

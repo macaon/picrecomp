@@ -25,6 +25,8 @@ static bool g_held;  // the last row's left / right has been held a while (stepp
 void opt_indent(int step) { g_indent = g_indent + step < 0 ? 0 : g_indent + step; }
 
 void opt_begin(const char *id, float scale) {
+    static std::string page;  // another page: its own first description, not the last page's (Audio showed Video's text)
+    if (page != id) page = id, g_desc_shown.clear();
     g_scale = scale;
     g_take_first = g_focus_req;
     g_focus_req = false;

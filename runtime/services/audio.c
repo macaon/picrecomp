@@ -465,7 +465,7 @@ static void apply_effects(Renderer *r, int32_t mix_id, Mix *m) {
             if (no_reverb < 0) no_reverb = getenv("PICRECOMP_NO_REVERB") ? 1 : 0;
             static int toggle = -1;
             if (toggle < 0) toggle = getenv("PICRECOMP_REVERB_TOGGLE") ? atoi(getenv("PICRECOMP_REVERB_TOGGLE")) : 0;
-            int off = no_reverb || !g_settings.reverb || (toggle && (r->elapsed_frames / toggle) % 2);
+            int off = no_reverb || (toggle && (r->elapsed_frames / toggle) % 2);
             if (fx->enabled && !off) reverb_process(&fx->rv, in, out, N);
             else
                 for (int c = 0; c < ch; c++) if (in[c] != out[c]) memcpy(out[c], in[c], N * sizeof(float));

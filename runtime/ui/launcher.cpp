@@ -395,20 +395,6 @@ static void SDLCALL picked(void *, const char *const *files, int) {
 }
 
 
-// ------------------------------------------------------------------ the user's own Nintendo fonts (not shipped)
-// runtime/hle/pl.c loads fonts/ first, else a close substitute (Hiragino Sans). Import copies recognized files only.
-static const char *FONT_STD[] = {"nintendo_udsg-r_std_003.bfttf", "nintendo_udsg-r_std_003.ttf",
-                                 "nintendo_udsgr_std_003.ttf", "nintendo_udsgr_std_003.bfttf"};
-static const char *FONT_EXT[] = {"nintendo_ext_003.bfttf", "nintendo_ext_003.ttf"};
-static std::vector<std::string> g_font_picks;
-static std::string g_font_msg;
-
-static bool have_font(const char *const *names, int n) {
-    for (int i = 0; i < n; i++)
-        if (file_exists(std::string("fonts/") + names[i])) return true;
-    return false;
-}
-
 static void SDLCALL picked_add(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_lock);
@@ -421,48 +407,6 @@ static void SDLCALL picked_keys(void *, const char *const *files, int) {
     g_add_keys = files[0];
     pthread_mutex_unlock(&g_lock);
 }
-static void SDLCALL picked_fonts(void *, const char *const *files, int) {
-    if (!files) return;
-    pthread_mutex_lock(&g_lock);
-    for (int i = 0; files[i]; i++) g_font_picks.push_back(files[i]);
-    pthread_mutex_unlock(&g_lock);
-}
-
-static void import_fonts() {
-    pthread_mutex_lock(&g_lock);
-    std::vector<std::string> picks;
-    picks.swap(g_font_picks);
-    pthread_mutex_unlock(&g_lock);
-    if (picks.empty()) return;
-    mkdir("fonts", 0755);
-    int ok = 0, skipped = 0;
-    for (auto &src : picks) {
-        std::string base = src.substr(src.find_last_of('/') + 1), low = base;
-        for (auto &c : low) c = (char)tolower(c);
-        bool known = false;
-        for (auto n : FONT_STD) known |= low == n;
-        for (auto n : FONT_EXT) known |= low == n;
-        if (!known) { skipped++; continue; }
-        FILE *in = fopen(src.c_str(), "rb"), *out = fopen(("fonts/" + low).c_str(), "wb");
-        if (in && out) {
-            char buf[65536];
-            size_t n;
-            while ((n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
-            ok++;
-        }
-        if (in) fclose(in);
-        if (out) fclose(out);
-    }
-    g_font_msg = std::to_string(ok) + " font file(s) imported" + (skipped ? ", " + std::to_string(skipped) + " not recognized" : "") +
-                 ". Used from the next game start.";
-}
-
-static void remove_fonts() {
-    for (auto n : FONT_STD) unlink((std::string("fonts/") + n).c_str());
-    for (auto n : FONT_EXT) unlink((std::string("fonts/") + n).c_str());
-    g_font_msg = "Imported fonts removed: the substitute font is used.";
-}
-
 // ------------------------------------------------------------------ background: a title movie frame
 static uint64_t g_bg;  // ImGui texture id (Vulkan descriptor set)
 #define BG_TEXID ((ImTextureID)g_bg)
@@ -956,23 +900,6 @@ static void prelaunch_tab(float sc) {
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
     ImGui::Spacing();
-    heading("Game font");
-    import_fonts();
-    bool fs = have_font(FONT_STD, 4), fe = have_font(FONT_EXT, 2);
-    ImGui::Text("Text: %s    Button icons: %s", fs ? "Nintendo font (imported)" : "substitute (Hiragino Sans)",
-                fe ? "imported" : "substitute");
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("Fonts aren't included. For the original look, import your own copies of: "
-                        "nintendo_udsg-r_std_003.bfttf (text) and nintendo_ext_003.bfttf (button icons). "
-                        ".ttf versions with the same names work too.");
-    ImGui::PopTextWrapPos();
-    if (!g_font_msg.empty()) ImGui::Text("%s", g_font_msg.c_str());
-    static const SDL_DialogFileFilter font_f[] = {{"Switch fonts", "bfttf;ttf"}};
-    if (ImGui::Button("Import fonts")) SDL_ShowOpenFileDialog(picked_fonts, NULL, g_launcher_win, font_f, 1, NULL, true);
-    if (fs || fe) {
-        ImGui::SameLine();
-        if (ImGui::Button("Use substitute font")) remove_fonts();
-    }
 }
 
 extern "C" void launcher_run(const char *root) {
