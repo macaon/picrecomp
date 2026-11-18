@@ -71,6 +71,20 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   and so does a double click; A / Enter / Start play it from the cursor. Settings is the "F1 Settings" hint, which is a
   link too. Seen with scripted clicks (`PICRECOMP_LAUNCHER_KEYS="frame:click_<x>_<y>"`): a click chooses, the Play click starts.
 
+- Updates. A game's update is a whole new build of its `main` (S 1.6.1 to 1.6.2: 6.86 of 7.24 million code words differ;
+  `sdk` and `subsdk0` were identical), so a new version means regenerating and recompiling that game (about four minutes),
+  nothing incremental. `titles/` has one manifest per supported version (`picross-s.json` is v524288 / 1.6.1,
+  `picross-s-v589824.json` is v589824 / 1.6.2, same `slug`). The importer finds the newest supported update among the
+  packages in a folder (its version from the package's `.cnmt.xml`, else the `[vNNN]` in its name, checked against the
+  real metadata when it is opened) and mentions a newer one that has no manifest. Adding a game that is in the library
+  with another build builds the new one beside it (`.<name>.new`) and swaps it in when it is done (the old one is kept
+  if the build fails); if only the data changed (all three executables' build IDs equal) the library is reused and
+  nothing is compiled. The same build again is refused ("already in the library (version 1.6.2)"). Seen: S 1.6.1 to
+  1.6.2 in a scratch library (installed, swapped, 1.6.2 boots at 60 fps), the same version refused, the data-only path
+  (compile skipped, library kept, boots). Saves are kept per title, not per version, and carry over. The data-only
+  path is only simulated (no update that left `main` alone has turned up), and the in-app importer has not been run
+  through an update.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.

@@ -40,27 +40,71 @@ def pfs0_names(path):
     return names
 
 
+def pfs0_read(path, name):
+    """The bytes of one file inside a PFS0 (NSP) package, or None."""
+    with path.open("rb") as stream:
+        head = stream.read(16)
+        if head[:4] != b"PFS0":
+            return None
+        count, strings = struct.unpack_from("<II", head, 4)
+        table = stream.read(count * 0x18 + strings)
+        for k in range(count):
+            offset, size, name_at = struct.unpack_from("<QQI", table, k * 0x18)
+            end = table.index(b"\0", count * 0x18 + name_at)
+            if table[count * 0x18 + name_at:end].decode("ascii", "replace") == name:
+                stream.seek(16 + count * 0x18 + strings + offset)
+                return stream.read(size)
+    return None
+
+
+def package_version(nsp):
+    """The version of an update package, without decrypting anything: from the package's own .cnmt.xml, else the [vNNN] in
+    its file name; None if neither says. (prepare() checks it against the real metadata once the package is opened.)"""
+    for name in pfs0_names(nsp):
+        if name.endswith(".cnmt.xml"):
+            found = re.search(rb"<Version>(\d+)</Version>", pfs0_read(nsp, name) or b"")
+            if found:
+                return int(found.group(1))
+    found = re.search(r"\[v(\d+)\]", nsp.name)
+    return int(found.group(1)) if found else None
+
+
 def find_packages(folder):
-    """(manifest, base .nsp, update .nsp) for the one game whose two packages are in the folder. A package's title ID is
-    the start of its ticket's file name."""
-    manifests = {t["base_id"]: t for t in load_manifests()}
-    manifests.update({t["update_id"]: t for t in load_manifests() if "update_id" in t})  # (a game never updated has none)
-    found = {}
+    """(manifest, base .nsp, update .nsp) for the one game whose packages are in the folder. A package's title ID is the
+    start of its ticket's file name. With several updates of a game the newest one that has a manifest is used (a
+    newer one that has none is mentioned, not used); a game that was never updated has no update package."""
+    manifests = load_manifests()
+    base_ids = {t["base_id"]: t["slug"] for t in manifests}
+    update_ids = {t["update_id"]: t["slug"] for t in manifests if "update_id" in t}  # (a game never updated has none)
+    bases, updates = {}, {}
     for nsp in sorted(folder.glob("*.nsp")):
         for name in pfs0_names(nsp):
-            if name.endswith(".tik") and name[:16].lower() in manifests:
-                found.setdefault(manifests[name[:16].lower()]["slug"], {})[name[:16].lower()] = nsp
+            if not name.endswith(".tik"):
+                continue
+            tid = name[:16].lower()
+            if tid in base_ids:
+                bases[base_ids[tid]] = nsp
+            elif tid in update_ids:
+                updates.setdefault(update_ids[tid], []).append((package_version(nsp), nsp))
     games = []
-    for slug, packages in found.items():
-        title = next(t for t in load_manifests() if t["slug"] == slug)
-        if title["base_id"] in packages and ("update_id" not in title or title["update_id"] in packages):
-            games.append((title, packages[title["base_id"]], packages.get(title.get("update_id"))))
+    for slug, base in bases.items():
+        versions = {t.get("update_version"): t for t in manifests if t["slug"] == slug}
+        if None in versions:  # (never updated: the base package is the game)
+            games.append((versions[None], base, None))
+            continue
+        offered = [(v, nsp) for v, nsp in updates.get(slug, []) if v in versions]
+        if offered:
+            v, nsp = max(offered, key=lambda o: o[0])
+            newer = [n for n, _ in updates[slug] if n is None or n > v]
+            if newer:
+                print(f"Note: an update newer than the supported v{v} is in the folder and is not used", flush=True)
+            games.append((versions[v], base, nsp))
+        elif updates.get(slug):
+            raise ValueError("That update isn't supported yet (supported: %s)" % ", ".join(f"v{v}" for v in sorted(versions)))
     if len(games) != 1:
         raise ValueError("No supported game in that folder (it needs the base .nsp and the update .nsp)" if not games
-                         else "More than one game in that folder; keep one game's two .nsp files there")
+                         else "More than one game in that folder; keep one game's packages there")
     return games[0]
-
-
 
 
 def find_hactool(override):
@@ -172,11 +216,22 @@ def prepare(args):
         base_metas = read_metas(base, hactool)
         update_metas = read_metas(update, hactool) if args.update else []
         found = next((m["id"] for m in base_metas if m["kind"] == META_APPLICATION), None)
-        title = next((t for t in load_manifests() if t["base_id"] == found), None)
-        if title is None:
+        candidates = [t for t in load_manifests() if t["base_id"] == found]
+        if not candidates:
             raise ValueError(f"Title {found} has no manifest in titles/")
-        print(f"Title: {title['name']}", flush=True)
-        base_meta = pick_meta(base_metas, META_APPLICATION, title["base_id"], 0)
+        base_meta = pick_meta(base_metas, META_APPLICATION, found, 0)
+        if args.update:  # the manifest of the update's own version
+            patches = [m for m in update_metas if m["kind"] == META_PATCH and m["id"] == candidates[0].get("update_id")]
+            if len(patches) != 1:
+                raise ValueError("The update package isn't this game's")
+            title = next((t for t in candidates if t.get("update_version") == patches[0]["version"]), None)
+            if title is None:
+                raise ValueError(f"Update v{patches[0]['version']} of {candidates[0]['name']} isn't supported yet")
+        else:
+            title = next((t for t in candidates if "update_id" not in t), None)
+            if title is None:
+                raise ValueError(f"{candidates[0]['name']} needs its update package")
+        print(f"Title: {title['name']}" + (f" (update v{title['update_version']})" if args.update else ""), flush=True)
         base_nca = content_nca(base, base_meta, CONTENT_PROGRAM)
         if args.update:
             update_meta = pick_meta(update_metas, META_PATCH, title["update_id"], title["update_version"])

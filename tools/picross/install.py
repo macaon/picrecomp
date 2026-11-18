@@ -5,6 +5,7 @@ What the start screen runs. It prints "@step n/N text" when a step starts and "@
 under way (runtime/importer.c reads them); an error ends it with "@error text"."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -67,6 +68,30 @@ def compile_game(game):
     shutil.rmtree(game / "obj", ignore_errors=True)
 
 
+def build_ids(game):
+    """The build IDs of a prepared game's three executables (a NSO's header, 0x40): what its generated code depends on."""
+    ids = []
+    for module in ("main", "subsdk0", "sdk"):
+        with (game / "exefs" / module).open("rb") as stream:
+            stream.seek(0x40)
+            ids.append(stream.read(0x20))
+    return ids
+
+
+def swap_in(new, old):
+    """Replace the installed game <old> by the finished <new> (beside it): the old one is only deleted once the new one
+    stands in its place."""
+    spare = old.with_name(old.name + ".replaced")
+    shutil.rmtree(spare, ignore_errors=True)
+    old.rename(spare)
+    try:
+        new.rename(old)
+    except OSError:
+        spare.rename(old)
+        raise
+    shutil.rmtree(spare, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--folder", type=Path, required=True, help="the folder with the game's two .nsp files")
@@ -82,7 +107,17 @@ def main():
         need("make", "compile the game code")
         need("bash", "generate the game code")
         title = prepare.resolve_folder(args)
-        game = args.output
+        game = installed = args.output
+        update = False
+        if (installed / "picgame.so").is_file():
+            have = json.loads((installed / "title.json").read_text()) if (installed / "title.json").is_file() else {}
+            if have.get("main_build_id") == title["main_build_id"]:
+                raise ValueError(f"{title['name']} is already in the library" +
+                                 (f" (version {have['display_version']})" if have.get("display_version") else ""))
+            # another version of a game that is in the library: built beside it, swapped in when it is done
+            update = True
+            game = args.output = installed.with_name("." + installed.name + ".new")  # (a dot: the start screen skips it)
+            shutil.rmtree(game, ignore_errors=True)
         if (game / "exefs" / "main").is_file() and (game / "title.json").is_file():  # added before, never finished
             for n, text in enumerate(("Looking for the game's packages", "Reading the base package", "Reading the update package",
                                       "Reading the game's metadata", "Applying the update and extracting the game data",
@@ -92,15 +127,25 @@ def main():
             prepare.prepare(args)
         if (game / "picgame.so").is_file():
             raise ValueError(f"{title['name']} is already in the library")
-        prepare.step(8, "Generating the game code")
-        if not (game / "generated").is_dir():
-            generate(game)
-        prepare.step(9, "Compiling the game code")
-        compile_game(game)
+        if update and build_ids(game) == build_ids(installed):  # only the data changed: the game code is still right
+            prepare.step(8, "Generating the game code (not needed: the code is unchanged)")
+            prepare.step(9, "Compiling the game code (not needed)")
+            for name in ("picgame.so", "picgame.so.id", "build.log"):
+                if (installed / name).exists():
+                    shutil.copy2(installed / name, game / name)  # (copied: the installed game stays whole until the swap)
+        else:
+            prepare.step(8, "Generating the game code")
+            if not (game / "generated").is_dir():
+                generate(game)
+            prepare.step(9, "Compiling the game code")
+            compile_game(game)
         prepare.step(10, "Finishing")
         if not args.keep_generated:  # the library is all the game needs (runtime/gamebuild.c does the same)
             shutil.rmtree(game / "generated", ignore_errors=True)
-        print(f"Added {title['name']} in {game}", flush=True)
+        if update:
+            swap_in(game, installed)
+            game = installed
+        print(f"{'Updated' if update else 'Added'} {title['name']} in {game}", flush=True)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"@error {error}", flush=True)
         sys.exit(1)
