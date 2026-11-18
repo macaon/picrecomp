@@ -791,7 +791,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 15: v = STACK_SIZE; break;
         case 16: v = g_system_resource_size; break;
         case 17: v = 0; break;
-        case 18: v = 0x0100BA0003EEA000ull; break;  // program id: PICROSS S
+        case 18: v = g_program_id; break;  // program id (main.npdm's ACI0, set by boot)
         case 20: v = 0; break;
         // (Switchbrew SVC GetInfo: types newer SDKs may ask for)
         case 23: v = 1; break;            // IsApplication

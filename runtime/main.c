@@ -12,6 +12,7 @@
 extern uint32_t g_system_resource_size;
 
 const char *g_romfs_dir;
+uint64_t g_program_id = 0x0100BA0003EEA000ull;  // PICROSS S until main.npdm says otherwise
 
 // rtld normally passes these to nn::init::Start: run every module's init/fini arrays.
 static void run_array(Cpu *c, uint64_t arr, uint64_t size) {
@@ -152,7 +153,8 @@ static void boot(const char *root) {
     snprintf(exefs, sizeof exefs, "%s/exefs", root);
     snprintf(romfs, sizeof romfs, "%s/romfs", root);
     snprintf(npdm_path, sizeof npdm_path, "%s/main.npdm", exefs);
-    if (!g_romfs_dir) g_romfs_dir = strdup(romfs);
+    free((void *)g_romfs_dir);  // (another game than the last boot: its own RomFS)
+    g_romfs_dir = strdup(romfs);
 
     char why[512];
     if (!gamelib_load(root, why, sizeof why)) FATAL("%s\n", why);
@@ -170,6 +172,10 @@ static void boot(const char *root) {
             prio = meta[0xE];
             memcpy(&g_system_resource_size, meta + 0x14, sizeof g_system_resource_size);
             stack_size = *(uint32_t *)(meta + 0x1C);
+            uint32_t aci_off;  // ACI0 (offset at 0x70): its program id is at +0x10
+            uint64_t pid;
+            memcpy(&aci_off, meta + 0x70, 4);
+            if (!fseek(f, aci_off + 0x10, SEEK_SET) && fread(&pid, 8, 1, f) == 1 && pid) g_program_id = pid;
         }
         fclose(f);
     }
@@ -184,6 +190,8 @@ static void boot(const char *root) {
     kernel_run_main(t, t->handle, 0, init_fn, main_fn, fini_fn);  // nn::init::Start(thread, args, init_sdk, init, fini)
 }
 
+
+static char loaded_root[4096];  // the game this process booted first (empty before the first)
 
 int main(int argc, char **argv) {
     plat_init();
@@ -206,9 +214,23 @@ int main(int argc, char **argv) {
         if (title) {  // start screen (runtime/ui/launcher.mm): game files setup, settings
             extern void launcher_run(const char *root);
             extern const char *launcher_root(void);
-            launcher_run(root);
-            root = launcher_root();  // the game card that was chosen
+            const char *to = getenv("PICRECOMP_SWITCH_TO");  // (test) the game folder to switch to, no card chosen
+            if (to && loaded_root[0]) root = to;
+            else launcher_run(root), root = launcher_root();  // the game card that was chosen
+            if (loaded_root[0] && strcmp(loaded_root, root) && getenv("PICRECOMP_SWITCH_RESTART")) {
+                // Fallback: start the process again for the other game (the window closes and reopens). The default
+                // switches in place: gamelib_load swaps the game library, boot the RomFS path and program id.
+                char exe[4096];
+                char *const again[] = {exe, (char *)"--play", (char *)root, NULL};
+                if (plat_exe_path(exe, sizeof exe)) {
+                    LOG("[main] switching to %s: restarting\n", root);
+                    fflush(stderr);
+                    plat_exec(again);
+                }
+                FATAL("cannot restart to switch games\n");
+            }
         }
+        snprintf(loaded_root, sizeof loaded_root, "%s", root);
         boot(root);
         if (getenv("PICROSS_HEADLESS_TRACE")) { SDL_Delay(15000); return 0; }
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested

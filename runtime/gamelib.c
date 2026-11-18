@@ -15,6 +15,7 @@
 
 static const GameLibTables *g_tables;
 static char g_error[256];
+static char g_loaded_dir[1100];  // the game folder the loaded library was chosen for
 
 // The library's id file (<library>.id, written next to it by the build): line 1 its GAMELIB_ID, line 2 the build id of
 // the game's main module it was generated from. Read without loading the library. The second line must match the
@@ -86,6 +87,7 @@ bool gamelib_present(const char *game_dir) {
 }
 
 static const GameLibTables *open_lib(const char *path) {
+    static void *prev;  // the library of the game before (switching games in one process), closed once replaced
 #ifdef _WIN32
     HMODULE h = LoadLibraryA(path);
     if (!h) { snprintf(g_error, sizeof g_error, "can't load %s (error %lu)", path, GetLastError()); return NULL; }
@@ -101,13 +103,25 @@ static const GameLibTables *open_lib(const char *path) {
         snprintf(g_error, sizeof g_error, "%s was built for another version", path);
         return NULL;  // (left loaded: nothing of it runs)
     }
+    if (prev) {
+#ifdef _WIN32
+        FreeLibrary((HMODULE)prev);
+#else
+        dlclose(prev);
+#endif
+    }
+    prev = (void *)h;
     return t;
 }
 
 bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
+    // One library per game folder: a different folder (the start screen's other game card) loads its own.
     static bool tried;
-    if (!tried) {
+    bool other = game_dir && g_loaded_dir[0] && strcmp(game_dir, g_loaded_dir);
+    if (!tried || other) {
         tried = true;
+        g_tables = NULL;
+        snprintf(g_loaded_dir, sizeof g_loaded_dir, "%s", game_dir ? game_dir : "");
         snprintf(g_error, sizeof g_error, "the game code hasn't been built: set up the game files on the start screen");
         char c[3][1100];
         int n = candidates(game_dir, c);

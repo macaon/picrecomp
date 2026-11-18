@@ -74,19 +74,22 @@ static void hle_unimplemented(Cpu *c) {
     c->x[0] = 0;
 }
 
+static struct { const char *name; uint64_t addr; } sym_cache[64];
+static pthread_mutex_t sym_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Addresses belong to the game booted: another game (start screen) has its own.
+RT_ON_RESET(guest_sym_reset) { memset(sym_cache, 0, sizeof sym_cache); }
+
 uint64_t guest_sym(const char *name) {
     // small cache: callers pass string literals, so pointer identity is a good key
-    static struct { const char *name; uint64_t addr; } cache[64];
-    static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_lock(&m);
-    for (int i = 0; i < 64 && cache[i].name; i++)
-        if (cache[i].name == name) { uint64_t a = cache[i].addr; pthread_mutex_unlock(&m); return a; }
-    pthread_mutex_unlock(&m);
+    pthread_mutex_lock(&sym_mutex);
+    for (int i = 0; i < 64 && sym_cache[i].name; i++)
+        if (sym_cache[i].name == name) { uint64_t a = sym_cache[i].addr; pthread_mutex_unlock(&sym_mutex); return a; }
+    pthread_mutex_unlock(&sym_mutex);
     uint64_t a = loader_find_symbol(name);
     if (!a) FATAL("guest symbol %s not found\n", name);
-    pthread_mutex_lock(&m);
-    for (int i = 0; i < 64; i++) if (!cache[i].name) { cache[i].name = name; cache[i].addr = a; break; }
-    pthread_mutex_unlock(&m);
+    pthread_mutex_lock(&sym_mutex);
+    for (int i = 0; i < 64; i++) if (!sym_cache[i].name) { sym_cache[i].name = name; sym_cache[i].addr = a; break; }
+    pthread_mutex_unlock(&sym_mutex);
     return a;
 }
 
