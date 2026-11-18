@@ -42,6 +42,7 @@ Module *loader_module(const char *name);  // NULL if not loaded
 extern int g_nmodules;
 void loader_load(const char *exefs_dir);  // (again after a reboot: modules are reloaded into wiped memory)
 uint64_t loader_find_symbol(const char *name);
+uint64_t loader_import_slot(const Module *m, const char *name);
 const char *loader_symbol_at(uint64_t addr, uint64_t *offset);
 
 // ---- dispatch.c

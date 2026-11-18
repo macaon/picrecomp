@@ -39,10 +39,10 @@ static void picross_startup_complete(Cpu *c) { (void)c; }
 static void rtld_init_sdk(Cpu *c) {
     Module *sdk = loader_module("sdk");
     {   // Always: without this the game starts with an uninitialised allocator and sends the GPU garbage
-        // (a run without it hung an RTX 5070 Ti, see docs/STATUS.md). PICROSS S v524288 SDK relocation for nninitStartup.
-        uint64_t *startup = (uint64_t *)(sdk->base + 0xcdd210);
+        // (a run without it hung an RTX 5070 Ti, see docs/STATUS.md). SDK import of nninitStartup.
+        uint64_t *startup = (uint64_t *)loader_import_slot(sdk, "nninitStartup");  // (the sdk's import of the game's)
         uint64_t entry = loader_find_symbol("nninitStartup");
-        if (!entry || *startup != entry) FATAL("unexpected PICROSS S startup relocation\n");
+        if (!startup || !entry || *startup != entry) FATAL("the sdk does not import the game's nninitStartup\n");
         LOG("initializing PICROSS S allocator before SDK constructors\n");
         uint32_t resource_size = g_system_resource_size;
         g_system_resource_size = 0;

@@ -1,6 +1,10 @@
 import json
+import struct
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nso import Nso
 
 
 def patch(module, decl, *edits):
@@ -24,7 +28,10 @@ def patch(module, decl, *edits):
 
 
 root = Path(sys.argv[1]).resolve()
-sites = json.loads(Path(sys.argv[2]).read_text())["exception_landings"]  # the title's manifest (titles/*.json)
+sites = json.loads(Path(sys.argv[2]).read_text()).get("exception_landings")  # the title's manifest (titles/*.json)
+if not sites:  # a title whose exception sites are not known yet (found by running it): nothing to splice
+    print("No exception landings in the manifest: generated code left as it is")
+    sys.exit(0)
 call, catch = sites["call"], sites["catch"]
 main, sdk = root / "lift/main", root / "lift/sdk"
 A = {k: v[2:] for k, v in call.items()}
@@ -33,10 +40,23 @@ patch(main, '_Bool rt_call_with_landing(Cpu *c, uint64_t pc);',
       (f'c->x[30] = 0x{A["return"]}ull; rt_dispatch(c);',
        f'c->x[30] = 0x{A["return"]}ull;\n'
        f'    if (rt_call_with_landing(c, 0x{A["landing"]}ull)) goto L_{A["resume"]};'))
-# (the sdk module is the same in every PICROSS game: same build ID, same addresses)
+
+
+def sdk_resume_function(path):
+    """The function after the sdk's one `mov sp, x16; ret` (the unwinder's resume), as its generated name. The sdk is
+    the same in most PICROSS games (same build ID, same address) but not all: it is found by its code."""
+    n = Nso(path)
+    t0, tl = n.text
+    hits = [o for o in range(t0, t0 + tl - 8, 4)
+            if struct.unpack_from('<II', n.image, o) == (0x9100021F, 0xD65F03C0)]
+    if len(hits) != 1:
+        raise ValueError(f"{len(hits)} places in the sdk look like the unwinder's resume, expected one")
+    return f"f_{0x700c000000 + hits[0] + 8:x}"  # (the ret, then 4 bytes of padding)
+
+
 patch(sdk, '_Noreturn void rt_resume_landing(Cpu *c);',
-      ('    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    return;\n}\nvoid f_700c55f200',
-       '    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    rt_resume_landing(c);\n}\nvoid f_700c55f200'))
+      ('    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    return;\n}\nvoid ' + sdk_resume_function(root / "exefs/sdk"),
+       '    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    rt_resume_landing(c);\n}\nvoid ' + sdk_resume_function(root / "exefs/sdk")))
 patch(main, '_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *));',
       (f'c->x[30] = 0x{B["return"]}ull; f_{B["callee"]}(c);',
        f'c->x[30] = 0x{B["return"]}ull;\n'

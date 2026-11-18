@@ -193,6 +193,23 @@ static void relocate(Module *m) {
     LOG("relocated %-5s (%d imports bound to host stubs)\n", m->name, unresolved);
 }
 
+// The address of module m's jump slot (PLT entry) for the imported symbol name, 0 if it has none: where its code
+// calls through to it, so a host patch can redirect that one import.
+uint64_t loader_import_slot(const Module *m, const char *name) {
+    uint64_t jmprel = 0, pltsz = 0;
+    for (const uint64_t *d = (const uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
+        if (d[0] == DT_JMPREL) jmprel = m->base + d[1];
+        if (d[0] == DT_PLTRELSZ) pltsz = d[1];
+    }
+    const Elf64Rela *r = (const Elf64Rela *)jmprel;
+    for (uint64_t i = 0; jmprel && i < pltsz / sizeof *r; i++) {
+        uint32_t si = r[i].info >> 32;
+        if (si < m->nsyms && !strcmp((const char *)(m->strtab + ((const Elf64Sym *)m->symtab)[si].name), name))
+            return m->base + r[i].off;
+    }
+    return 0;
+}
+
 void loader_load(const char *exefs) {
     char path[1024];
 #define MOD(name, base) {#name, GUEST(base)},
