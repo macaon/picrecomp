@@ -1,6 +1,9 @@
 // Applet manager (appletOE), apm, and lm.
+#include <dirent.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "../hle.h"
 #include "../ipc.h"
@@ -192,6 +195,48 @@ static void library_applet_creator(Service *s, IpcReq *req, IpcResp *resp) {
 
 extern const uint8_t g_user_id[16];
 
+// ---- IApplicationFunctions 110 QueryApplicationPlayStatistics(InArray<ApplicationId>) -> (Out<int>, OutArray of 0x18
+// bytes), 111 the same for a user (the Uid is not looked at). The console answers from its play history; here a title
+// has been played when it has save data in this data root (save/<program id>/). PICROSS S4 and later ask about the
+// earlier titles (S, S2, S3...) and unlock their extra puzzles when the 32-bit value at +0x10 of the title's entry is
+// above 0; an entry that was never filled was whatever was on the game's stack, so it always "detected" them.
+static bool has_files(const char *dir, int depth) {
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    bool found = false;
+    for (struct dirent *e; !found && (e = readdir(d));) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p[1100];
+        struct stat st;
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (stat(p, &st) == 0) found = S_ISREG(st.st_mode) ? st.st_size > 0 : depth > 0 && has_files(p, depth - 1);
+    }
+    closedir(d);
+    return found;
+}
+
+static void play_statistics(IpcReq *req, IpcResp *resp) {
+    IpcBuf *ids = in_buf(req, 0), *out = out_buf(req, 0);
+    uint64_t n = ids ? ids->size / 8 : 0;
+    if (out && n > out->size / 0x18) n = out->size / 0x18;
+    for (uint64_t i = 0; i < n; i++) {
+        uint8_t *entry = (uint8_t *)(uintptr_t)out->addr + i * 0x18;
+        uint64_t id = ((const uint64_t *)(uintptr_t)ids->addr)[i];
+        char dir[64];
+        snprintf(dir, sizeof dir, "save/%016llx", (unsigned long long)id);
+        bool played = id && has_files(dir, 3);
+        memset(entry, 0, 0x18);
+        if (played) {  // first / last played, minutes played, times launched: all above 0
+            uint32_t v[4] = {1, 1, 60, 1};
+            memcpy(entry, &id, 8);
+            memcpy(entry + 8, v, sizeof v);
+        }
+        LOG("[am] play statistics of %016llx: %s\n", (unsigned long long)id, played ? "played (save data here)" : "not played");
+    }
+    OUT(int32_t, 0) = (int32_t)n;
+    resp_size(resp, 4);
+}
+
 static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -217,6 +262,7 @@ static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
     }
     case 23: memcpy(resp->data, "1.0.0", 6); resp_size(resp, 0x10); break;
     case 40: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // NotifyRunning
+    case 110: case 111: play_statistics(req, resp); break;
     case 130: case 140: resp->copy_handles[resp->ncopy++] = new_event(); break;
     default: UNHANDLED("IApplicationFunctions");
     }

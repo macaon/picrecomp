@@ -216,10 +216,15 @@ patch S+ needs (S's two sites are not in its `main`: the code differs). Also: `r
 
 - Saves: run S (play.sh) once, look for `[fs] save data of earlier versions copied` in the log and for your progress. The
   save that was in `.picrecomp/runtime/save/save_0/all.dat` may be S2's, not S's, if both were played before this change.
-- S2 and S3 do not read other titles' saves (the bonus puzzles from an earlier title's save are a PICROSS S4 feature):
-  nothing in S2 calls `IsSaveDataExisting` / `MountSaveDataReadOnly`, and no run opened another title's save. For S4,
-  `OpenSaveDataFileSystem` with another program id already mounts that title's save folder read-only (or returns
-  ResultTargetNotFound), which is what the SDK's `IsSaveDataExisting` / `MountSaveDataReadOnly` need (read in Ghidra).
+- Extra puzzles from earlier titles (PICROSS S4 on): the game does not read the earlier titles' saves; it asks the console's
+  play history, `IApplicationFunctions` command 110 `QueryApplicationPlayStatistics(ids)` (SDK: 8 bytes per id in, 0x18 bytes
+  per statistics entry out, the count back as an int), for S, S2 and S3 (at its indices 2 to 4; in S4's code at
+  `0x129ed00`) and unlocks a title's extras when the 32-bit value at +0x10 of its entry is above 0. The runtime answered
+  with an empty reply, so the entries were whatever was on the game's stack: S4 always "detected" all of them. It now
+  answers from the save folders: a title counts as played when `save/<program id>/` holds a file (`runtime/services/am.c`,
+  logged as `[am] play statistics of ...`). Seen in S4: no earlier saves, no unlock message; with only an S2 save,
+  "Picross S2 play data detected. Extra puzzle E004 unlocked." (S and S3 not). A game keeps what it unlocked in its own
+  save. (S2 and S3 never ask.) The read-only mount of another title's save (`fs.c`) is not used by these games.
 
 - Pick another game card on the start screen: the window should stay and go straight into that game (checked by the
   user with the cards; also tested with `PICRECOMP_SWITCH_TO`). The Vulkan validation layer logs nothing after a switch (S to S2, checked).
