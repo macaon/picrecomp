@@ -67,7 +67,9 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   control data (the base game's when it has no update): `prepare.py` writes it as `display_version` in the game's
   `title.json`. Seen: S 1.6.1, S2 1.5.2, S3 1.5.2, S4 1.4.1, S5 1.3.1, S6 1.3.1, S7 1.2.0, S8 1.0.0. Games added before this
   have no such field; the line is left out for them (the ones here were filled in by hand from their packages).
-  A click on a card plays it; with the mouse, Settings is the "F1 Settings" hint, which is a link.
+  With the mouse a click chooses a card, the Play button at the bottom (lit while the chosen game can be played) starts it,
+  and so does a double click; A / Enter / Start play it from the cursor. Settings is the "F1 Settings" hint, which is a
+  link too. Seen with scripted clicks (`PICRECOMP_LAUNCHER_KEYS="frame:click_<x>_<y>"`): a click chooses, the Play click starts.
 
 ## Not verified
 

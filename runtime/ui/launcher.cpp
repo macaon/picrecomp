@@ -1045,7 +1045,7 @@ extern "C" void launcher_run(const char *root) {
             status = check_game_files(g_root);
             if (!status.empty()) { g_bg = 0; bind_capture_cancel(); settings_save(); page = SETUP; }
         }
-        {   // (test) PICRECOMP_LAUNCHER_KEYS="frame:<SDL key name>,...": a key pressed on the start screen at that frame, held two
+        {   // (test) PICRECOMP_LAUNCHER_KEYS="frame:<SDL key name | click_<x>_<y>>,...": a key pressed (or a left click) on the start screen at that frame, held two
             static const char *next = getenv("PICRECOMP_LAUNCHER_KEYS");
             static long tick, release_at = -1;
             static SDL_Scancode held = SDL_SCANCODE_UNKNOWN;
@@ -1059,10 +1059,28 @@ extern "C" void launcher_run(const char *root) {
             };
             long at;
             char name[64];
+            static float click_x, click_y;
+            static long click_up = -1;
+            auto mouse = [&](SDL_EventType type) {
+                SDL_Event m = {};
+                m.type = type;
+                if (type == SDL_EVENT_MOUSE_MOTION) m.motion.windowID = SDL_GetWindowID(win), m.motion.x = click_x, m.motion.y = click_y;
+                else m.button.windowID = SDL_GetWindowID(win), m.button.button = SDL_BUTTON_LEFT, m.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN,
+                     m.button.x = click_x, m.button.y = click_y;
+                SDL_PushEvent(&m);
+            };
+            if (click_up >= 0 && tick >= click_up) mouse(SDL_EVENT_MOUSE_BUTTON_UP), click_up = -1;
             if (held != SDL_SCANCODE_UNKNOWN && tick >= release_at) push(held, false), held = SDL_SCANCODE_UNKNOWN;
-            if (next && *next && held == SDL_SCANCODE_UNKNOWN && sscanf(next, "%ld:%63[^,]", &at, name) == 2 && tick >= at) {
-                held = SDL_GetScancodeFromName(name);
-                if (held != SDL_SCANCODE_UNKNOWN) push(held, true), release_at = tick + 2;
+            if (next && *next && held == SDL_SCANCODE_UNKNOWN && click_up < 0 && sscanf(next, "%ld:%63[^,]", &at, name) == 2 && tick >= at) {
+                float cx, cy;
+                if (sscanf(name, "click_%f_%f", &cx, &cy) == 2) {  // "click_<x>_<y>": a left click there (window pixels)
+                    click_x = cx, click_y = cy;
+                    mouse(SDL_EVENT_MOUSE_MOTION), mouse(SDL_EVENT_MOUSE_BUTTON_DOWN);
+                    click_up = tick + 3;
+                } else {
+                    held = SDL_GetScancodeFromName(name);
+                    if (held != SDL_SCANCODE_UNKNOWN) push(held, true), release_at = tick + 2;
+                }
                 next = strchr(next, ',');
                 if (next) next++;
             }
@@ -1189,7 +1207,8 @@ extern "C" void launcher_run(const char *root) {
                     if (refocus && (plus ? g_cards.empty() : i == g_card)) ImGui::SetKeyboardFocusHere();
                     bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + 36 * s), ImGuiButtonFlags_EnableNav);
                     ImGui::PopStyleColor();
-                    bool focused = ImGui::IsItemFocused(), hot = focused || ImGui::IsItemHovered(), sel = !plus && i == g_card;
+                    bool focused = ImGui::IsItemFocused(), hovered = ImGui::IsItemHovered(), hot = focused || hovered,
+                         sel = !plus && i == g_card;
                     ImGui::PopID();
                     if (plus) {  // a blank card with a +
                         ImVec2 br(at.x + cs, at.y + cs), m((at.x + br.x) * 0.5f, (at.y + br.y) * 0.5f);
@@ -1208,7 +1227,7 @@ extern "C" void launcher_run(const char *root) {
                         }
                         continue;
                     }
-                    if ((focused || clicked) && !sel && !busy) {  // the cursor chooses; a click chooses and plays
+                    if ((focused || clicked) && !sel && !busy) {  // the cursor chooses; so does a click
                         g_card = i;
                         g_root = g_cards[i].root;
                         status = check_game_files(g_root);
@@ -1216,7 +1235,11 @@ extern "C" void launcher_run(const char *root) {
                         if (status.empty()) load_background(dev);
                         sel = true;
                     }
-                    if (clicked && !busy) launch = status.empty();
+                    // A / Enter on the card play it; with the mouse a click chooses (the Play button below starts it), a
+                    // double click plays
+                    bool by_mouse = clicked && ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+                    if (!busy && ((clicked && !by_mouse) || (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))))
+                        launch = status.empty();
                     ImVec2 br(at.x + cs, at.y + cs);
                     if (g_cards[i].tex) dl->AddImageRounded((ImTextureID)g_cards[i].tex, at, br, ImVec2(0, 0), ImVec2(1, 1),
                                                             sel || hot ? IM_COL32_WHITE : IM_COL32(200, 200, 210, 255), 14 * s);
@@ -1249,29 +1272,43 @@ extern "C" void launcher_run(const char *root) {
                 float right = ds.x - 60 * s;
                 if (link("QUIT", right)) exit(0);
                 bool settings_link = false;
-                // the hint line, centred: the buttons that play and open Settings (those of the last device used)
+                // the bottom line, centred: a Play button (lit while the chosen game can be played; the key that does it
+                // is on it, for the last device used) and the Settings hint, both clickable
                 {
                     ImGui::PushFont(g_font_small);
-                    struct Hint { const char *key, *what; };
-                    Hint hints[2] = {{pad_hint ? "Start" : "Enter", "Play"}, {pad_hint ? "Select" : "F1", "Settings"}};
-                    int nh = status.empty() ? 2 : 1;
-                    float total = 0, sp = 44 * s, kw = 10 * s;
-                    for (int i = 2 - nh; i < 2; i++)
-                        total += ImGui::CalcTextSize(hints[i].key).x + kw + ImGui::CalcTextSize(hints[i].what).x + (i < 1 ? sp : 0);
-                    float x = ImGui::GetWindowPos().x + (ds.x - total) * 0.5f, y = ImGui::GetWindowPos().y + ds.y - 70 * s;
-                    for (int i = 2 - nh; i < 2; i++) {
-                        ImVec2 ks = ImGui::CalcTextSize(hints[i].key), ws = ImGui::CalcTextSize(hints[i].what);
-                        bool hot = false;
-                        if (i == 1) {  // "Settings": the mouse's way in (a click opens it)
-                            ImGui::SetCursorScreenPos(ImVec2(x, y));
-                            if (ImGui::InvisibleButton("##settings_hint", ImVec2(ks.x + kw + ws.x, ks.y))) settings_link = true;
-                            hot = ImGui::IsItemHovered();
-                            if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                        }
-                        dl->AddText(ImVec2(x, y), IM_COL32(255, 214, 64, 255), hints[i].key);
-                        dl->AddText(ImVec2(x + ks.x + kw, y), hot ? IM_COL32(255, 238, 150, 255) : IM_COL32(235, 238, 250, 235), hints[i].what);
-                        if (hot) dl->AddLine(ImVec2(x, y + ks.y), ImVec2(x + ks.x + kw + ws.x, y + ks.y), IM_COL32(255, 214, 64, 255), 1.5f * s);
-                        x += ks.x + kw + ws.x + sp;
+                    const char *play_key = pad_hint ? "Start" : "Enter", *set_key = pad_hint ? "Select" : "F1";
+                    bool ready = status.empty() && !busy;
+                    float kw = 10 * s, padx = 18 * s, pady = 7 * s, sp = 40 * s;
+                    ImVec2 pk = ImGui::CalcTextSize(play_key), pw = ImGui::CalcTextSize("Play");
+                    ImVec2 sk = ImGui::CalcTextSize(set_key), sw = ImGui::CalcTextSize("Settings");
+                    float play_w = pk.x + kw + pw.x + 2 * padx, play_h = pk.y + 2 * pady, set_w = sk.x + kw + sw.x;
+                    float x = ImGui::GetWindowPos().x + (ds.x - (play_w + sp + set_w)) * 0.5f;
+                    float y = ImGui::GetWindowPos().y + ds.y - 70 * s;
+                    {  // Play
+                        ImVec2 a(x, y - pady), b(x + play_w, y - pady + play_h);
+                        ImGui::SetCursorScreenPos(a);
+                        bool click = ImGui::InvisibleButton("##play", ImVec2(play_w, play_h));
+                        bool hot = ready && ImGui::IsItemHovered();
+                        if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        ImU32 fill = !ready ? IM_COL32(255, 255, 255, 14) : hot ? IM_COL32(255, 214, 64, 255) : IM_COL32(255, 214, 64, 46);
+                        ImU32 edge = !ready ? IM_COL32(255, 255, 255, 50) : IM_COL32(255, 214, 64, 255);
+                        ImU32 key_col = !ready ? IM_COL32(170, 175, 200, 140) : hot ? IM_COL32(40, 28, 0, 255) : IM_COL32(255, 214, 64, 255);
+                        ImU32 txt_col = !ready ? IM_COL32(170, 175, 200, 140) : hot ? IM_COL32(20, 14, 0, 255) : IM_COL32(255, 255, 255, 255);
+                        dl->AddRectFilled(a, b, fill, play_h * 0.5f);
+                        dl->AddRect(a, b, edge, play_h * 0.5f, 0, 2 * s);
+                        dl->AddText(ImVec2(x + padx, y), key_col, play_key);
+                        dl->AddText(ImVec2(x + padx + pk.x + kw, y), txt_col, "Play");
+                        if (click && ready) launch = true;
+                    }
+                    x += play_w + sp;
+                    {  // Settings: the mouse's way in (a click opens it)
+                        ImGui::SetCursorScreenPos(ImVec2(x, y));
+                        if (ImGui::InvisibleButton("##settings_hint", ImVec2(sk.x + kw + sw.x, sk.y))) settings_link = true;
+                        bool hot = ImGui::IsItemHovered();
+                        if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        dl->AddText(ImVec2(x, y), IM_COL32(255, 214, 64, 255), set_key);
+                        dl->AddText(ImVec2(x + sk.x + kw, y), hot ? IM_COL32(255, 238, 150, 255) : IM_COL32(235, 238, 250, 235), "Settings");
+                        if (hot) dl->AddLine(ImVec2(x, y + sk.y), ImVec2(x + sk.x + kw + sw.x, y + sk.y), IM_COL32(255, 214, 64, 255), 1.5f * s);
                     }
                     ImGui::PopFont();
                 }
