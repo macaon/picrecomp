@@ -57,9 +57,49 @@ static const char *host_language(void) {
     return "en-US";
 }
 
+// The chosen game's languages as a mask over g_language_codes (bit i: index i); 0 = not known, so all of them
+static uint32_t g_game_languages;
+
+bool settings_language_supported(int index) {
+    return index <= LANG_AUTO || index >= N_LANGUAGES || !g_game_languages || (g_game_languages >> index & 1);
+}
+
+// The metadata's SupportedLanguageFlag (nn::ns::ApplicationControlProperty: one bit per language in this order:
+// American English, British English, Japanese, French, German, Latin American Spanish, Spanish, Italian, Dutch,
+// Canadian French, Portuguese, Russian, Korean, Traditional Chinese, Simplified Chinese, Brazilian Portuguese)
+// -> our indices. Portuguese (Portugal) is served as Brazilian Portuguese, the one Portuguese in the list.
+static const int8_t k_flag_to_index[16] = {2, 3, 1, 4, 6, 9, 8, 7, 10, 5, 15, 11, 12, 14, 13, 15};
+
+void settings_game_languages(const char *game_root) {
+    g_game_languages = 0;
+    char path[1100], text[2048] = {0};
+    snprintf(path, sizeof path, "%s/title.json", game_root);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n] = 0;
+    const char *k = strstr(text, "\"language_flags\"");
+    if (!k || !(k = strchr(k + 16, ':'))) return;
+    for (k++; *k == ' ' || *k == '"'; k++) {}
+    unsigned long flags = strtoul(k, NULL, 10);
+    for (int bit = 0; bit < 16; bit++)
+        if (flags >> bit & 1) g_game_languages |= 1u << k_flag_to_index[bit];
+}
+
+// The language to serve: the setting (or the host's) when the game has it, else English (US), else its first
+static const char *supported_language(const char *code) {
+    for (int i = 1; i < N_LANGUAGES; i++)
+        if (!strcmp(code, g_language_codes[i]) && settings_language_supported(i)) return code;
+    if (settings_language_supported(2)) return g_language_codes[2];
+    for (int i = 1; i < N_LANGUAGES; i++)
+        if (settings_language_supported(i)) return g_language_codes[i];
+    return code;
+}
+
 const char *settings_language(void) {
     int i = g_settings.language;
-    return i > LANG_AUTO && i < N_LANGUAGES ? g_language_codes[i] : host_language();
+    return supported_language(i > LANG_AUTO && i < N_LANGUAGES ? g_language_codes[i] : host_language());
 }
 
 const char *settings_language_name(void) {

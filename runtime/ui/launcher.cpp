@@ -487,6 +487,7 @@ static uint64_t load_icon(const std::string &path, int *out_w = NULL, int *out_h
 static void load_background(GpuDevice dev) {
     struct Bg { uint64_t tex; int w, h, gen; float lum; };
     static std::map<std::string, Bg> cache;
+    settings_game_languages(g_root.c_str());  // (the chosen game's languages: Settings offers those)
     auto it = cache.find(g_root);
     if (it == cache.end() || it->second.gen != g_scan_gen) {  // (read again after a scan: the game may have been updated)
         Bg b = {0, 0, 0, g_scan_gen, 0.5f};
@@ -559,6 +560,7 @@ static int g_refocus = MAIN;  // back on the main page: select the item of the p
 // A big menu line: gold + a marker when focused / hovered (keyboard, gamepad or mouse), grey when disabled
 static bool g_menu_small;  // sub pages: buttons in the small font
 void menu_tabs_draw(float scale, ImFont *font, ImFont *font_big, bool in_game, void (*prelaunch)(float));  // menu.mm
+extern "C" const char *menu_scope_note(void);  // what the tab's settings apply to (menu.cpp)
 void menu_tabs_focus(bool first_tab);
 extern int g_tab_request_ext;
 extern "C" void menu_apply_window_requests(void *sdl_window);
@@ -1429,7 +1431,11 @@ extern "C" void launcher_run(const char *root) {
                 ImGui::PushFont(g_font_small);
                 ImGui::PushFont(g_font_menu);
                 ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "Settings");
+                float title_h = ImGui::GetItemRectSize().y;
                 ImGui::PopFont();
+                ImGui::SameLine();
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (title_h - ImGui::GetTextLineHeight()) * 0.8f);  // (on the title's baseline)
+                ImGui::TextDisabled("  %s", menu_scope_note());
                 bool back;
                 {  // close: a drawn X in the corner (B / Esc too)
                     float bx = 44 * sc;

@@ -37,3 +37,9 @@ void settings_save(void);
 const char *settings_language(void);
 // That code's name for the menu ("Spanish")
 const char *settings_language_name(void);
+// The languages the chosen game has text for (its metadata's list, kept as "language_flags" in its title.json): read
+// from the game's folder when the start screen's cursor moves to it and when it boots. Unknown (no such field): every
+// language is offered. settings_language() then never serves one the game lacks: the host language or the setting
+// falls back to English (US), else the game's first.
+void settings_game_languages(const char *game_root);
+bool settings_language_supported(int index);  // index into g_language_codes (LANG_AUTO is always)

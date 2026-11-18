@@ -269,6 +269,8 @@ static int g_focus_frames;
 // later on the tab that's selected
 void menu_tabs_focus(bool first_tab) { g_focus_tab = first_tab ? -1 : -100, g_focus_frames = 0; }
 int g_tab_request_ext = -1;
+// What the settings on this tab apply to (shown by the title): all of them, except the chosen game's own files
+extern "C" const char *menu_scope_note(void) { return g_tab == -1 ? "this game's files" : "applies to all games"; }
 // The game's own "Controller Settings" (Plus and Minus together at its main menu starts the console's controller applet, which
 // the runtime doesn't have): our menu on its Controls tab, where the layout and the bindings are.
 extern "C" void menu_open_controls(void) {
@@ -530,10 +532,16 @@ static void tab_about(void) {
         // what the game is told the console's language is: its text follows this (runtime/settings.c)
         char autol[64];
         snprintf(autol, sizeof autol, "Auto (%s)", settings_language_name());
+        // only the languages this game has text for (a game whose list is not known offers them all)
         const char *names[N_LANGUAGES];
-        names[0] = autol;
-        for (int i = 1; i < N_LANGUAGES; i++) names[i] = g_language_names[i];
-        if (choice("Language", &g_settings.language, names, N_LANGUAGES)) settings_save();
+        int index[N_LANGUAGES], n = 0, cur = 0;
+        for (int i = 0; i < N_LANGUAGES; i++) {
+            if (!settings_language_supported(i)) continue;
+            names[n] = i == LANG_AUTO ? autol : g_language_names[i];
+            if (i == g_settings.language) cur = n;  // (a language this game lacks shows as Auto)
+            index[n++] = i;
+        }
+        if (choice("Language", &cur, names, n)) { g_settings.language = index[cur]; settings_save(); }
     }
     hint("The game's text language, as its own system setting. Applies when the game restarts: Quit -> Title "
          "screen, then Play.");
@@ -786,7 +794,11 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         // screen" - rt_request_reboot(RT_REBOOT_TITLE) - is to find a new home; user 2026-10-11.)
         ImGui::PushFont(g_font_big);
         ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "Settings");
+        float title_h = ImGui::GetItemRectSize().y;
         ImGui::PopFont();
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (title_h - ImGui::GetTextLineHeight()) * 0.8f);  // (on the title's baseline)
+        ImGui::TextDisabled("  %s", menu_scope_note());
         {
             float bx = 44 * scale;
             ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - bx);

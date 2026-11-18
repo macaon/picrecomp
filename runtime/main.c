@@ -178,6 +178,7 @@ static void boot(const char *root) {
         if (slot && !*slot) *slot = (uint64_t)hle_alloc(8);
     }
     { extern void settings_load(void); settings_load(); }
+    settings_game_languages(root);  // (this game's languages: Settings offers those, the game is served one it has)
     kernel_init();
     dispatch_init();
 

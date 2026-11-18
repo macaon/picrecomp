@@ -133,6 +133,15 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   opens our menu on the Controls tab (`menu_open_controls`). Seen in S4 with Plus alone and with Minus alone scripted.
   On a controller, only Minus and Plus *together* (Back + Start) is the menu's own hotkey, so a single press reaches the game.
 
+- Settings stay global, with two additions. A note by the "Settings" title says what the tab applies to ("applies to all
+  games"; "this game's files" on Game files). The Language list offers only the languages the chosen game has text for:
+  `prepare.py` saves the metadata's SupportedLanguageFlag as `language_flags` in the game's `title.json`
+  (`settings_game_languages`, read when the cursor moves to a game and when it boots). All eight installed games have the
+  same ten (English US, Japanese, French, German, Spanish, Italian, Korean, both Chinese, Brazilian Portuguese), so English
+  UK, Latin American Spanish, Canadian French, Dutch and Russian are gone from the list; a saved language the game lacks
+  shows as Auto and the game is served English (US) (else its first language) instead. Games added before have no such
+  field and offer them all (the eight here were filled in from their packages).
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.

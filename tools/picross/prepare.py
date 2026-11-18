@@ -171,6 +171,14 @@ def display_version(nacp):
     return raw.split(b"\0")[0].decode("ascii", "replace").strip()
 
 
+def language_flags(nacp):
+    """The languages the game has text for (the NACP's SupportedLanguageFlag, 4 bytes at 0x302C: a bit per language), or 0."""
+    try:
+        return struct.unpack_from("<I", Path(nacp).read_bytes(), 0x302C)[0]
+    except (OSError, struct.error):
+        return 0
+
+
 def prepare(args):
     output = args.output.resolve()
     if output.exists() or output.is_symlink():
@@ -285,6 +293,9 @@ def prepare(args):
             version = display_version(icons / "control.nacp")
             if version:
                 info["display_version"] = version
+            flags = language_flags(icons / "control.nacp")
+            if flags:
+                info["language_flags"] = str(flags)
         try:  # the colour wash behind the game's title screen, for the start screen (needs UnityPy; optional)
             art.extract_background(prepared)
         except Exception as error:  # (a background is a nicety: it never fails an import)
