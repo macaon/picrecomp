@@ -104,11 +104,13 @@ static ImGuiKey key_from_scancode(SDL_Scancode sc) {
     }
 }
 
-// Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back.
+// Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back; with the Xbox face-button layout
+// chosen (Settings > Controls) the bottom one (Xbox A) confirms and the right one (B) goes back.
 static ImGuiKey key_from_pad(Uint8 b) {
+    bool xbox = bind_face_layout() == 1;
     switch (b) {
-    case SDL_GAMEPAD_BUTTON_EAST: return ImGuiKey_GamepadFaceDown;   // activate
-    case SDL_GAMEPAD_BUTTON_SOUTH: return ImGuiKey_GamepadFaceRight; // cancel / back
+    case SDL_GAMEPAD_BUTTON_EAST: return xbox ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;   // right: activate (Xbox: back)
+    case SDL_GAMEPAD_BUTTON_SOUTH: return xbox ? ImGuiKey_GamepadFaceDown : ImGuiKey_GamepadFaceRight; // bottom: back (Xbox: activate)
     case SDL_GAMEPAD_BUTTON_NORTH: return ImGuiKey_GamepadFaceUp;
     case SDL_GAMEPAD_BUTTON_WEST: return ImGuiKey_GamepadFaceLeft;
     case SDL_GAMEPAD_BUTTON_DPAD_UP: return ImGuiKey_GamepadDpadUp;

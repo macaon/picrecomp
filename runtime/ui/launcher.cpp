@@ -734,8 +734,9 @@ static bool menu_item(const char *label, bool enabled, bool *hovered = NULL, con
 // switched off: it used the Xbox layout and, per the user, didn't work on the start screen.)
 static ImGuiKey launcher_pad_key(Uint8 b) {
     switch (b) {
-    case SDL_GAMEPAD_BUTTON_EAST: return ImGuiKey_GamepadFaceDown;   // A: activate
-    case SDL_GAMEPAD_BUTTON_SOUTH: return ImGuiKey_GamepadFaceRight; // B: back
+    // (the Xbox face-button layout, Settings > Controls: its A is the bottom button, so the two trade places)
+    case SDL_GAMEPAD_BUTTON_EAST: return bind_face_layout() == 1 ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;   // A: activate
+    case SDL_GAMEPAD_BUTTON_SOUTH: return bind_face_layout() == 1 ? ImGuiKey_GamepadFaceDown : ImGuiKey_GamepadFaceRight; // B: back
     case SDL_GAMEPAD_BUTTON_NORTH: return ImGuiKey_GamepadFaceUp;
     case SDL_GAMEPAD_BUTTON_WEST: return ImGuiKey_GamepadFaceLeft;
     case SDL_GAMEPAD_BUTTON_DPAD_UP: return ImGuiKey_GamepadDpadUp;

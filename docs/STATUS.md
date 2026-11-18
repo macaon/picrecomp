@@ -145,6 +145,12 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   shows as Auto and the game is served English (US) (else its first language) instead. Games added before have no such
   field and offer them all (the eight here were filled in from their packages).
 
+- With the Xbox face-button layout chosen, the menus (the in-game F1 menu and the start screen) confirm with the bottom
+  button (Xbox A) and go back with the right one (B), instead of the Switch's fixed A on the right: `key_from_pad` in
+  `menu.cpp` and `launcher_pad_key` follow `bind_face_layout()`. Any other binding (hand-edited) keeps the Switch's fixed
+  menu layout, so no binding can lock the player out. Seen in the F1 menu with scripted pad events: Xbox layout, bottom
+  button opens the Language list, right button closes the menu; Switch layout, right button opens it.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
