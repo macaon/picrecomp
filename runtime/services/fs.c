@@ -22,9 +22,10 @@ static bool mod_romfs_override(const char *path, char *host, size_t n) {
 #define FS_PATH_NOT_FOUND MAKE_RESULT(2, 1)
 #define FS_PATH_EXISTS MAKE_RESULT(2, 2)
 #define FS_TARGET_LOCKED MAKE_RESULT(2, 7)
+#define FS_TARGET_NOT_FOUND MAKE_RESULT(2, 1002)  // (ResultTargetNotFound: no save data of that program)
+#define FS_UNSUPPORTED_WRITE MAKE_RESULT(2, 6003)  // (a read-only mount)
 #define FS_NOT_EMPTY MAKE_RESULT(2, 8)
 
-const char *g_save_dir = "save";
 static int romfs_fd = -1;
 // The RomFS: an image file (romfs.bin, tools/nca_extract.py --romfs-image) or read straight from the player's game
 // package (romfs.src, written by the start screen's setup: runtime/nxpkg.c)
@@ -68,7 +69,6 @@ RT_ON_RESET(fs_reset) {
     romfs_fd = -1;
     nx_romfs_close(romfs_pkg);
     romfs_pkg = NULL;
-    g_save_dir = "save";
 }
 
 static int rom_cmp(const void *a, const void *b) {
@@ -414,7 +414,7 @@ static Service *open_romfs_storage(void) {
 }
 
 // ------------------------------------------------------------------ host-directory filesystem
-typedef struct { char root[1024]; } HostFs;
+typedef struct { char root[1024]; bool ro; } HostFs;
 typedef struct { int fd; char path[1100]; } HostFile;
 typedef struct { DIR *d; char path[1024]; int mode; } HostDir;
 
@@ -539,6 +539,7 @@ static void filesystem(Service *s, IpcReq *req, IpcResp *resp) {
     HostFs *fs = s->state;
     char p[2048], p2[2048];
     host_path(fs, in_path(req, 0), p, sizeof p);
+    if (fs->ro && (req->cmd <= 6 || req->cmd == 13)) { resp->result = FS_UNSUPPORTED_WRITE; return; }  // (another title's save)
     switch (req->cmd) {
     case 0: {  // CreateFile(option, size)
         int fd = open(p, O_CREAT | O_EXCL | O_RDWR, 0644);
@@ -564,7 +565,7 @@ static void filesystem(Service *s, IpcReq *req, IpcResp *resp) {
     }
     case 8: {  // OpenFile(mode)
         uint32_t mode = IN(uint32_t, 0);
-        int fd = open(p, (mode & 2) ? O_RDWR : O_RDONLY);
+        int fd = open(p, (mode & 2) && !fs->ro ? O_RDWR : O_RDONLY);
         if (fd < 0) { resp->result = errno_result(); break; }
         HostFile *f = calloc(1, sizeof *f);
         f->fd = fd;
@@ -590,21 +591,65 @@ static void filesystem(Service *s, IpcReq *req, IpcResp *resp) {
     }
 }
 
-static Service *open_host_fs(const char *sub) {
-    HostFs *fs = calloc(1, sizeof *fs);
-    if (getenv("PICRECOMP_SAVE_DIR")) g_save_dir = getenv("PICRECOMP_SAVE_DIR");  // test runs use a scratch copy
-    else if (mod_dir()) {  // a mod folder has its own save slots
-        static char seed_save[600];
-        snprintf(seed_save, sizeof seed_save, "%s/save", mod_dir());
-        g_save_dir = seed_save;
+// A copy of a folder tree (the saves made before they were kept per title: runtime/services/fs.c open_host_fs).
+static void copy_tree(const char *from, const char *to) {
+    mkdir(to, 0755);
+    DIR *d = opendir(from);
+    if (!d) return;
+    for (struct dirent *e; (e = readdir(d));) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char a[1200], b[1200];
+        snprintf(a, sizeof a, "%s/%s", from, e->d_name);
+        snprintf(b, sizeof b, "%s/%s", to, e->d_name);
+        struct stat sb;
+        if (stat(a, &sb)) continue;
+        if (S_ISDIR(sb.st_mode)) { copy_tree(a, b); continue; }
+        FILE *in = fopen(a, "rb"), *out = in ? fopen(b, "wb") : NULL;
+        char buf[65536];
+        size_t n;
+        while (out && (n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
+        if (in) fclose(in);
+        if (out) fclose(out);
     }
-    snprintf(fs->root, sizeof fs->root, "%s/%s", g_save_dir, sub);
-    char cmd[1200];
-    snprintf(cmd, sizeof cmd, "%s", fs->root);
-    for (char *q = cmd + 1; *q; q++)
-        if (*q == '/') { *q = 0; mkdir(cmd, 0755); *q = '/'; }
-    mkdir(cmd, 0755);
-    LOG("[fs] mounted host directory %s\n", fs->root);
+    closedir(d);
+}
+
+// A host folder as a file system. Save data is kept per title, save/<program id>/save_<type> (the old save/save_<type>,
+// from when every title shared one, is copied into PICROSS S's, the only one then; the old folder stays as a backup).
+// program: whose save data (0 = this title's own). Another title's is read-only and has to exist already
+// (S2 reading PICROSS S's: its program id is in the attribute).
+static Service *open_host_fs(const char *sub, uint64_t program) {
+    HostFs *fs = calloc(1, sizeof *fs);
+    char base[1100];
+    bool other = program && program != g_program_id;
+    if (getenv("PICRECOMP_SAVE_DIR")) snprintf(base, sizeof base, "%s", getenv("PICRECOMP_SAVE_DIR"));  // test runs use a scratch copy
+    else if (mod_dir()) snprintf(base, sizeof base, "%s/save", mod_dir());  // a mod folder has its own save slots
+    else {
+        snprintf(base, sizeof base, "save/%016llx", (unsigned long long)(other ? program : g_program_id));
+        struct stat sb;
+        if (other) {
+            if (stat(base, &sb)) { free(fs); return NULL; }
+            fs->ro = true;
+        } else if (g_program_id == 0x0100BA0003EEA000ull && stat(base, &sb)) {
+            char legacy[1100], dst[1200];
+            snprintf(legacy, sizeof legacy, "save/%s", sub);
+            if (!stat(legacy, &sb)) {
+                mkdir("save", 0755), mkdir(base, 0755);
+                snprintf(dst, sizeof dst, "%s/%s", base, sub);
+                copy_tree(legacy, dst);
+                LOG("[fs] save data of earlier versions copied to %s\n", dst);
+            }
+        }
+    }
+    snprintf(fs->root, sizeof fs->root, "%s/%s", base, sub);
+    if (!fs->ro) {
+        char cmd[1200];
+        snprintf(cmd, sizeof cmd, "%s", fs->root);
+        for (char *q = cmd + 1; *q; q++)
+            if (*q == '/') { *q = 0; mkdir(cmd, 0755); *q = '/'; }
+        mkdir(cmd, 0755);
+    }
+    LOG("[fs] mounted host directory %s%s\n", fs->root, fs->ro ? " (read-only)" : "");
     return service_new("IFileSystem", filesystem, fs);
 }
 
@@ -613,13 +658,16 @@ SERVICE("fsp-srv", fsp_srv) {
     (void)s;
     switch (req->cmd) {
     case 1: break;  // SetCurrentProcess
-    case 18: ipc_return_object(resp, open_host_fs("sdcard")); break;
+    case 18: ipc_return_object(resp, open_host_fs("sdcard", 0)); break;
     case 22: break;  // CreateSaveDataFileSystem
     case 51: case 53: {  // OpenSaveDataFileSystem(space, attribute)
         uint8_t type = IN(uint8_t, 0x8 + 0x18);  // attribute.type
+        LOG("[fs] OpenSaveDataFileSystem cmd %u: space %u, program %llx, type %u\n", req->cmd, IN(uint8_t, 0), IN(uint64_t, 0x8), type);
         char sub[64];
         snprintf(sub, sizeof sub, "save_%u", type);
-        ipc_return_object(resp, open_host_fs(sub));
+        Service *fsvc = open_host_fs(sub, IN(uint64_t, 0x8));
+        if (fsvc) ipc_return_object(resp, fsvc);
+        else resp->result = FS_TARGET_NOT_FOUND;
         break;
     }
     case 200: ipc_return_object(resp, open_romfs_storage()); break;  // OpenDataStorageByCurrentProcess

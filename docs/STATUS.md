@@ -33,6 +33,12 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 - Fixed with it: every in-place reboot lost the GPU (10 s hang at the first frames). The game's buffer to texture copy
   of the save slot screenshots overran a render-target-shaped image allocated at the output scale (`exec.c`).
 
+- Save data is kept per title: `<data root>/save/<program id>/save_<type>/`. Before, every title shared
+  `save/save_0/all.dat`, so booting S2 over S's file rewrote it. The old `save/save_<type>` is copied into PICROSS S's
+  folder on its first run (the old folder stays as a backup). Seen with scratch data roots: S and S2 each write their own.
+  `OpenSaveDataFileSystem` with another title's program id in the attribute (what S2 would send to read S's saves) mounts
+  that title's folder read-only, or returns ResultTargetNotFound: written from the IPC layout, never seen called.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
@@ -106,6 +112,13 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 4. The cleanup above, then Windows.
 
 ## What to test and watch for
+
+- Saves: run S (play.sh) once, look for `[fs] save data of earlier versions copied` in the log and for your progress. The
+  save that was in `.picrecomp/runtime/save/save_0/all.dat` may be S2's, not S's, if both were played before this change.
+- S2 reading S's saves (extra puzzles): S2's code imports `nn::fs::IsSaveDataExisting(ApplicationId, Uid)` and
+  `MountSaveDataReadOnly(name, ApplicationId, Uid)` (called from Unity wrappers at `0x189ed80` / `0x189ecb0` through a
+  table at `0x2bbd740`); a 70 s scripted run through S2's title never called them, so the trigger is further in. A
+  `[fs] fsp-srv cmd N` line with S's id in the log would show which IPC it uses.
 
 - Pick another game card on the start screen: the window should stay and go straight into that game (not driven by a
   click here; tested with `PICRECOMP_SWITCH_TO`). The validation layer still logs a few one-pixel copy clamps at the
