@@ -120,8 +120,8 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
   `OpenSaveDataFileSystem` with another program id already mounts that title's save folder read-only (or returns
   ResultTargetNotFound), which is what the SDK's `IsSaveDataExisting` / `MountSaveDataReadOnly` need (read in Ghidra).
 
-- Pick another game card on the start screen: the window should stay and go straight into that game (not driven by a
-  click here; tested with `PICRECOMP_SWITCH_TO`). The validation layer still logs a few one-pixel copy clamps at the
+- Pick another game card on the start screen: the window should stay and go straight into that game (checked by the
+  user with the cards; also tested with `PICRECOMP_SWITCH_TO`). The validation layer still logs a few one-pixel copy clamps at the
   deepest mip level of a scaled image after a reboot (harmless so far).
 
 - Run `tools/picross/play.sh .picrecomp/prepared-game` from a terminal and play through a few puzzles, quitting and
