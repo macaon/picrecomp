@@ -234,8 +234,32 @@ static int check_conditional_exit(void) {
     return fails;
 }
 
+// A predicated bindless TEX whose handle is built by MOV / LOP.OR from the driver's c2 tables with IPAs and arithmetic
+// between them and the TEX (PICROSS S GENESIS & Master System edition's fragment shader): the handle is resolved through
+// them (only an instruction that writes a predicate stops the search)
+static int check_predicated_tex(void) {
+    static const uint64_t words[] = {
+        0x001fd800e22007f0ull, 0x4b6b038c0127ff07ull, 0xe003ff87cff7ff01ull, 0x4c98078805c70006ull,
+        0x001fc400fe2007f6ull, 0x4c47020815c70606ull, 0x4c98078805e00003ull, 0x4c98078c00100007ull,
+        0x001ff400fe4007e4ull, 0x4c98078805a80004ull, 0x4c47020816200303ull, 0x4c47020815a8040eull,
+        0x001cfc01e2200f1dull, 0x5080000000470102ull, 0xe043ff880027ff08ull, 0xe043ff884027ff09ull,
+        0x0802c402fe420ff1ull, 0x49a0040c01700700ull, 0x49a0048c01800701ull, 0xdeb80001a0300000ull,  // TEX at pc 0x98
+        0x001f8000fc0007e0ull, 0xe30000000007000full, 0xe2400fffff87000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x80 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    memcpy(buf + 0x80, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: predicated bindless TEX test: %s\n", a->error); fails++; }
+    maxwell_free(a);
+    return fails;
+}
+
 int main(int argc, char **argv) {
-    if (check_conditional_exit()) return 1;
+    if (check_conditional_exit() || check_predicated_tex()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);

@@ -768,6 +768,32 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
     write_tex_result(c, slot, call, mask, d0, d1, true, !bits(w, 59, 1));  // 0xd0/0xd2: .F16 results
 }
 
+// An instruction that may write a predicate register (the ones the translator knows: the SETPs, R2P, VOTE, SHFL, and
+// LOP / LOP3 with a predicate result). A predicated TEX's handle is resolved statically only if none of them sits between
+// the handle's instructions and the TEX.
+static bool writes_predicate(uint64_t w) {
+#define PM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
+    if (PM(0x5bb0000000000000ull, 0xfff0000000000000ull) || PM(0x4bb0000000000000ull, 0xfff0000000000000ull) ||
+        PM(0x36b0000000000000ull, 0xfef0000000000000ull))  // FSETP
+        return true;
+    if (PM(0x5b60000000000000ull, 0xfff0000000000000ull) || PM(0x4b60000000000000ull, 0xfff0000000000000ull) ||
+        PM(0x3660000000000000ull, 0xfef0000000000000ull))  // ISETP
+        return true;
+    if (PM(0x5090000000000000ull, 0xfff8000000000000ull) || PM(0x50a0000000000000ull, 0xfff8000000000000ull) ||  // PSETP, CSETP
+        PM(0x5d20000000000000ull, 0xfff8000000000000ull) || PM(0x7e00000000000000ull, 0xfe80000000000000ull) ||  // HSETP2
+        PM(0x38f0000000000000ull, 0xfef8000000000000ull) || PM(0x5cf0000000000000ull, 0xfff8000000000000ull) ||
+        PM(0x4cf0000000000000ull, 0xfff8000000000000ull) ||                                                  // R2P
+        PM(0x50d8000000000000ull, 0xfff8000000000000ull) || PM(0xef10000000000000ull, 0xfff8000000000000ull))  // VOTE, SHFL
+        return true;
+    // LOP / LOP3: bits 48-50 are the predicate result (PT: none)
+    if (PM(0x5c40000000000000ull, 0xfff8000000000000ull) || PM(0x4c40000000000000ull, 0xfff8000000000000ull) ||
+        PM(0x3840000000000000ull, 0xfef8000000000000ull) || PM(0x5be0000000000000ull, 0xfff8000000000000ull) ||
+        PM(0x3c00000000000000ull, 0xfc00000000000000ull) || PM(0x0200000000000000ull, 0xfe00000000000000ull))
+        return bits(w, 48, 3) != PT;
+#undef PM
+    return false;
+}
+
 // Resolve a static NVN driver c2 pair within the current basic block.
 static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned predicate, unsigned *tex, unsigned *sampler) {
     if (!c->glsl || reg == RZ) return false;
@@ -788,10 +814,9 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
                 return false;
             continue;
         }
-        // These instructions preserve the predicate used by a predicated TEX.
-        if (predicate != PT && opcode != 0x4c98000000000000ull &&
-            (opcode != 0x4c40000000000000ull || bits(prev, 48, 3) != PT) &&
-            (prev & 0xfff0000000000000ull) != 0x49a0000000000000ull)
+        // The predicate of a predicated TEX must be the same where the handle's instructions ran: nothing in between may
+        // write one (PICROSS S GENESIS & Master System edition's has IPAs and arithmetic between its handle and the TEX)
+        if (predicate != PT && writes_predicate(prev))
             return false;
         if (bits(prev, 0, 8) != reg) continue;
         if (predicate != PT && pred == (predicate ^ 8)) continue;
