@@ -89,6 +89,14 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   it in (1.6.1 to 1.6.2), and cleared the stale `.picross-s.new` an earlier, interrupted run had left. Closing the
   launcher during an import ends it; the installed game is untouched then.
 
+- Start screen, lower left: nothing about a game that is ready (a problem with the chosen game still shows there); its
+  version is in Settings > Game files, which now lists Title, Version and Size on disk, and has Open folder, Open save
+  folder (`<data root>/save/<title id>`, dimmed until the game has saves), Update this game and Delete game files, each
+  with a one-line tooltip. Fixed with it: Delete game files was refused for games of the library (it only accepted the old
+  `extracted/`) and left `title.json` and the icon behind; it removes the whole `games/<name>` now, and the start screen
+  returns to the cards (or the "+") instead of the old SET UP GAME FILES page. Seen in scratch libraries with scripted
+  clicks (`PICRECOMP_LAUNCHER_KEYS=click_<x>_<y>`): delete S7, S8 stays with the "+".
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.

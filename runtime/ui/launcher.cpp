@@ -885,10 +885,26 @@ static void prelaunch_tab(float sc) {
     };
     heading("Game files");
     static double gb = -1;
-    if (gb < 0) gb = rt_game_files_size(g_root.c_str()) / 1e9;
-    if (g_card < g_cards.size()) {  // which game these are
-        std::string v = json_str(g_root + "/title.json", "display_version");
-        ImGui::TextDisabled("%s%s%s", g_cards[g_card].name.c_str(), v.empty() ? "" : "   version ", v.c_str());
+    static std::string gb_root;
+    static int gb_gen = -1;
+    if (gb < 0 || gb_root != g_root || gb_gen != g_scan_gen) gb = rt_game_files_size(g_root.c_str()) / 1e9, gb_root = g_root, gb_gen = g_scan_gen;
+    std::string title = g_card < g_cards.size() ? g_cards[g_card].name : "", version = json_str(g_root + "/title.json", "display_version");
+    std::string tid = json_str(g_root + "/title.json", "base_id");
+    std::string saves = tid.empty() ? "" : std::string(rt_data_root()) + "/save/" + tid;
+    struct stat sv;
+    bool have_saves = !saves.empty() && stat(saves.c_str(), &sv) == 0;
+    {   // what is installed
+        auto row = [&](const char *label, const std::string &value) {
+            ImGui::TextDisabled("%s", label);
+            ImGui::SameLine(190 * sc);
+            ImGui::TextUnformatted(value.c_str());
+        };
+        char size[32];
+        snprintf(size, sizeof size, gb >= 0.1 ? "%.1f GB" : "%.0f MB", gb >= 0.1 ? gb : gb * 1000);
+        row("Title", title.empty() ? "-" : title);
+        row("Version", version.empty() ? "-" : version);
+        row("Size on disk", size);
+        ImGui::Spacing();
     }
 #ifdef _WIN32
     if (ImGui::Button("Show in Explorer")) reveal_folder(g_root);
@@ -897,11 +913,15 @@ static void prelaunch_tab(float sc) {
 #else
     if (ImGui::Button("Show in Finder")) reveal_folder(g_root);
 #endif
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the game's files");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!have_saves);
+    if (ImGui::Button("Open save folder")) reveal_folder(saves);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip(have_saves ? "Show this game's saves" : "No saves yet");
     ImGui::SameLine();
     if (ImGui::Button("Update this game")) g_goto_update = true;
-    if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
-        ImGui::SetTooltip("Add a newer update of this game from your own packages: the base game and its newest update. "
-                          "The new version is built beside this one, which keeps working until it is ready. Saves are kept.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add a newer version");
     ImGui::SameLine();
     static bool shot_del = getenv("PICRECOMP_LAUNCHER_SHOT") && strstr(getenv("PICRECOMP_LAUNCHER_SHOT"), ":askdelete");
     if (ImGui::Button("Delete game files") || shot_del) ImGui::OpenPopup("##delfiles"), shot_del = false;  // (test: :askdelete)
@@ -931,9 +951,8 @@ static void prelaunch_tab(float sc) {
         ImGui::EndPopup();
     }
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("Update this game adds a newer version from your own game packages (the base game and its newest "
-                        "update); the one you have keeps working until the new one is ready, and saves are kept. Delete game "
-                        "files frees the space and leaves the saves.");
+    ImGui::TextDisabled("Update this game builds a newer version from your own packages; the current one keeps working "
+                        "until it is ready. Saves are always kept.");
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
     ImGui::Spacing();
@@ -1058,10 +1077,15 @@ extern "C" void launcher_run(const char *root) {
     }
     while (!play) {
         menu_apply_window_requests(win);  // (the Video tab's Fullscreen)
-        if (g_files_deleted) {  // (Settings > Prelaunch deleted them)
+        if (g_files_deleted) {  // (Settings > Game files deleted a game: back to the cards that are left, or the "+")
             g_files_deleted = false;
+            bind_capture_cancel();
+            settings_save();
+            scan_cards(g_root);  // (the deleted game's card goes; the first one left is chosen)
             status = check_game_files(g_root);
-            if (!status.empty()) { g_bg = 0; bind_capture_cancel(); settings_save(); page = SETUP; }
+            g_bg = 0;
+            if (status.empty()) load_background(dev);
+            page = MAIN;
         }
         {   // (test) PICRECOMP_LAUNCHER_KEYS="frame:<SDL key name | click_<x>_<y>>,...": a key pressed (or a left click) on the start screen at that frame, held two
             static const char *next = getenv("PICRECOMP_LAUNCHER_KEYS");
@@ -1078,7 +1102,7 @@ extern "C" void launcher_run(const char *root) {
             long at;
             char name[64];
             static float click_x, click_y;
-            static long click_up = -1;
+            static long click_up = -1, click_down = -1;
             auto mouse = [&](SDL_EventType type) {
                 SDL_Event m = {};
                 m.type = type;
@@ -1087,14 +1111,15 @@ extern "C" void launcher_run(const char *root) {
                      m.button.x = click_x, m.button.y = click_y;
                 SDL_PushEvent(&m);
             };
-            if (click_up >= 0 && tick >= click_up) mouse(SDL_EVENT_MOUSE_BUTTON_UP), click_up = -1;
+            if (click_down >= 0 && tick >= click_down) mouse(SDL_EVENT_MOUSE_BUTTON_DOWN), click_up = tick + 3, click_down = -1;  // (the mouse
+            if (click_up >= 0 && tick >= click_up) mouse(SDL_EVENT_MOUSE_BUTTON_UP), click_up = -1;                              //  moved there first)
             if (held != SDL_SCANCODE_UNKNOWN && tick >= release_at) push(held, false), held = SDL_SCANCODE_UNKNOWN;
-            if (next && *next && held == SDL_SCANCODE_UNKNOWN && click_up < 0 && sscanf(next, "%ld:%63[^,]", &at, name) == 2 && tick >= at) {
+            if (next && *next && held == SDL_SCANCODE_UNKNOWN && click_up < 0 && click_down < 0 && sscanf(next, "%ld:%63[^,]", &at, name) == 2 && tick >= at) {
                 float cx, cy;
                 if (sscanf(name, "click_%f_%f", &cx, &cy) == 2) {  // "click_<x>_<y>": a left click there (window pixels)
                     click_x = cx, click_y = cy;
-                    mouse(SDL_EVENT_MOUSE_MOTION), mouse(SDL_EVENT_MOUSE_BUTTON_DOWN);
-                    click_up = tick + 3;
+                    mouse(SDL_EVENT_MOUSE_MOTION);
+                    click_down = tick + 2;
                 } else {
                     held = SDL_GetScancodeFromName(name);
                     if (held != SDL_SCANCODE_UNKNOWN) push(held, true), release_at = tick + 2;
@@ -1702,26 +1727,12 @@ extern "C" void launcher_run(const char *root) {
                 }
             }
 
-            // status (lower left) and version (lower right) - not under the Settings / Game Files windows
+            // a problem with the chosen game (lower left) and the PicRecomp version (lower right) - not under the Settings / Game Files windows
             if (page == MAIN) {
             ImGui::PushFont(g_font_small);
             ImGui::SetCursorPos(ImVec2(x0, ds.y - 118 * s));
             if (status.empty()) {
-                {  // a drawn check mark (the Switch font has no ✓)
-                    ImVec2 p = ImGui::GetCursorScreenPos();
-                    float u = ImGui::GetTextLineHeight();
-                    ImU32 g = IM_COL32(140, 230, 140, 255);
-                    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + u * 0.1f, p.y + u * 0.55f), ImVec2(p.x + u * 0.35f, p.y + u * 0.8f), g, u * 0.12f);
-                    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + u * 0.35f, p.y + u * 0.8f), ImVec2(p.x + u * 0.85f, p.y + u * 0.2f), g, u * 0.12f);
-                    ImGui::SetCursorPosX(x0 + u * 1.3f);
-                }
-                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1), "Game files ready.");
-                ImGui::SetCursorPosX(x0);
-                static std::string ver, ver_root;  // the game's own version (its NACP, read when it was added)
-                static int ver_gen = -1;
-                if (ver_root != g_root || ver_gen != g_scan_gen)
-                    ver_root = g_root, ver_gen = g_scan_gen, ver = json_str(g_root + "/title.json", "display_version");
-                if (!ver.empty()) ImGui::TextColored(ImVec4(0.66f, 0.76f, 0.98f, 1), "Game version %s", ver.c_str());
+                // (nothing: a game that is ready needs no line; its version is in Settings > Game files)
             } else {
                 ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Setting up the game files..." : g_cards.empty() ? "No game added" : status.c_str());
                 ImGui::SetCursorPosX(x0);

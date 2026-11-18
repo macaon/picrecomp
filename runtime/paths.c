@@ -137,13 +137,20 @@ bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n) {
 // What the setup (runtime/ui/launcher.mm) creates in extracted/, plus what older versions' extraction and manual
 // extractions left there (never read at run time).
 static const char *const GAME_FILES[] = {"exefs", "romfs", "romfs.bin", "romfs.src", "keys", GAMELIB_NAME, GAMELIB_NAME ".id", ".gamebuild",
-                                         ".extract", "extract.log", "xci_secure", "nso_raw", "update_pfs", ".DS_Store"};
+                                         ".extract", "extract.log", "xci_secure", "nso_raw", "update_pfs", ".DS_Store",
+                                         "title.json", "icon.jpg", "build.log", "generated", "obj"};  // (a game of the library: games/<name>)
 
-// game_dir must be <data root>/extracted, a real folder (a dev worktree's symlinked extracted/ is refused)
+// game_dir must be <data root>/extracted or a game of the library, <data root>/games/<name>, a real folder (a dev
+// worktree's symlinked extracted/ is refused)
 static bool game_dir_ok(const char *game_dir) {
     char want[1100], got[1100];
     snprintf(want, sizeof want, "%s" SEP "extracted", g_root);
     if (!g_root[0] || is_link(game_dir) || !resolve(game_dir, got, sizeof got)) return false;
+    if (path_eq(want, got)) return true;
+    char *cut = strrchr(got, SEP[0]);  // the parent has to be games/
+    if (!cut || cut == got) return false;
+    *cut = 0;
+    snprintf(want, sizeof want, "%s" SEP "games", g_root);
     return path_eq(want, got);
 }
 
