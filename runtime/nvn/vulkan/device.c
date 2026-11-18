@@ -691,7 +691,11 @@ void backend_present(NvnTexture *t) {
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("PICRECOMP_WINDOW_SHOT") ? atol(getenv("PICRECOMP_WINDOW_SHOT")) : 0;
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
-        vk_frame_end(shot ? getenv("PICRECOMP_SHOT_PATH") ? getenv("PICRECOMP_SHOT_PATH") : "build/window.png" : NULL);
+        extern char g_window_shot_request[256];  // PICRECOMP_HOST_INPUT "frame:shot:<name>" (runtime/hle/input.c): build/<name>.png
+        char requested[256];
+        requested[0] = 0;
+        if (g_window_shot_request[0]) memcpy(requested, g_window_shot_request, sizeof requested), g_window_shot_request[0] = 0;
+        vk_frame_end(requested[0] ? requested : shot ? getenv("PICRECOMP_SHOT_PATH") ? getenv("PICRECOMP_SHOT_PATH") : "build/window.png" : NULL);
         if (shot && getenv("PICRECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();

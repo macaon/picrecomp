@@ -53,6 +53,16 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   the program, as in a package, it stays). Seen in screenshots with 8 cards (5 + 3, no "+") and 6 (5 + 1 + "+"); moving
   between the rows with a gamepad or the arrow keys has not been tried.
 
+- The start screen has no PLAY / SETTINGS / QUIT menu any more: the title is top middle, the cards are centred and are
+  the menu. The cursor (arrows, d-pad, left stick) chooses a card; A, Enter or Start play it (a mouse click chooses,
+  a second click plays), Select, `-` or F1 open Settings, and SETTINGS and QUIT are small links at the lower right
+  (down from the cards, or the mouse); a hint line at the bottom names the buttons of the last device used. Seen with
+  scripted keys (`PICRECOMP_LAUNCHER_KEYS="frame:Right,..."` with `PICRECOMP_LAUNCHER_SHOT`): moving along and down a
+  row, to the SETTINGS link, F1 to Settings and back to the chosen card, Enter into the first-run question. A
+  controller on the start screen and the hint line's controller wording have not been tried (no pad here).
+- `PICRECOMP_HOST_INPUT="frame:shot:<name>"` now saves `build/<name>.png` (it set a request nothing read), so a run can
+  take several screenshots between scripted key and button presses.
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
