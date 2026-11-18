@@ -223,17 +223,32 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
    why a card cannot be played, and test the cards with a gamepad.
 4. The cleanup above, then Windows.
 
-## PICROSS S+ (not supported yet)
+## PICROSS S+
 
-An older build (its `sdk`, `subsdk0` and `main` all differ; SDK of the 2019 generation), manifest kept out of
-`titles/` until it runs (id `0100d7b01ae58000`, update `0100d7b01ae58800` v65536, main build ID `5eb832c8...`). With the
-generic fixes in this commit it generates, compiles and starts, then stops: the game throws a C++ exception during
-startup (`f_70001b79d4` in `main` calls `__cxa_throw`, right after `aoc:u` cmd 50) and the unwinder finds no handler, so
-`__cxa_throw` falls into `__cxa_begin_catch` and faults. Not known yet: whether the exception comes from a service
-answer the older SDK reads differently (the `aoc:u` / `ectx:aw` replies are the first suspects), or from a landing
-patch S+ needs (S's two sites are not in its `main`: the code differs). Also: `rtld` normally sets
-`nn::ro::detail::g_pLookupGlobalManualFunctionPointer`; `boot()` now gives it a scratch word. Its DLC packages
-(`Picross e2` to `e9`) are not handled at all.
+An older build (its `sdk`, `subsdk0` and `main` all differ from the others; Unity code compiled with other vtable offsets),
+id `0100d7b01ae58000`, update `0100d7b01ae58800` v65536, main build ID `5eb832c8...`. It installs (generate, compile) and runs:
+the title screen at 60 fps and on into its e-Picross puzzle select (seen with scripted A presses); nothing beyond that has
+been played. What it took, in order:
+- `rtld` normally sets `nn::ro::detail::g_pLookupGlobalManualFunctionPointer`; `boot()` gives it a scratch word (the SDK
+  stored through a null).
+- Its C# exceptions need landing sites of their own (the code is the same shape as S's, at other addresses and with other
+  vtable offsets; S's two sites are not in it). With only the SDK's unwinder patch the runtime reports the landing it is
+  missing ("Guest unwind has no continuation at <pc>"); the site is the call before it. Two were needed: a `blr` call
+  (return `0x20101f8`, landing `0x2010338`, resume `0x2010348`) and a direct call followed by the function's `ret` and
+  the landing (`0x1d35444` / `0x1d354e0` / `0x1d35450` / `0x1d354c8`), both in `titles/picross-s-plus.json`. The patch
+  script takes either group alone now.
+- Memory: this SDK maps physical memory a page at a time (976 `MapPhysicalMemory` calls): the kernel's region table
+  (1,024 entries, now 4,096) filled up. Touching pieces of that type are one region now and `UnmapPhysicalMemory` removes a
+  range, not a start address.
+- Shaders: its vertex shaders have `VOTE.VTG` (`0x50e0`, a vote of the vertex / tessellation / geometry stages: no
+  register is written; Eden and yuzu leave it empty) and, between their two halves, `EXIT.FCSM_TR` (condition code `0x1c`):
+  a conditional exit that is not taken (Eden stubs its flow test to false). We took it as an unconditional exit, so the
+  position was never written and all 1,800 draws a frame were black. `tools/test_translate.sh` checks the second one
+  (a plain EXIT still ends the program, an `FCSM_TR` one does not); its pinned reference commit was missing from this
+  repository, so run it as `GLSL=0 REF=HEAD tools/test_translate.sh 16000 8 msl` (needs a clang build only; the sampled
+  differences are all programs with those two instructions).
+Its DLC packages (`Picross e2` to `e9`) are not handled at all. S+ comes last on the start screen (the cards sort "+" after
+the digits).
 
 ## What to test and watch for
 

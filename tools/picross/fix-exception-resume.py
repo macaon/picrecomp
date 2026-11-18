@@ -30,7 +30,7 @@ def patch(module, decl, *edits):
 root = Path(sys.argv[1]).resolve()
 sites = json.loads(Path(sys.argv[2]).read_text()).get("exception_landings")  # the title's manifest (titles/*.json)
 main, sdk = root / "lift/main", root / "lift/sdk"
-if sites:
+if sites and "call" in sites:
     call = sites["call"]
     A = {k: v[2:] for k, v in call.items()}
     patch(main, '_Bool rt_call_with_landing(Cpu *c, uint64_t pc);',
@@ -54,7 +54,7 @@ def sdk_resume_function(path):
 patch(sdk, '_Noreturn void rt_resume_landing(Cpu *c);',
       ('    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    return;\n}\nvoid ' + sdk_resume_function(root / "exefs/sdk"),
        '    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    rt_resume_landing(c);\n}\nvoid ' + sdk_resume_function(root / "exefs/sdk")))
-if sites:
+if sites and "catch" in sites:
     catch = sites["catch"]
     B = {k: v[2:] for k, v in catch.items()}
     patch(main, '_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *));',
