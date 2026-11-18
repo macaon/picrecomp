@@ -128,11 +128,10 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   is chosen while the game runs: `PICRECOMP_FACE_AT=<frame>:xbox|switch`). The shoulder / trigger / Plus / Minus icons
   are still the Switch's (an Xbox pad's LB / RB / LT / RT / Menu / View would need pictures of our own).
 
-- The game's "+ - Controller Settings" (Plus and Minus together at the main menu) starts the console's controller applet
-  (`CreateLibraryApplet` id 0xc), which the runtime completes at once; starting it now opens our menu on the Controls tab
-  (`menu_open_controls`). Seen in S4 with both buttons scripted. With a controller, Minus + Plus together (Back + Start)
-  was already the menu's own hotkey (the game never sees both then), so this matters for the keyboard (Enter + Backspace
-  by default) and any binding that gives the game both at once.
+- The game's "+ - Controller Settings" (Plus *or* Minus at the main menu, each on its own) starts the console's controller
+  applet (`CreateLibraryApplet` id 0xc), which the runtime used to complete at once with nothing to show; starting it now
+  opens our menu on the Controls tab (`menu_open_controls`). Seen in S4 with Plus alone and with Minus alone scripted.
+  On a controller, only Minus and Plus *together* (Back + Start) is the menu's own hotkey, so a single press reaches the game.
 
 ## Not verified
 

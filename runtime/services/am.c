@@ -149,7 +149,7 @@ static Service *new_am_storage(const void *data, uint64_t size) {
 }
 
 // ------------------------------------------------------------------ ILibraryAppletCreator / ILibraryAppletAccessor
-// The game launches a system applet (PICROSS S: Plus and Minus at the main menu: the controller applet, id 0xc). None
+// The game launches a system applet (PICROSS S: Plus or Minus at the main menu: the controller applet, id 0xc). None
 // is emulated: the applet is created, and finishes as soon as it is started, with no output (the controller one also
 // opens our menu on its Controls tab). The log names the applet id (nn::applet::AppletId) and every
 // call, so which applet it is and what the game does with it can be read from there.
