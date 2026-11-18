@@ -1,0 +1,21 @@
+{
+  "slug": "picross-s5",
+  "name": "PICROSS S5",
+  "base_id": "0100ac30133ec000",
+  "update_id": "0100ac30133ec800",
+  "update_version": 524288,
+  "main_build_id": "1fc7f2c5b18ef14299ef8200e140264f",
+  "exception_landings": {
+    "call": {
+      "return": "0x7001b894e4",
+      "landing": "0x7001b89618",
+      "resume": "0x7001b89628"
+    },
+    "catch": {
+      "return": "0x70016ac14c",
+      "callee": "0x70016ac1e0",
+      "landing": "0x70016ac158",
+      "target": "0x70016ac1d0"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "slug": "picross-s4",
+  "name": "PICROSS S4",
+  "base_id": "0100c250115dc000",
+  "update_id": "0100c250115dc800",
+  "update_version": 589824,
+  "main_build_id": "4b604f7df57e0043b1a32ae2dbc8d1a8",
+  "exception_landings": {
+    "call": {
+      "return": "0x7001b81104",
+      "landing": "0x7001b81238",
+      "resume": "0x7001b81248"
+    },
+    "catch": {
+      "return": "0x70013b920c",
+      "callee": "0x70013b92a0",
+      "landing": "0x70013b9218",
+      "target": "0x70013b9290"
+    }
+  }
+}

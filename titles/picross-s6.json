@@ -1,0 +1,21 @@
+{
+  "slug": "picross-s6",
+  "name": "PICROSS S6",
+  "base_id": "010025901432a000",
+  "update_id": "010025901432a800",
+  "update_version": 393216,
+  "main_build_id": "5e0294a0884a0e4a8ae64a4535214e90",
+  "exception_landings": {
+    "call": {
+      "return": "0x7001b81864",
+      "landing": "0x7001b81998",
+      "resume": "0x7001b819a8"
+    },
+    "catch": {
+      "return": "0x70013ba18c",
+      "callee": "0x70013ba220",
+      "landing": "0x70013ba198",
+      "target": "0x70013ba210"
+    }
+  }
+}

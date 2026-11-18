@@ -1,0 +1,21 @@
+{
+  "slug": "picross-s7",
+  "name": "PICROSS S7",
+  "base_id": "01009b2016104000",
+  "update_id": "01009b2016104800",
+  "update_version": 131072,
+  "main_build_id": "528b2e6d6d8a5c448471b84d4d54836f",
+  "exception_landings": {
+    "call": {
+      "return": "0x7001b62d74",
+      "landing": "0x7001b62ea8",
+      "resume": "0x7001b62eb8"
+    },
+    "catch": {
+      "return": "0x700143939c",
+      "callee": "0x7001439430",
+      "landing": "0x70014393a8",
+      "target": "0x7001439420"
+    }
+  }
+}
