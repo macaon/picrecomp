@@ -518,6 +518,9 @@ struct Card { std::string root, name; uint64_t tex = 0; };
 static std::vector<Card> g_cards;
 static size_t g_card;  // the selected one; g_root is its folder
 static bool g_pad_last;  // the last button pressed was a controller's
+static std::string g_update_of;  // the game the Add page is updating (Settings > Game files > Update this game); "" = adding one
+static bool g_goto_update;       // Settings asks the main loop for the Add page, to update the chosen game
+static int g_scan_gen;           // counts scan_cards runs (what is shown for a card, like its version, is read again after one)
 static bool g_all_added;  // every game the importer knows (titles/*.json) has a card: nothing left for "+" to add
 
 static uint64_t load_icon(const std::string &path) {
@@ -565,6 +568,7 @@ static void scan_cards(const std::string &current) {
         roots.push_back(current);
     std::sort(roots.begin(), roots.end());
     g_cards.clear();
+    g_scan_gen++;
     bool found = false;
     for (auto &r : roots) {
         Card c;
@@ -882,6 +886,10 @@ static void prelaunch_tab(float sc) {
     heading("Game files");
     static double gb = -1;
     if (gb < 0) gb = rt_game_files_size(g_root.c_str()) / 1e9;
+    if (g_card < g_cards.size()) {  // which game these are
+        std::string v = json_str(g_root + "/title.json", "display_version");
+        ImGui::TextDisabled("%s%s%s", g_cards[g_card].name.c_str(), v.empty() ? "" : "   version ", v.c_str());
+    }
 #ifdef _WIN32
     if (ImGui::Button("Show in Explorer")) reveal_folder(g_root);
 #elif defined(__linux__)
@@ -889,6 +897,11 @@ static void prelaunch_tab(float sc) {
 #else
     if (ImGui::Button("Show in Finder")) reveal_folder(g_root);
 #endif
+    ImGui::SameLine();
+    if (ImGui::Button("Update this game")) g_goto_update = true;
+    if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
+        ImGui::SetTooltip("Add a newer update of this game from your own packages: the base game and its newest update. "
+                          "The new version is built beside this one, which keeps working until it is ready. Saves are kept.");
     ImGui::SameLine();
     static bool shot_del = getenv("PICRECOMP_LAUNCHER_SHOT") && strstr(getenv("PICRECOMP_LAUNCHER_SHOT"), ":askdelete");
     if (ImGui::Button("Delete game files") || shot_del) ImGui::OpenPopup("##delfiles"), shot_del = false;  // (test: :askdelete)
@@ -917,6 +930,11 @@ static void prelaunch_tab(float sc) {
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("Update this game adds a newer version from your own game packages (the base game and its newest "
+                        "update); the one you have keeps working until the new one is ready, and saves are kept. Delete game "
+                        "files frees the space and leaves the saves.");
+    ImGui::PopTextWrapPos();
     ImGui::Spacing();
     ImGui::Spacing();
     heading("Game font");
@@ -1223,6 +1241,7 @@ extern "C" void launcher_run(const char *root) {
                         ImGui::PopFont();
                         if (clicked) {
                             mkdir((std::string(rt_data_root()) + "/games").c_str(), 0755);
+                            g_update_of.clear();
                             page = ADD;
                         }
                         continue;
@@ -1359,14 +1378,24 @@ extern "C" void launcher_run(const char *root) {
                 const ImVec4 white(1, 1, 1, 1), gold(0.93f, 0.76f, 0.33f, 1), grey(0.7f, 0.74f, 0.85f, 1);
                 ImGui::PushFont(g_font_small);
                 if (idle) {
-                    text("%s", "Add a game", gold);
-                    text("%s", "Choose the folder with your game's two .nsp files, the base game and its update. "
-                         "Your prod.keys is read from that folder or from ~/.switch, or choose it below. Adding a game "
-                         "builds its code and takes about ten minutes. Nothing leaves your computer.", white);
+                    if (g_update_of.empty()) {
+                        text("%s", "Add a game", gold);
+                        text("%s", "Choose the folder with your game's two .nsp files, the base game and its update. "
+                             "Your prod.keys is read from that folder or from ~/.switch, or choose it below. Adding a game "
+                             "builds its code and takes about ten minutes. Nothing leaves your computer.", white);
+                    } else {
+                        text("Update %s", g_update_of.c_str(), gold);
+                        text("%s", "Choose the folder with the game's base .nsp and its newest update (with several updates in "
+                             "it, the newest is used). The new version is built beside the one you have, which keeps working "
+                             "until the new one is ready; saves are kept. It takes a few minutes and uses your own packages: "
+                             "nothing leaves your computer.", white);
+                    }
                     text("%s", dir.empty() ? "No folder chosen yet." : dir.c_str(), grey);
                     if (!keys.empty()) text("keys: %s", keys.c_str(), grey);
                 } else {
-                    text("%s", is.failed ? "The import failed" : is.done ? "Game added" : "Adding the game...",
+                    bool upd = !g_update_of.empty();
+                    text("%s", is.failed ? "The import failed" : is.done ? (upd ? "Game updated" : "Game added")
+                                                                         : (upd ? "Updating the game..." : "Adding the game..."),
                          is.failed ? ImVec4(1, 0.5f, 0.4f, 1) : gold);
                     ImGui::Dummy(ImVec2(0, 6 * s));
                     for (int k = 0; k < is.steps && k < IMPORT_MAX_STEPS; k++) {
@@ -1406,7 +1435,8 @@ extern "C" void launcher_run(const char *root) {
                     }
                     ImGui::Dummy(ImVec2(bw, bh + 8 * s));
                     if (is.failed) text("%s", is.error, ImVec4(1, 0.65f, 0.55f, 1));
-                    if (is.done) text("%s", "It is in your library now. Press Back to see it.", white);
+                    if (is.done) text("%s", g_update_of.empty() ? "It is in your library now. Press Back to see it."
+                                                                : "The new version is in your library now. Press Back to continue.", white);
                 }
                 ImGui::PopFont();
                 ImGui::Dummy(ImVec2(0, 8 * s));
@@ -1429,6 +1459,7 @@ extern "C" void launcher_run(const char *root) {
                 if (back) {
                     importer_cancel();  // (forgets a finished one)
                     page = MAIN;
+                    g_update_of.clear();
                     scan_cards(g_root);
                     status = check_game_files(g_root);
                     g_bg = 0;
@@ -1471,6 +1502,15 @@ extern "C" void launcher_run(const char *root) {
                 }
                 bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);  // (before the pages run, like the menu)
                 menu_tabs_draw(sc, g_font_small, g_font_menu, false, prelaunch_tab);
+                if (g_goto_update) {  // Game files > Update this game: the Add page, for this game
+                    g_goto_update = false;
+                    g_update_of = g_card < g_cards.size() ? g_cards[g_card].name : "";
+                    bind_capture_cancel();
+                    settings_save();
+                    mkdir((std::string(rt_data_root()) + "/games").c_str(), 0755);
+                    page = ADD;
+                    back = false;
+                }
                 int cap_dev;
                 bind_capture_active(&cap_dev, NULL, NULL);
                 if (!popup && !typing && cap_dev < 0 && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
@@ -1678,7 +1718,9 @@ extern "C" void launcher_run(const char *root) {
                 ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1), "Game files ready.");
                 ImGui::SetCursorPosX(x0);
                 static std::string ver, ver_root;  // the game's own version (its NACP, read when it was added)
-                if (ver_root != g_root) ver_root = g_root, ver = json_str(g_root + "/title.json", "display_version");
+                static int ver_gen = -1;
+                if (ver_root != g_root || ver_gen != g_scan_gen)
+                    ver_root = g_root, ver_gen = g_scan_gen, ver = json_str(g_root + "/title.json", "display_version");
                 if (!ver.empty()) ImGui::TextColored(ImVec4(0.66f, 0.76f, 0.98f, 1), "Game version %s", ver.c_str());
             } else {
                 ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Setting up the game files..." : g_cards.empty() ? "No game added" : status.c_str());

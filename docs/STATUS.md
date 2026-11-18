@@ -82,8 +82,12 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   nothing is compiled. The same build again is refused ("already in the library (version 1.6.2)"). Seen: S 1.6.1 to
   1.6.2 in a scratch library (installed, swapped, 1.6.2 boots at 60 fps), the same version refused, the data-only path
   (compile skipped, library kept, boots). Saves are kept per title, not per version, and carry over. The data-only
-  path is only simulated (no update that left `main` alone has turned up), and the in-app importer has not been run
-  through an update.
+  path is only simulated (no update that left `main` alone has turned up). From the start screen: Settings > Game files
+  names the chosen game and its version and has "Update this game", which opens the importer page headed "Update <game>"
+  (the "+" card is gone once every game is added, so this is the way in). Run through the in-app importer in a scratch
+  library with S's real folder (base + v524288 + v589824 in it): it picked v589824, built beside the installed S, swapped
+  it in (1.6.1 to 1.6.2), and cleared the stale `.picross-s.new` an earlier, interrupted run had left. Closing the
+  launcher during an import ends it; the installed game is untouched then.
 
 ## Not verified
 
