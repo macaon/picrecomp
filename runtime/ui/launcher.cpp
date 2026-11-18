@@ -574,6 +574,11 @@ static void scan_cards(const std::string &current) {
         if (r == current) g_card = g_cards.size(), found = true;
         g_cards.push_back(c);
     }
+    // Release order: S, S2 .. S8, then S+ (the last to come out: "+" sorts after the digits)
+    auto key = [](const Card &c) { std::string k = c.name; for (auto &ch : k) if (ch == '+') ch = '~'; return k; };
+    std::stable_sort(g_cards.begin(), g_cards.end(), [&](const Card &a, const Card &b) { return key(a) < key(b); });
+    for (size_t i = 0; i < g_cards.size(); i++)
+        if (g_cards[i].root == current) g_card = i;
     if (!found && !g_cards.empty()) g_card = 0, g_root = g_cards[0].root;  // (the folder given isn't a game)
     // The games the importer supports are the manifests next to it (a checkout; without them "+" stays).
     char probe[1100];
