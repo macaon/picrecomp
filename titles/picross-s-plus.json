@@ -1,6 +1,7 @@
 {
   "slug": "picross-s-plus",
   "name": "PICROSS S+",
+  "order": "100",
   "base_id": "0100d7b01ae58000",
   "update_id": "0100d7b01ae58800",
   "update_version": 65536,

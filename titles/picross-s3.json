@@ -1,6 +1,7 @@
 {
   "slug": "picross-s3",
   "name": "PICROSS S3",
+  "order": "040",
   "base_id": "010079200d330000",
   "update_id": "010079200d330800",
   "update_version": 655360,

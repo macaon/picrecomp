@@ -423,11 +423,12 @@ static void load_background(GpuDevice dev);  // (after load_icon)
 struct Card { std::string root, name; uint64_t tex = 0; };
 static std::vector<Card> g_cards;
 static size_t g_card;  // the selected one; g_root is its folder
+static size_t g_page;  // the page of cards shown (kPage to a page); follows g_card when that changes
+static const size_t kPage = 10;  // two rows of five
 static bool g_pad_last;  // the last button pressed was a controller's
 static std::string g_update_of;  // the game the Add page is updating (Settings > Game files > Update this game); "" = adding one
 static bool g_goto_update;       // Settings asks the main loop for the Add page, to update the chosen game
 static int g_scan_gen;           // counts scan_cards runs (what is shown for a card, like its version, is read again after one)
-static bool g_all_added;  // every game the importer knows (titles/*.json) has a card: nothing left for "+" to add
 
 static uint64_t load_icon(const std::string &path, int *out_w = NULL, int *out_h = NULL, float *out_lum = NULL) {
     AVFormatContext *fmt = NULL;
@@ -525,31 +526,31 @@ static void scan_cards(const std::string &current) {
         if (r == current) g_card = g_cards.size(), found = true;
         g_cards.push_back(c);
     }
-    // Release order: S, S2 .. S8, then S+ (the last to come out: "+" sorts after the digits)
-    auto key = [](const Card &c) { std::string k = c.name; for (auto &ch : k) if (ch == '+') ch = '~'; return k; };
+    // Release order, from the manifests next to the program ("order" in titles/<game>.json, by slug: a game added before
+    // it was there needs no re-import); a game they don't know (a package without the manifests) goes by name, after
+    // the known ones, with "+" sorting after the digits
+    std::map<std::string, std::string> order;
+    char probe[1100];
+    if (rt_resource(NULL, "titles/picross-s.json", probe, sizeof probe)) {
+        std::string titles(probe, strlen(probe) - strlen("picross-s.json"));
+        if (DIR *d = opendir(titles.c_str())) {
+            while (dirent *e = readdir(d)) {
+                size_t n = strlen(e->d_name);
+                if (n > 5 && !strcmp(e->d_name + n - 5, ".json"))
+                    order[json_str(titles + e->d_name, "slug")] = json_str(titles + e->d_name, "order");
+            }
+            closedir(d);
+        }
+    }
+    auto key = [&](const Card &c) {
+        std::string k = c.name, o = order[json_str(c.root + "/title.json", "slug")];
+        for (auto &ch : k) if (ch == '+') ch = '~';
+        return (o.empty() ? "999" : o) + k;
+    };
     std::stable_sort(g_cards.begin(), g_cards.end(), [&](const Card &a, const Card &b) { return key(a) < key(b); });
     for (size_t i = 0; i < g_cards.size(); i++)
         if (g_cards[i].root == current) g_card = i;
     if (!found && !g_cards.empty()) g_card = 0, g_root = g_cards[0].root;  // (the folder given isn't a game)
-    // The games the importer supports are the manifests next to it (a checkout; without them "+" stays).
-    char probe[1100];
-    g_all_added = false;
-    if (rt_resource(NULL, "titles/picross-s.json", probe, sizeof probe)) {
-        std::string titles(probe, strlen(probe) - strlen("picross-s.json"));
-        int supported = 0, added = 0;
-        if (DIR *d = opendir(titles.c_str())) {
-            while (dirent *e = readdir(d)) {
-                size_t n = strlen(e->d_name);
-                if (n < 6 || strcmp(e->d_name + n - 5, ".json")) continue;
-                std::string slug = json_str(titles + e->d_name, "slug");
-                supported++;
-                for (auto &c : g_cards)
-                    if (json_str(c.root + "/title.json", "slug") == slug) { added++; break; }
-            }
-            closedir(d);
-        }
-        g_all_added = supported > 0 && added == supported;
-    }
 }
 
 // ------------------------------------------------------------------ screen
@@ -1154,29 +1155,50 @@ extern "C" void launcher_run(const char *root) {
             first_frame = false;
             bool launch = false;
             if (page == MAIN) {
-                // At most 5 to a row (the "+" counts), more wrap to a second row on the same columns. "+" is left out
-                // when every supported game is already here. The block is centred under the title.
-                size_t slots = g_cards.size() + (g_all_added ? 0 : 1), per_row = 5, cols = std::min(slots, per_row);
-                size_t rows = (slots + per_row - 1) / per_row;
-                float cs = (rows > 1 ? 150 : 184) * s, gap = (rows > 1 ? 26 : 30) * s, row_gap = 18 * s, row_h = cs + 36 * s + row_gap;
-                float gw = (float)cols * cs + (float)(cols - 1) * gap, gh = (float)rows * row_h - row_gap;
+                // At most 5 to a row and two rows (kPage) to a page, the "+" counting as a card; more games make pages.
+                // The page follows the marker: Right past a page's last card turns the page, so do L / R, PageUp /
+                // PageDown, the mouse wheel and the arrows at the sides. "+" is left out when every supported game is
+                // already here. The block is centred under the title; its size is the same on every page.
+                size_t slots = g_cards.size() + 1, per_row = 5;
+                size_t pages = (slots + kPage - 1) / kPage, rows_all = std::min(slots, kPage) > per_row ? 2 : 1;
+                static size_t seen_card = (size_t)-1;
+                static size_t focus_to = (size_t)-1;  // the card (or "+") the cursor was sent to by a row step / page turn
+                if (g_card != seen_card) g_page = g_card / kPage, seen_card = g_card;  // (chosen some other way: import, switch)
+                if (g_page >= pages) g_page = pages ? pages - 1 : 0;
+                size_t first = g_page * kPage, last = std::min(slots, first + kPage), on_page = last - first;
+                size_t cols = std::min(on_page, per_row), cols_all = std::min(std::min(slots, kPage), per_row);
+                float cs = (rows_all > 1 ? 150 : 184) * s, gap = (rows_all > 1 ? 26 : 30) * s, row_gap = 18 * s, row_h = cs + 36 * s + row_gap;
+                float gw = (float)cols_all * cs + (float)(cols_all - 1) * gap, gh = (float)rows_all * row_h - row_gap;
                 float top = 150 * s, bottom = ds.y - 150 * s;
                 float cx = (ds.x - gw) * 0.5f, cy = top + fmaxf(0, (bottom - top - gh) * 0.5f);
+                (void)cols;
                 ImDrawList *dl = ImGui::GetWindowDrawList();
-                for (size_t i = 0; i < slots; i++) {
+                int flip = 0, edge = 0, step = 0;
+                size_t focus_i = 0;  // a page turn asked for; 1 / -1: by Right / Left at the page's edge (lands on its end)
+                for (size_t i = first; i < last; i++) {
+                    size_t li = i - first;
                     bool plus = i == g_cards.size();
-                    size_t in_row = std::min(per_row, slots - i / per_row * per_row);  // (each row is centred on its own)
+                    size_t in_row = std::min(per_row, on_page - li / per_row * per_row);  // (each row is centred on its own)
                     float row_x = cx + (gw - ((float)in_row * cs + (float)(in_row - 1) * gap)) * 0.5f;
-                    ImGui::SetCursorPos(ImVec2(row_x + (float)(i % per_row) * (cs + gap), cy + (float)(i / per_row) * row_h));
+                    ImGui::SetCursorPos(ImVec2(row_x + (float)(li % per_row) * (cs + gap), cy + (float)(li / per_row) * row_h));
                     ImVec2 at = ImGui::GetCursorScreenPos();
                     ImGui::PushID((int)i);
                     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
-                    if (refocus && (plus ? g_cards.empty() : i == g_card)) ImGui::SetKeyboardFocusHere();
+                    if (focus_to != (size_t)-1 ? i == focus_to : refocus && (plus ? g_cards.empty() : i == g_card)) ImGui::SetKeyboardFocusHere();
                     bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + 36 * s), ImGuiButtonFlags_EnableNav);
                     ImGui::PopStyleColor();
                     bool focused = ImGui::IsItemFocused(), hovered = ImGui::IsItemHovered(), hot = focused || hovered,
                          sel = !plus && i == g_card;
                     ImGui::PopID();
+                    if (focused) focus_i = i;
+                    if (focused && !edge && !step) {  // Right / Left at the end of a row: the next card in reading order
+                        bool r = ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight);
+                        bool l = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft);
+                        if (r && i == last - 1) edge = 1;
+                        else if (r && li % per_row == per_row - 1) step = 1;
+                        if (l && i == first) edge = -1;
+                        else if (l && li % per_row == 0) step = -1;
+                    }
                     if (plus) {  // a blank card with a +
                         ImVec2 br(at.x + cs, at.y + cs), m((at.x + br.x) * 0.5f, (at.y + br.y) * 0.5f);
                         ImU32 col = hot ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 170);
@@ -1195,7 +1217,7 @@ extern "C" void launcher_run(const char *root) {
                         }
                         continue;
                     }
-                    if ((focused || clicked) && !sel && !busy) {  // the cursor chooses; so does a click
+                    if ((focused || clicked) && !sel && !busy && focus_to == (size_t)-1) {  // the cursor chooses; so does a click
                         g_card = i;
                         g_root = g_cards[i].root;
                         status = check_game_files(g_root);
@@ -1219,6 +1241,56 @@ extern "C" void launcher_run(const char *root) {
                     dl->AddText(ImVec2(at.x + (cs - tw) * 0.5f, br.y + 6 * s), sel ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 255),
                                 g_cards[i].name.c_str());
                     ImGui::PopFont();
+                }
+                focus_to = (size_t)-1;  // (sent this frame, if it was)
+                if (step) {  // (the same page: the cursor moves to the card after / before the row's end)
+                    size_t target = focus_i;
+                    target = target + (size_t)step;  // (focus_i is on this page: a row end is never the page's end)
+                    if (target < slots) {
+                        focus_to = target;
+                        if (target < g_cards.size()) g_card = target;
+                        seen_card = g_card;
+                    }
+                }
+                if (pages > 1) {  // the arrows at the sides, and the dots under the cards
+                    ImGui::PushFont(g_font_small);
+                    for (int dir = -1; dir <= 1; dir += 2) {
+                        bool can = dir < 0 ? g_page > 0 : g_page + 1 < pages;
+                        float aw = 44 * s, ah = 96 * s;
+                        ImVec2 a(ImGui::GetWindowPos().x + (dir < 0 ? cx - aw - 22 * s : cx + gw + 22 * s),
+                                 ImGui::GetWindowPos().y + cy + (gh - ah) * 0.5f);
+                        ImGui::SetCursorScreenPos(a);
+                        ImGui::PushID(dir);
+                        bool click = ImGui::InvisibleButton("##page", ImVec2(aw, ah));
+                        ImGui::PopID();
+                        bool hot = can && ImGui::IsItemHovered();
+                        if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        // filled, in the title's gold (dimmed at the first / last page), pointing the way it turns
+                        ImU32 col = !can ? IM_COL32(255, 200, 64, 50) : hot ? IM_COL32(255, 232, 140, 255) : IM_COL32(255, 200, 64, 255);
+                        float mx = a.x + aw * 0.5f, my = a.y + ah * 0.5f, h = 24 * s, w = 14 * s * (float)dir;
+                        dl->AddTriangleFilled(ImVec2(mx + w, my), ImVec2(mx - w, my - h), ImVec2(mx - w, my + h), col);
+                        if (click && can) flip = dir;
+                    }
+                    float dot = 5 * s, dgap = 18 * s, dx = ImGui::GetWindowPos().x + (ds.x - (float)(pages - 1) * dgap) * 0.5f;
+                    for (size_t k = 0; k < pages; k++)
+                        dl->AddCircleFilled(ImVec2(dx + (float)k * dgap, ImGui::GetWindowPos().y + cy + gh + 26 * s), k == g_page ? dot * 1.3f : dot,
+                                            k == g_page ? IM_COL32(255, 214, 64, 255) : IM_COL32(255, 255, 255, 90));
+                    ImGui::PopFont();
+                    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+                        if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1) || ImGui::IsKeyPressed(ImGuiKey_PageUp)) flip = -1;
+                        if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1) || ImGui::IsKeyPressed(ImGuiKey_PageDown)) flip = 1;
+                        if (ImGui::GetIO().MouseWheel != 0 && !flip) flip = ImGui::GetIO().MouseWheel < 0 ? 1 : -1;
+                        if (edge) flip = edge;
+                    }
+                    if (flip && !busy && (flip < 0 ? g_page > 0 : g_page + 1 < pages)) {
+                        size_t np = flip > 0 ? g_page + 1 : g_page - 1;
+                        size_t off = edge > 0 ? 0 : edge < 0 ? kPage - 1 : g_card % kPage;  // (L / R keep the position)
+                        size_t target = std::min(np * kPage + off, slots - 1);
+                        g_page = np;
+                        focus_to = target;
+                        if (target < g_cards.size()) g_card = target;
+                        seen_card = g_card;
+                    }
                 }
                 // lower right: SETTINGS and QUIT as small links (the cards are the menu)
                 auto link = [&](const char *label, float right) {

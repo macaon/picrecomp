@@ -1,6 +1,7 @@
 {
   "slug": "picross-s7",
   "name": "PICROSS S7",
+  "order": "080",
   "base_id": "01009b2016104000",
   "update_id": "01009b2016104800",
   "update_version": 131072,

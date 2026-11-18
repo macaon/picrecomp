@@ -1,6 +1,7 @@
 {
   "slug": "picross-s8",
   "name": "PICROSS S8",
+  "order": "090",
   "base_id": "01002ce017d26000",
   "main_build_id": "8dc7537c47d3ac4f998a5231204d9c0b",
   "exception_landings": {

@@ -1,6 +1,7 @@
 {
   "slug": "picross-s6",
   "name": "PICROSS S6",
+  "order": "070",
   "base_id": "010025901432a000",
   "update_id": "010025901432a800",
   "update_version": 393216,
