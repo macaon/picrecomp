@@ -1234,6 +1234,7 @@ extern "C" void launcher_run(const char *root) {
                 float cx = (ds.x - gw) * 0.5f, cy = top + fmaxf(0, (bottom - top - gh) * 0.5f);
                 ImDrawList *dl = ImGui::GetWindowDrawList();
                 int flip = 0, edge = 0, step = 0;
+                size_t edge_row = 0;
                 size_t focus_i = 0;  // a page turn asked for; 1 / -1: by Right / Left at the page's edge (lands on its end)
                 for (size_t i = first; i < last; i++) {
                     size_t li = i - first;
@@ -1253,10 +1254,16 @@ extern "C" void launcher_run(const char *root) {
                     if (focused && !edge && !step) {  // Right / Left at the end of a row: the next card in reading order
                         bool r = ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight);
                         bool l = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft);
-                        if (r && i == last - 1) edge = 1;
-                        else if (r && li % per_row == per_row - 1) step = 1;
-                        if (l && i == first) edge = -1;
-                        else if (l && li % per_row == 0) step = -1;
+                        bool row_end = i == last - 1 || li % per_row == per_row - 1, row_start = li % per_row == 0;
+                        if (pages > 1) {  // pages: the end of a row turns the page, on the same row of the next
+                            if (r && row_end) edge = 1, edge_row = li / per_row;
+                            if (l && row_start) edge = -1, edge_row = li / per_row;
+                        } else {  // one page: on to the next / previous row
+                            if (r && i == last - 1) edge = 1;
+                            else if (r && row_end) step = 1;
+                            if (l && i == first) edge = -1;
+                            else if (l && row_start) step = -1;
+                        }
                     }
                     if (plus) {  // a blank card with a +
                         ImVec2 br(at.x + cs, at.y + cs), m((at.x + br.x) * 0.5f, (at.y + br.y) * 0.5f);
@@ -1352,7 +1359,7 @@ extern "C" void launcher_run(const char *root) {
                     }
                     if (flip && !busy && (flip < 0 ? g_page > 0 : g_page + 1 < pages)) {
                         size_t np = flip > 0 ? g_page + 1 : g_page - 1;
-                        size_t off = edge > 0 ? 0 : edge < 0 ? kPage - 1 : g_card % kPage;  // (L / R keep the position)
+                        size_t off = edge ? edge_row * per_row + (edge > 0 ? 0 : per_row - 1) : g_card % kPage;  // (L / R keep the position; a row's end lands on the same row)
                         size_t target = std::min(np * kPage + off, slots - 1);
                         g_page = np;
                         focus_to = target;
