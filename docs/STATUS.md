@@ -25,6 +25,14 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   the frame rate while solving puzzles has not been measured.
 - Keyboard input (K = A, J = B, arrows, Enter = Plus; see the README) and the in-game F1 menu.
 
+- Switching games without restarting the process (Linux, Vulkan): S to S2 through the in-place reboot, the window
+  stays up (log: one process, two `[gamelib]` lines, S2 at 60 fps). `gamelib_load` swaps the library per game folder,
+  `boot` re-points the RomFS and reads the program id from `main.npdm`, the `guest_sym` cache is reset.
+  `PICRECOMP_SWITCH_TO=<game folder>` (test) picks the game after a `PICRECOMP_REBOOT_AT=<frame>:title`;
+  `PICRECOMP_SWITCH_RESTART=1` brings back the old restart-the-process switch.
+- Fixed with it: every in-place reboot lost the GPU (10 s hang at the first frames). The game's buffer to texture copy
+  of the save slot screenshots overran a render-target-shaped image allocated at the output scale (`exec.c`).
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
@@ -98,6 +106,10 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 4. The cleanup above, then Windows.
 
 ## What to test and watch for
+
+- Pick another game card on the start screen: the window should stay and go straight into that game (not driven by a
+  click here; tested with `PICRECOMP_SWITCH_TO`). The validation layer still logs a few one-pixel copy clamps at the
+  deepest mip level of a scaled image after a reboot (harmless so far).
 
 - Run `tools/picross/play.sh .picrecomp/prepared-game` from a terminal and play through a few puzzles, quitting and
   relaunching once to check that progress is kept.
