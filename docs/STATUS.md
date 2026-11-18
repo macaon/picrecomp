@@ -48,10 +48,14 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   functions in its `main`; the same method reproduces S2's and S3's manifests exactly. Nothing past the title screen
   has been played on S4 to S8.
 
-- The start screen's game cards wrap: at most five to a row (the "+" counts), more go to a second row on the same
-  columns, and "+" is left out once every game with a manifest in `titles/` has a card (without the manifests next to
-  the program, as in a package, it stays). Seen in screenshots with 8 cards (5 + 3, no "+") and 6 (5 + 1 + "+"); moving
-  between the rows with a gamepad or the arrow keys has not been tried.
+- The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
+  pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
+  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3 .. S8, S+), read by slug so a game added
+  before the field needs no re-import. Right / Left step through the cards in reading order, and past a page's last /
+  first card turn the page; L / R, PageUp / PageDown, the mouse wheel and the gold arrows at the sides turn it too, and
+  dots under the cards show the page. The block is the same size on every page. Seen with 12 cards in scripted runs
+  (scratch library of symlinks): Right across a row end and a page end, PageDown, Left back, the arrows' look. Not tried:
+  clicking an arrow, the wheel, a gamepad, the "+" at a page's edge.
 
 - The start screen has no PLAY / SETTINGS / QUIT menu any more: the title is top middle, the cards are centred and are
   the menu. The cursor (arrows, d-pad, left stick) chooses a card; A, Enter or Start play it (a mouse click chooses,
@@ -256,6 +260,31 @@ the Shop applet (id 0x14) and the game aborted: it wants a 0x1010-byte output st
 seen working by the user with an empty save and no add-ons: Yes returns to the menu, no crash). The game keeps an unlocked DLC
 in its save, so removing a package later does not lock it again (test the shop with `PICRECOMP_DATA_ROOT` pointing at a fresh folder). S+ comes last on the start screen (the cards sort "+" after
 the digits).
+
+## KEMONO FRIENDS PICROSS
+
+The first licensed game (2018, between S2 and S3): id `01004b100bda2000`, v0 (no update), main build ID
+`b3a956031cee684b8a4df42874cb3e00`, manifest `titles/kemono-friends-picross.json`. It imports (about four minutes) and
+**plays**: the title screen, the Japari Park main menu, into Picross and its tutorial question, at 60 fps, seen in
+screenshots from scripted presses (nothing past that has been played). It has the oldest SDK so far, and what it took:
+- Its build ID ends in a zero byte. `nso.py` strips trailing zeros (30 hex digits) while the runtime reads 16 bytes
+  (32): `prepare.py` and `generate.sh` take the 16 bytes now (`nso.py` is part of `GAMELIB_ID`: touching it makes every
+  installed game "built for another version", so it was left alone).
+- `nn::init::Start` has four arguments there (no `fini`): `main.c` looks the older symbol up when the newer is missing.
+- The sdk's unwinder resume is the older libunwind jump (`mov sp, x1` earlier, ending `ldp x0, x1, [x0]; ret`):
+  `fix-exception-resume.py` finds either form by its code.
+- Two exception landing sites (one `call`, one `catch` group), found with the new `tools/picross/find-landing.py` from
+  the runtime's "no continuation" pc and the compiler's own exception table: it names the call site for a landing pad
+  exactly (checked on S+'s two). The importer's `--keep-generated` keeps the code, but the patch script has to be run
+  by hand on it after a manifest change.
+- `nn::vi::SetLayerScalingMode` is hooked (the SDK looked for the vi service).
+- Present is at most one a vsync (`nvnQueuePresentTexture`): the game does not wait for the vsync itself and ran at
+  1000 fps (S and S+ wait for it themselves, and still run at 60.0 fps).
+- A multisampled (2x) 1080p scene target resolved into the 720p texture the output pass samples was dropped (a copy
+  between different sample counts); it is resolved into a temporary image and scaled now.
+- Its background on the start screen is `Common_BG001` (no 000).
+Not done: its in-game button prompts (the face-button layout patch looks for S's 64x64 icons); DLC (it has none here);
+nothing past the first tutorial question.
 
 ## What to test and watch for
 

@@ -82,8 +82,8 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 ```
 
 Each game's ids, update version, main build ID and exception-landing patches are in its manifest, `titles/<name>.json`;
-the importer picks the manifest from the packages and refuses a game or version without one. Today PICROSS S and S2 to S8
-and S+ have manifests; S4 to S8 and S+ boot to their title screens (see `docs/STATUS.md` for what has been played).
+the importer picks the manifest from the packages and refuses a game or version without one. Today PICROSS S, S2 to S8, S+
+and KEMONO FRIENDS PICROSS have manifests; S4 to S8 and S+ boot to their title screens (see `docs/STATUS.md` for what has been played).
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
 

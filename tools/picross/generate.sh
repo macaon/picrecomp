@@ -20,12 +20,15 @@ from gen import Module
 
 main = Module("main", sys.argv[1], 0x7000000000, "c")
 titles = [json.load(open(f)) for f in sorted(glob.glob("titles/*.json"))]
-title = next((t for t in titles if t["main_build_id"] == main.nso.build_id), None)
+# the build ID is the first 16 bytes of the NSO's module id, as the runtime reads it (nso.py strips trailing zero bytes:
+# KEMONO FRIENDS PICROSS's ends in one)
+build_id = open(sys.argv[1], "rb").read()[0x40:0x50].hex()
+title = next((t for t in titles if t["main_build_id"] == build_id), None)
 if title is None:
-    raise SystemExit(f"Unsupported build ID {main.nso.build_id}: no manifest in titles/")
+    raise SystemExit(f"Unsupported build ID {build_id}: no manifest in titles/")
 print(f"Generating {title['name']}")
 json.dump(title, open(sys.argv[2] + "/title.json", "w"))
-open(sys.argv[2] + "/build-id", "w").write(main.nso.build_id + "\n")
+open(sys.argv[2] + "/build-id", "w").write(build_id + "\n")
 PY
 for spec in main:0x7000000000 subsdk0:0x7008000000 sdk:0x700c000000; do
     module=${spec%%:*}

@@ -3,7 +3,7 @@
 
 Every PICROSS game is a Unity game, and its title screen sits on a soft colour wash in the game's own palette: the
 texture Common_BG000 in Data/sharedassets5.assets of its RomFS (1280x720; PICROSS S2's is 2048x576; PICROSS S+'s is
-Common_BG000_DL in sharedassets4). It is read out of
+Common_BG000_DL in sharedassets4; KEMONO FRIENDS PICROSS's savanna is Common_BG001 in sharedassets0). It is read out of
 <game>/romfs.bin and saved as <game>/background.jpg, which the start screen shows muted behind that game. This needs
 UnityPy (pip install UnityPy, see the README); without it a game just has no background.
 
@@ -16,7 +16,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-WANT = ("Common_BG000", "Common_BG000_DL")  # (PICROSS S+ names its title wash with a _DL; the first that exists, in this order)
+WANT = ("Common_BG000", "Common_BG000_DL", "Common_BG001")  # (S+ names its title wash with a _DL; KEMONO FRIENDS PICROSS has no
+                                                            # 000: its savanna is 001. The first that exists, in this order)
 WIDTH = 1280  # (the saved image is at most this wide: it is a muted backdrop)
 
 

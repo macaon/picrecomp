@@ -284,9 +284,9 @@ def prepare(args):
                 raise ValueError(f"Missing extracted ExeFS file: {name}")
         with (exefs / "main").open("rb") as stream:
             header = stream.read(0x60)
-        if header[:4] != b"NSO0" or header[0x40:0x60].rstrip(b"\0").hex() != title["main_build_id"]:
+        if header[:4] != b"NSO0" or header[0x40:0x50].hex() != title["main_build_id"]:
             raise ValueError("Extracted executable has build ID %s, the manifest expects %s" %
-                             (header[0x40:0x60].rstrip(b"\0").hex(), title["main_build_id"]))
+                             (header[0x40:0x50].hex(), title["main_build_id"]))
         if not romfs.is_file() or romfs.stat().st_size == 0:
             raise ValueError("hactool did not produce an updated RomFS image")
         # The control data (card image, and the NACP with the version the Switch shows): the update's when it has

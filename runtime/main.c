@@ -200,7 +200,10 @@ static void boot(const char *root) {
     }
     LOG("main thread: prio %d, stack 0x%x\n", prio, stack_size);
 
+    // An older SDK (KEMONO FRIENDS PICROSS) has Start(thread, args, init_sdk, init) without the fini: the same call, the
+    // fifth argument just goes unread
     uint64_t start = loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_S2_");
+    if (!start) start = loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_");
     if (!start) FATAL("nn::init::Start not found\n");
     uint64_t init_fn = hle_register("<rtld_init_sdk>", rtld_init_sdk);
     uint64_t main_fn = hle_register("<rtld_init_main>", rtld_init_main);

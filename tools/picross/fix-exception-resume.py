@@ -40,20 +40,26 @@ if sites and "call" in sites:
 
 
 def sdk_resume_function(path):
-    """The function after the sdk's one `mov sp, x16; ret` (the unwinder's resume), as its generated name. The sdk is
-    the same in most PICROSS games (same build ID, same address) but not all: it is found by its code."""
+    """(the unwinder's resume, as its generated name; the C before its `return;` or None). The resume is libunwind's
+    register-restore jump: a newer sdk ends it with `mov sp, x16; ret`, found by those two words; an older one (Kemono
+    Friends Picross) sets sp earlier and ends `ldr d31, [x0, #0x208]; ldp x0, x1, [x0]; ret`. The sdk is the same in most
+    PICROSS games (same build ID, same address) but not all: it is found by its code. The function after the ret is named,
+    the generated code being cut there."""
     n = Nso(path)
     t0, tl = n.text
-    hits = [o for o in range(t0, t0 + tl - 8, 4)
-            if struct.unpack_from('<II', n.image, o) == (0x9100021F, 0xD65F03C0)]
+    words = lambda o, k: struct.unpack_from('<' + 'I' * k, n.image, o)
+    hits = [o for o in range(t0, t0 + tl - 8, 4) if words(o, 2) == (0x9100021F, 0xD65F03C0)]
+    if len(hits) == 1:
+        return f"f_{0x700c000000 + hits[0] + 8:x}", '    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n'  # (the ret, then 4 bytes of padding)
+    hits = [o for o in range(t0, t0 + tl - 12, 4) if words(o, 3) == (0xFD41041F, 0xA9400400, 0xD65F03C0)]
     if len(hits) != 1:
         raise ValueError(f"{len(hits)} places in the sdk look like the unwinder's resume, expected one")
-    return f"f_{0x700c000000 + hits[0] + 8:x}"  # (the ret, then 4 bytes of padding)
+    return f"f_{0x700c000000 + hits[0] + 12:x}", ''
 
 
+resume, before = sdk_resume_function(root / "exefs/sdk")
 patch(sdk, '_Noreturn void rt_resume_landing(Cpu *c);',
-      ('    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    return;\n}\nvoid ' + sdk_resume_function(root / "exefs/sdk"),
-       '    c->sp = (uint64_t)(c->x[16] + 0x0ull);\n    rt_resume_landing(c);\n}\nvoid ' + sdk_resume_function(root / "exefs/sdk")))
+      (before + '    return;\n}\nvoid ' + resume, before + '    rt_resume_landing(c);\n}\nvoid ' + resume))
 if sites and "catch" in sites:
     catch = sites["catch"]
     B = {k: v[2:] for k, v in catch.items()}
