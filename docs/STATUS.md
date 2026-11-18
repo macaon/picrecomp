@@ -50,7 +50,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
-  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S8, S+), read by slug so a game added
+  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+), read by slug so a game added
   before the field needs no re-import. Right / Left step through the cards in reading order, and past a page's last /
   first card turn the page; L / R, PageUp / PageDown, the mouse wheel and the gold arrows at the sides turn it too, and
   dots under the cards show the page. The block is the same size on every page. Seen with 12 cards in scripted runs
@@ -284,7 +284,9 @@ screenshots from scripted presses (nothing past that has been played). It has th
   by hand on it after a manifest change.
 - `nn::vi::SetLayerScalingMode` is hooked (the SDK looked for the vi service).
 - Present is at most one a vsync (`nvnQueuePresentTexture`): the game does not wait for the vsync itself and ran at
-  1000 fps (S and S+ wait for it themselves, and still run at 60.0 fps).
+  1000 fps. A present now waits for the next tick of the 60 Hz timer in `vi.c` (started on demand, `vi_vsync_start`);
+  the games that wait for the vsync themselves are already past a tick, and every game measures 60.0 fps (an earlier
+  fixed-interval version let these two run at 63.8).
 - A multisampled (2x) 1080p scene target resolved into the 720p texture the output pass samples was dropped (a copy
   between different sample counts); it is resolved into a temporary image and scaled now.
 - Its background on the start screen is `Common_BG001` (no 000).
@@ -312,6 +314,22 @@ unwinder), so those fixes carried over unchanged. What was new:
   needed here (one `blr`, one old-style `catch`, one range of three calls).
 - `fix-exception-resume.py` takes the older forms (S, S+, Kemono) unchanged.
 Not done: past the prologue; its in-game button prompts follow S's icon layout only; long names on the start screen.
+
+## PICROSS S GENESIS & Master System edition
+
+The 2021 edition between S6 and S7 (sort order 075): id `010089701567a000`, update `010089701567a800` v196608
+(display version 1.2.1), main build ID `1466f9109e267e458c517ada6b115e99`, manifest `titles/picross-s-genesis.json`. It
+imports (about five minutes) and **plays** to its Main Menu and the Picross tutorial question, at 60 fps, seen in
+screenshots from scripted presses; nothing beyond that has been played. Its sdk is S's (same build), so only the title's
+own parts were new:
+- Two exception landing sites (a `blr` with a one-jump pad, a direct call with the older catch shape), both written in
+  the unified `call` form of `exception_landings` (`find-landing.py` output pasted in; the pads get their labels).
+- The translator: a predicated bindless TEX (the title screen's grid shader, one draw a frame) failed with "unresolved
+  bindless tex". The handle is built by MOV and LOP.OR from the driver's c2 tables under a predicate, with IPAs and
+  arithmetic in between, and the resolver gave up at any instruction it did not know. It now stops only at an
+  instruction that can write a predicate (`writes_predicate`: the SETPs, PSETP, CSETP, R2P, VOTE, SHFL, LOP / LOP3 with a
+  predicate result). `tools/test_translate.c` has the shader (`check_predicated_tex`): it fails on the old translator.
+Not done: past the tutorial question (the retro "Clip Picross" and the emulated-console parts have not been tried).
 
 ## What to test and watch for
 
