@@ -50,7 +50,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
-  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3 .. S8, S+), read by slug so a game added
+  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S8, S+), read by slug so a game added
   before the field needs no re-import. Right / Left step through the cards in reading order, and past a page's last /
   first card turn the page; L / R, PageUp / PageDown, the mouse wheel and the gold arrows at the sides turn it too, and
   dots under the cards show the page. The block is the same size on every page. Seen with 12 cards in scripted runs
@@ -290,6 +290,28 @@ screenshots from scripted presses (nothing past that has been played). It has th
 - Its background on the start screen is `Common_BG001` (no 000).
 Not done: its in-game button prompts (the face-button layout patch looks for S's 64x64 icons); DLC (it has none here);
 nothing past the first tutorial question.
+
+## PICROSS LORD OF THE NAZARICK
+
+The second licensed game (2019, between S3 and S4, sort order 045): id `010012100e8dc000`, v0 (the folder it came in also
+held an update for OVERLORD: ESCAPE FROM NAZARICK, a different game: the importer ignores it), main build ID
+`2424aca935dd5f4188d5bafb92a83504`, manifest `titles/picross-lord-of-the-nazarick.json`. It imports and **plays** to its
+story prologue ("The Fortress City E-Rantel ..."): title screen, a button press, the opening scenario text, at 60 fps,
+seen in screenshots from scripted presses. The same older SDK as Kemono's (four-argument `nn::init::Start`, the older
+unwinder), so those fixes carried over unchanged. What was new:
+- It asks `nvnDeviceGetInteger` for the NVN API minor version and traps unless it is above 309 (the others got 207).
+  `"nvn_api_minor"` in a manifest sets it per title (`settings_title_int`, read from title.json); this one says 310.
+- Its exception landing pads are code of their own (`mov xN, x0; cmp w1, #1; b.eq ..; b ..`, or real clean-up code),
+  not one jump to a shared handler, so there is no label to resume at. `tools/picross/pad_labels.py` lifts the
+  function that holds a pad again with the lifter's own code (`gen.py`, imported: it is part of the library ID, so an
+  edit would have made every installed game rebuild) and the function's pads from the compiler's exception table
+  (`tools/picross/lsda.py`) as extra labels, checking that the old text is exactly what the lifter gives. A `call`
+  group in the manifest is `{"return", "landing"}` (a `blr`) or with `"callee"` (a direct `bl`) now and resumes at the
+  pad itself; `find-landing.py <game> main <pc>` prints every call of the range as manifest entries (the table says
+  which range reaches the pad, not which call throws, so all are listed). The groups may be lists. Three sites were
+  needed here (one `blr`, one old-style `catch`, one range of three calls).
+- `fix-exception-resume.py` takes the older forms (S, S+, Kemono) unchanged.
+Not done: past the prologue; its in-game button prompts follow S's icon layout only; long names on the start screen.
 
 ## What to test and watch for
 

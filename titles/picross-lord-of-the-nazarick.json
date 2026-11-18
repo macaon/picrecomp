@@ -1,0 +1,39 @@
+{
+  "slug": "picross-lord-of-the-nazarick",
+  "name": "PICROSS LORD OF THE NAZARICK",
+  "order": "045",
+  "base_id": "010012100e8dc000",
+  "main_build_id": "2424aca935dd5f4188d5bafb92a83504",
+  "nvn_api_minor": 310,
+  "exception_landings": {
+    "call": [
+      {
+        "return": "0x700053fd00",
+        "landing": "0x700053fea0"
+      },
+      {
+        "return": "0x70001d3630",
+        "landing": "0x70001d369c",
+        "callee": "0x70007b4800"
+      },
+      {
+        "return": "0x70001d3644",
+        "landing": "0x70001d369c",
+        "callee": "0x7000bdefa0"
+      },
+      {
+        "return": "0x70001d3650",
+        "landing": "0x70001d369c",
+        "callee": "0x70000eca30"
+      }
+    ],
+    "catch": [
+      {
+        "return": "0x700041a584",
+        "callee": "0x700041a690",
+        "landing": "0x700041a594",
+        "target": "0x700041a684"
+      }
+    ]
+  }
+}
