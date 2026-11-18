@@ -83,6 +83,8 @@ typedef struct TexBackend {
     bool gpu_owned, uploaded, dynamic;
     uint64_t data_hash, sample_hash, checked_frame, full_frame;
     uint32_t wgen;  // page write tracking generation at the last upload check (textures.c)
+    int tp;              // runtime/nvn/texpatch.c: 0 not checked yet, -1 none, else a button prompt + 1
+    uint32_t tp_gen;     // texpatch_generation() it was last uploaded with
     bool scalable, presented;
     uint64_t touched_frame, frame_cleared;
     uint32_t level_gen;

@@ -101,6 +101,19 @@ int rt_reboot_requested(void) { return g_reboot; }
 // PICRECOMP_REBOOT_AT=<frame>:<game | title>[,...] (test): at that presented frame, boot the game again in place, or
 // go back to the start screen. Frames count on across reboots. Called by the presenter every frame.
 void reboot_test_frame(uint64_t frame) {
+    {   // PICRECOMP_FACE_AT=<frame>:<switch | xbox>[,...] (test): at that frame the face buttons take that layout, as if chosen in Settings
+        static const char *face;
+        static int face_init;
+        if (!face_init) { face_init = 1; face = getenv("PICRECOMP_FACE_AT"); }
+        long fat;
+        char layout[16];
+        if (face && *face && sscanf(face, "%ld:%15[^,]", &fat, layout) == 2 && (long)frame >= fat) {
+            face = strchr(face, ',');
+            if (face) face++;
+            extern void bind_face_layout_set(int);
+            bind_face_layout_set(strcmp(layout, "xbox") ? 0 : 1);
+        }
+    }
     static const char *next;
     static int init;
     if (!init) { init = 1; next = getenv("PICRECOMP_REBOOT_AT"); }

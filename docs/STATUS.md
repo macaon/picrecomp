@@ -117,8 +117,16 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   the bottom, so the letters on a PC controller match the game's): it applies the four swaps to the controller bindings
   (anything else bound to those buttons swaps over; the table below still rebinds each input) and saves them as
   `bind_pad_a..y` in `picrecomp.ini`. Seen with a scripted click: `A -> south, B -> east, X -> west, Y -> north`.
-  The "Button icons" setting is gone: it fed `texpatch`, an empty stub (no PICROSS texture was ever patched), removed
-  with its hooks in the Vulkan upload path. The game still draws its own Switch prompts.
+  The "Button icons" setting (Auto / Nintendo / Xbox / PlayStation) is gone: it fed an empty `texpatch` stub. In its
+  place `runtime/nvn/texpatch.c` makes the game's own A / B / X / Y prompts follow the bindings: the game draws each as
+  a diamond of four circles with the pressed one filled (Switch positions), four 64x64 DXT5 textures identical in all
+  eight games; at upload the one shown is read from its alpha and its blocks are turned (a lossless permutation of the
+  pixels inside each DXT5 block) until the filled circle is where the bound controller button is, and uploaded again
+  when a binding changes. Unity stores rows bottom first, so on the screen a clockwise turn is the other way in the
+  data (`tools/test_texpatch.sh`, which also checks it against the picture turned pixel by pixel; seen in S4's bottom
+  guide: Switch layout Confirm = right circle, Xbox layout Confirm = bottom, Back = right, X = left, also when the layout
+  is chosen while the game runs: `PICRECOMP_FACE_AT=<frame>:xbox|switch`). The shoulder / trigger / Plus / Minus icons
+  are still the Switch's (an Xbox pad's LB / RB / LT / RT / Menu / View would need pictures of our own).
 
 ## Not verified
 
