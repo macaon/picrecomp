@@ -44,7 +44,7 @@ def find_packages(folder):
     """(manifest, base .nsp, update .nsp) for the one game whose two packages are in the folder. A package's title ID is
     the start of its ticket's file name."""
     manifests = {t["base_id"]: t for t in load_manifests()}
-    manifests.update({t["update_id"]: t for t in load_manifests()})
+    manifests.update({t["update_id"]: t for t in load_manifests() if "update_id" in t})  # (a game never updated has none)
     found = {}
     for nsp in sorted(folder.glob("*.nsp")):
         for name in pfs0_names(nsp):
@@ -53,8 +53,8 @@ def find_packages(folder):
     games = []
     for slug, packages in found.items():
         title = next(t for t in load_manifests() if t["slug"] == slug)
-        if title["base_id"] in packages and title["update_id"] in packages:
-            games.append((title, packages[title["base_id"]], packages[title["update_id"]]))
+        if title["base_id"] in packages and ("update_id" not in title or title["update_id"] in packages):
+            games.append((title, packages[title["base_id"]], packages.get(title.get("update_id"))))
     if len(games) != 1:
         raise ValueError("No supported game in that folder (it needs the base .nsp and the update .nsp)" if not games
                          else "More than one game in that folder; keep one game's two .nsp files there")
@@ -156,24 +156,29 @@ def prepare(args):
         prepared.mkdir(mode=0o700)
         step(2, "Reading the base package")
         hactool("base", "-t", "pfs0", f"--pfs0dir={base}", args.base.resolve())
-        step(3, "Reading the update package")
-        hactool("update", "-t", "pfs0", f"--pfs0dir={update}", args.update.resolve())
+        step(3, "Reading the update package" if args.update else "No update package for this game")
+        if args.update:
+            hactool("update", "-t", "pfs0", f"--pfs0dir={update}", args.update.resolve())
         step(4, "Reading the game's metadata")
-        base_metas, update_metas = read_metas(base, hactool), read_metas(update, hactool)
+        base_metas = read_metas(base, hactool)
+        update_metas = read_metas(update, hactool) if args.update else []
         found = next((m["id"] for m in base_metas if m["kind"] == META_APPLICATION), None)
         title = next((t for t in load_manifests() if t["base_id"] == found), None)
         if title is None:
             raise ValueError(f"Title {found} has no manifest in titles/")
         print(f"Title: {title['name']}", flush=True)
         base_meta = pick_meta(base_metas, META_APPLICATION, title["base_id"], 0)
-        update_meta = pick_meta(update_metas, META_PATCH, title["update_id"], title["update_version"])
         base_nca = content_nca(base, base_meta, CONTENT_PROGRAM)
-        update_nca = content_nca(update, update_meta, CONTENT_PROGRAM)
-        if not base_nca or not update_nca:
+        if args.update:
+            update_meta = pick_meta(update_metas, META_PATCH, title["update_id"], title["update_version"])
+            update_nca = content_nca(update, update_meta, CONTENT_PROGRAM)
+        else:  # the game as it came: the base program is the one to extract
+            update_nca = None
+        if not base_nca or (args.update and not update_nca):
             raise ValueError("The program NCA is missing or has the wrong size")
         # A common ticket holds the encrypted title key expected by hactool.
         tickets = []
-        for folder in (base, update):
+        for folder in (base, update) if args.update else (base,):
             for ticket in folder.glob("*.tik"):
                 raw = ticket.read_bytes()
                 if len(raw) < 0x2B0 or raw[:4] != b"\x04\x00\x01\x00" or raw[0x281] != 0:
@@ -184,8 +189,10 @@ def prepare(args):
         romfs = prepared / "romfs.bin"
         exefs = prepared / "exefs"
         step(5, "Applying the update and extracting the game data")
-        hactool("extract", "-t", "nca", f"--basenca={base_nca}",
-                f"--exefsdir={exefs}", f"--section1={romfs}", update_nca)
+        if update_nca:
+            hactool("extract", "-t", "nca", f"--basenca={base_nca}", f"--exefsdir={exefs}", f"--section1={romfs}", update_nca)
+        else:
+            hactool("extract", "-t", "nca", f"--exefsdir={exefs}", f"--section1={romfs}", base_nca)
         for name in ("main", "main.npdm", "subsdk0", "sdk"):
             if not (exefs / name).is_file():
                 raise ValueError(f"Missing extracted ExeFS file: {name}")
@@ -243,7 +250,7 @@ def main():
         if args.folder:
             resolve_folder(args)
         elif not (args.base and args.update and args.output and args.prod_keys):
-            raise ValueError("Give BASE UPDATE OUTPUT --prod-keys, or --folder and --games")
+            raise ValueError("Give BASE UPDATE OUTPUT --prod-keys, or --folder and --games")  # (a game never updated: --folder)
         else:
             step(1, "Checking the files")
         prepare(args)
