@@ -703,6 +703,31 @@ static void arrow_fx(ImDrawList *dl, ImVec2 c, float w, float h, int dir, float 
     }
 }
 
+// A card's name under it, centred on cx: wrapped to the card's width into at most two lines (a long name such as
+// KEMONO FRIENDS PICROSS stays readable and clear of its neighbours); a second line that is still too long is cut with
+// "..." (the current font)
+static void card_label(ImDrawList *dl, float cx, float y, float width, ImU32 col, const std::string &name) {
+    ImFont *f = ImGui::GetFont();
+    float fs = ImGui::GetFontSize(), lh = ImGui::GetTextLineHeight();
+    const char *b = name.c_str(), *e = b + name.size();
+    const char *w = f->CalcWordWrapPositionA(fs / f->FontSize, b, e, width);
+    if (w <= b) w = e;
+    std::string line[2] = {std::string(b, w), ""};
+    while (w < e && *w == ' ') w++;
+    line[1] = std::string(w, e);
+    if (f->CalcTextSizeA(fs, FLT_MAX, 0, line[1].c_str()).x > width) {
+        while (!line[1].empty() && f->CalcTextSizeA(fs, FLT_MAX, 0, (line[1] + "...").c_str()).x > width) {
+            do line[1].pop_back(); while (!line[1].empty() && ((unsigned char)line[1].back() & 0xC0) == 0x80);  // (whole characters)
+        }
+        line[1] += "...";
+    }
+    for (int i = 0; i < 2; i++) {
+        if (line[i].empty()) continue;
+        float tw = f->CalcTextSizeA(fs, FLT_MAX, 0, line[i].c_str()).x;
+        dl->AddText(f, fs, ImVec2(cx - tw * 0.5f, y + (float)i * lh), col, line[i].c_str());
+    }
+}
+
 // A four-point sparkle (PLAY's twinkle): k = 0..1 grows and fades it
 static void sparkle(ImDrawList *dl, ImVec2 c, float r, float k, float spin) {
     if (k <= 0) return;
@@ -1166,7 +1191,7 @@ extern "C" void launcher_run(const char *root) {
             if (page == MAIN) {  // gold to orange, shadowed, top middle (not behind the Settings / Game Files windows)
                 const char *t = "PicRecomp";
                 ImVec2 tsz = ImGui::CalcTextSize(t);
-                ImGui::SetCursorPos(ImVec2((ds.x - tsz.x) * 0.5f, 44 * s));
+                ImGui::SetCursorPos(ImVec2((ds.x - tsz.x) * 0.5f, 22 * s));
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 text_fx(ImGui::GetWindowDrawList(), ImGui::GetFont(), ImGui::GetFontSize(), p, IM_COL32(255, 232, 120, 255),
                         IM_COL32(255, 138, 48, 255), t, 3 * s);
@@ -1203,9 +1228,9 @@ extern "C" void launcher_run(const char *root) {
                 if (g_page >= pages) g_page = pages ? pages - 1 : 0;
                 size_t first = g_page * kPage, last = std::min(slots, first + kPage), on_page = last - first;
                 size_t cols = std::min(on_page, per_row), cols_all = std::min(std::min(slots, kPage), per_row);
-                float cs = (rows_all > 1 ? 150 : 184) * s, gap = (rows_all > 1 ? 26 : 30) * s, row_gap = 18 * s, row_h = cs + 36 * s + row_gap;
+                float cs = (rows_all > 1 ? 160 : 190) * s, gap = (rows_all > 1 ? 24 : 30) * s, row_gap = 14 * s, lab = 50 * s, row_h = cs + lab + row_gap;  // (lab: the name's two lines)
                 float gw = (float)cols_all * cs + (float)(cols_all - 1) * gap, gh = (float)rows_all * row_h - row_gap;
-                float top = 150 * s, bottom = ds.y - 150 * s;
+                float top = 112 * s, bottom = ds.y - 128 * s;
                 float cx = (ds.x - gw) * 0.5f, cy = top + fmaxf(0, (bottom - top - gh) * 0.5f);
                 (void)cols;
                 ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -1221,7 +1246,7 @@ extern "C" void launcher_run(const char *root) {
                     ImGui::PushID((int)i);
                     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
                     if (focus_to != (size_t)-1 ? i == focus_to : refocus && (plus ? g_cards.empty() : i == g_card)) ImGui::SetKeyboardFocusHere();
-                    bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + 36 * s), ImGuiButtonFlags_EnableNav);
+                    bool clicked = ImGui::InvisibleButton("##card", ImVec2(cs, cs + lab), ImGuiButtonFlags_EnableNav);
                     ImGui::PopStyleColor();
                     bool focused = ImGui::IsItemFocused(), hovered = ImGui::IsItemHovered(), hot = focused || hovered,
                          sel = !plus && i == g_card;
@@ -1243,8 +1268,7 @@ extern "C" void launcher_run(const char *root) {
                         dl->AddLine(ImVec2(m.x - cs * 0.16f, m.y), ImVec2(m.x + cs * 0.16f, m.y), col, 5 * s);
                         dl->AddLine(ImVec2(m.x, m.y - cs * 0.16f), ImVec2(m.x, m.y + cs * 0.16f), col, 5 * s);
                         ImGui::PushFont(g_font_small);
-                        float tw = ImGui::CalcTextSize("Add a game").x;
-                        dl->AddText(ImVec2(at.x + (cs - tw) * 0.5f, br.y + 6 * s), col, "Add a game");
+                        card_label(dl, at.x + cs * 0.5f, br.y + 6 * s, cs, col, "Add a game");
                         ImGui::PopFont();
                         if (clicked) {
                             mkdir((std::string(rt_data_root()) + "/games").c_str(), 0755);
@@ -1273,9 +1297,8 @@ extern "C" void launcher_run(const char *root) {
                     dl->AddRect(at, br, sel ? IM_COL32(255, 214, 64, 255) : hot ? IM_COL32(255, 255, 255, 200) : IM_COL32(255, 255, 255, 40),
                                 14 * s, 0, (sel ? 4 : 2) * s);
                     ImGui::PushFont(g_font_small);
-                    float tw = ImGui::CalcTextSize(g_cards[i].name.c_str()).x;
-                    dl->AddText(ImVec2(at.x + (cs - tw) * 0.5f, br.y + 6 * s), sel ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 255),
-                                g_cards[i].name.c_str());
+                    card_label(dl, at.x + cs * 0.5f, br.y + 6 * s, cs, sel ? IM_COL32(255, 214, 64, 255) : IM_COL32(250, 250, 255, 255),
+                               g_cards[i].name);
                     ImGui::PopFont();
                 }
                 focus_to = (size_t)-1;  // (sent this frame, if it was)
@@ -1292,8 +1315,9 @@ extern "C" void launcher_run(const char *root) {
                     ImGui::PushFont(g_font_small);
                     for (int dir = -1; dir <= 1; dir += 2) {
                         bool can = dir < 0 ? g_page > 0 : g_page + 1 < pages;
+                        if (!can) continue;  // (an arrow only where the pages go on)
                         float aw = 44 * s, ah = 96 * s;
-                        ImVec2 a(ImGui::GetWindowPos().x + (dir < 0 ? cx - aw - 22 * s : cx + gw + 22 * s),
+                        ImVec2 a(ImGui::GetWindowPos().x + (dir < 0 ? cx - aw - 56 * s : cx + gw + 56 * s),
                                  ImGui::GetWindowPos().y + cy + (gh - ah) * 0.5f);
                         ImGui::SetCursorScreenPos(a);
                         ImGui::PushID(dir);
@@ -1802,7 +1826,7 @@ extern "C" void launcher_run(const char *root) {
                 std::string ver = tag_label(PICRECOMP_VERSION, true);
                 float vs = fs * 1.4f, y = ImGui::GetWindowPos().y + ds.y - 134 * s;
                 ImVec2 vsz = font->CalcTextSizeA(vs, FLT_MAX, 0, ver.c_str());
-                text(ImVec2(right - vsz.x, y), vs, IM_COL32(255, 255, 255, 255), ver.c_str(), false);
+                // (the version itself is not shown any more; only a newer release's notice, in its place)
                 pthread_mutex_lock(&g_update_lock);
                 std::string upd = g_update_tag;
                 pthread_mutex_unlock(&g_update_lock);
