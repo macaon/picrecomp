@@ -261,6 +261,11 @@ seen working by the user with an empty save and no add-ons: Yes returns to the m
 in its save, so removing a package later does not lock it again (test the shop with `PICRECOMP_DATA_ROOT` pointing at a fresh folder). S+ comes last on the start screen (the cards sort "+" after
 the digits).
 
+- Video > Internal resolution: the `1x` entry is now called **Native 1080p** (1920 x 1080 whatever the window; the
+  saved value is still `resolution = 1x`). Every game's scene targets are 1920 x 1080 (measured on all ten at their
+  title screens); Kemono at Native 1080p shows its title screen right, in a 1280 x 720 window. Our own UI (menu,
+  start screen) is drawn on the window itself, after the game image, so it is not affected by this setting.
+
 ## KEMONO FRIENDS PICROSS
 
 The first licensed game (2018, between S2 and S3): id `01004b100bda2000`, v0 (no update), main build ID

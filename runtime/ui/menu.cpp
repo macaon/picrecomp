@@ -441,7 +441,8 @@ static void tab_display(void) {
     // display order -> RES_* (the ini / enum order predates the menu order)
     // (up to 4x: 7680 x 4320, 8K - more only ran out of GPU memory, and sat next to 75% in the list)
     // (Match display in the middle: left from it 75% / 50% / 25%, right Dynamic then 1x-4x; user 2026-10-11)
-    static const char *res[] = {"25%", "50%", "75%", "Match display", "Dynamic", "1x", "2x", "3x", "4x"};
+    // (1x is the Switch's docked image, 1920 x 1080 whatever the window: named so; picrecomp.ini still says "1x")
+    static const char *res[] = {"25%", "50%", "75%", "Match display", "Dynamic", "Native 1080p", "2x", "3x", "4x"};
     static const int res_mode[] = {RES_Q25, RES_Q50, RES_Q75, RES_MATCH, RES_DYNAMIC, 1, 2, 3, 4};
     enum { RES_MATCH_AT = 3 };
     enum { NRES = sizeof res_mode / sizeof res_mode[0] };
@@ -452,7 +453,8 @@ static void tab_display(void) {
         renderer_get_scale(&sx, &sy);
         char d[400];
         int n = snprintf(d, sizeof d, "How sharp the 3D image is. Match display: your screen's own resolution. Dynamic: "
-                                      "as sharp as your GPU keeps at full speed. 1x-4x: the Switch's 1080p times that. "
+                                      "as sharp as your GPU keeps at full speed. Native 1080p: 1920 x 1080, as on the Switch docked; 2x-4x: "
+                                      "that times 2-4. "
                                       "75%% / 50%% / 25%%: a share of the display, for slower machines.\n\nRendering at "
                                       "%.0f x %.0f.", 1920.0 * sx, 1080.0 * sy);
         if (g_settings.res_mode == RES_DYNAMIC)
