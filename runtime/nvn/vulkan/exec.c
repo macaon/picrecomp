@@ -3056,6 +3056,14 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
                                                 (uint32_t)level, array ? (uint32_t)rg[2] : 0, array ? nz : 1},
                            .imageOffset = {rg[0], rg[1], array ? 0 : rg[2]},
                            .imageExtent = {(uint32_t)rg[3], (uint32_t)rg[4], array ? 1 : nz}};
+    {   // The copy stays inside the image's level: a 16:9 texture is allocated at the output scale (textures.c
+        // create_image), and the game fills it at its own size (the save slots' screenshots): the overrun was a
+        // validation error and, on the NVIDIA driver, a lost device after an in-place reboot.
+        uint32_t lw = b->width >> level ? b->width >> level : 1, lh = b->height >> level ? b->height >> level : 1;
+        if ((uint32_t)c.imageOffset.x >= lw || (uint32_t)c.imageOffset.y >= lh) return;
+        if (c.imageOffset.x + c.imageExtent.width > lw) c.imageExtent.width = lw - c.imageOffset.x;
+        if (c.imageOffset.y + c.imageExtent.height > lh) c.imageExtent.height = lh - c.imageOffset.y;
+    }
     vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
 }
 

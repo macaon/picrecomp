@@ -465,8 +465,10 @@ static void upload_pending(TexBackend *b) {
     b->pending_rgba = NULL;
     pthread_mutex_unlock(&pending_lock);
     if (!px) return;
-    if (w > b->width) w = b->width;
-    if (h > b->height) h = b->height;
+    // (the image's own size: a 16:9 texture is allocated at the output scale, so b->width overran it - the save
+    // slots' screenshots read again after an in-place reboot: validation error, then a lost device)
+    if (w > level_w(b, 0)) w = level_w(b, 0);
+    if (h > level_h(b, 0)) h = level_h(b, 0);
     VkSpan s = vk_transient_copy(px, (uint64_t)stride * h, 16);
     free(px);
     VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = stride / 4,
