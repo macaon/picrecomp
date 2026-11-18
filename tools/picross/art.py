@@ -2,7 +2,8 @@
 """A game's hero background, from the player's own copy of the game (nothing of it is shipped).
 
 Every PICROSS game is a Unity game, and its title screen sits on a soft colour wash in the game's own palette: the
-texture Common_BG000 in Data/sharedassets5.assets of its RomFS (1280x720; PICROSS S2's is 2048x576). It is read out of
+texture Common_BG000 in Data/sharedassets5.assets of its RomFS (1280x720; PICROSS S2's is 2048x576; PICROSS S+'s is
+Common_BG000_DL in sharedassets4). It is read out of
 <game>/romfs.bin and saved as <game>/background.jpg, which the start screen shows muted behind that game. This needs
 UnityPy (pip install UnityPy, see the README); without it a game just has no background.
 
@@ -15,7 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-WANT = "Common_BG000"
+WANT = ("Common_BG000", "Common_BG000_DL")  # (PICROSS S+ names its title wash with a _DL; the first that exists, in this order)
 WIDTH = 1280  # (the saved image is at most this wide: it is a muted backdrop)
 
 
@@ -64,8 +65,11 @@ def extract_background(game):
     entries = {name: (off, size) for name, off, size in romfs_files(romfs)}
     names = sorted((n for n in entries if re.fullmatch(r"Data/sharedassets\d+\.assets", n)),
                    key=lambda n: (n != "Data/sharedassets5.assets", n))  # (where it is in every game so far)
+    best = None  # (rank in WANT, picture)
     with tempfile.TemporaryDirectory(prefix=".art-", dir=game) as work, romfs.open("rb") as image:
         for asset in names:
+            if best and best[0] == 0:
+                break
             for name in (asset, asset + ".resS"):  # (a texture's pixels are in the .resS beside its .assets)
                 if name in entries:
                     off, size = entries[name]
@@ -79,14 +83,16 @@ def extract_background(game):
                 if obj.type.name != "Texture2D":
                     continue
                 tex = obj.read()
-                if tex.m_Name != WANT:
+                if tex.m_Name not in WANT or (best and best[0] <= WANT.index(tex.m_Name)):
                     continue
-                picture = tex.image.convert("RGB")
-                if picture.width > WIDTH:
-                    picture = picture.resize((WIDTH, round(picture.height * WIDTH / picture.width)))
-                picture.save(game / "background.jpg", quality=88)
-                return True
-    return False
+                best = (WANT.index(tex.m_Name), tex.image.convert("RGB"))
+    if not best:
+        return False
+    picture = best[1]
+    if picture.width > WIDTH:
+        picture = picture.resize((WIDTH, round(picture.height * WIDTH / picture.width)))
+    picture.save(game / "background.jpg", quality=88)
+    return True
 
 
 if __name__ == "__main__":

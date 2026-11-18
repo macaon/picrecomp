@@ -108,8 +108,8 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   `dpad_move` line in `picrecomp.ini` is ignored.
 
 - Each game has its own muted background on the start screen (and behind Settings): the colour wash behind its title
-  screen, `Common_BG000` in `Data/sharedassets5.assets` of its RomFS (found in all eight games: S a rainbow wheel, S2 a
-  beach, S3 green light, S4 a sunset, S5 a night city, S6 a sunlit room, S7 snow, S8 a nebula), read at import time by
+  screen, `Common_BG000` in `Data/sharedassets5.assets` of its RomFS (S+ keeps it as `Common_BG000_DL` in sharedassets4; found in all nine games: S a rainbow wheel, S2 a
+  beach, S3 green light, S4 a sunset, S5 a night city, S6 a sunlit room, S7 snow, S8 a nebula, S+ pale light), read at import time by
   `tools/picross/art.py` into `<game>/background.jpg` (never committed; UnityPy, optional: `pip install UnityPy==1.25.4`
   into `tools/venv`). `art.py <game folder>...` adds it to a game added before (done here for the eight installed). The
   start screen keeps one texture per game, dims it evenly (more for a bright picture) and fades the bottom for the lower
