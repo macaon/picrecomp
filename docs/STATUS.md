@@ -99,7 +99,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   been tried.
 
 - **Other titles.** Every game now has its own folder `<data root>/games/<name>` holding `exefs/`, `romfs.bin`, the
-  icon, `generated/` and its own `picgame.so`. `tools/picross/install.py` (what the start screen's importer runs) does
+  icon and its own `picgame.so` (`generated/`, about 640 MB, is only there while it builds: `install.py` deletes it after a successful compile, `--keep-generated` keeps it for a rebuild without regenerating). `tools/picross/install.py` (what the start screen's importer runs) does
   everything: prepare, `generate.sh`, `make game GAME=<folder>`. A library's `.id` file names the main build ID it was
   generated from and is refused for any other game. The only per-title code left was the exception-landing patches;
   they are in the manifests now, and S2's and S3's were found by matching S's two patched functions in their `main`

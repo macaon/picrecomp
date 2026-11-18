@@ -73,6 +73,8 @@ def main():
     parser.add_argument("--games", type=Path, required=True, help="the library: the game goes to <games>/<name>")
     parser.add_argument("--prod-keys", type=Path)
     parser.add_argument("--hactool")
+    parser.add_argument("--keep-generated", action="store_true",
+                        help="keep the generated C (about 640 MB a game): a rebuild after a runtime change then skips the generating")
     args = parser.parse_args()
     prepare.STEPS = STEPS
     try:
@@ -96,6 +98,8 @@ def main():
         prepare.step(9, "Compiling the game code")
         compile_game(game)
         prepare.step(10, "Finishing")
+        if not args.keep_generated:  # the library is all the game needs (runtime/gamebuild.c does the same)
+            shutil.rmtree(game / "generated", ignore_errors=True)
         print(f"Added {title['name']} in {game}", flush=True)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"@error {error}", flush=True)

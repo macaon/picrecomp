@@ -50,7 +50,7 @@ The generated code is never committed and never edited by hand. Changes go in `t
 
 ### The game code is a separate library
 
-The generated code is compiled into the game's own `picgame.so` (`.dll` on Windows) in its folder, which the runtime loads (`runtime/gamelib.c`; the
+The generated code is compiled into the game's own `picgame.so` (`.dll` on Windows) in its folder (the C itself is deleted after the build: only the library is needed), which the runtime loads (`runtime/gamelib.c`; the
 entry point is `tools/gamelib_entry.c`). The library's id file holds a hash of the generator, the headers it is compiled against and the flags, and the build ID of
 the `main` module it came from; a library with another id, or for another game, is never loaded. The executable contains no game code.
 
