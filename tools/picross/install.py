@@ -17,6 +17,9 @@ import prepare
 
 ROOT = Path(__file__).resolve().parents[2]
 STEPS = 10
+PREPARED = ("Looking for the game's packages", "Reading the base package", "Reading the update package",
+            "Reading the game's metadata", "Applying the update and extracting the game data",
+            "Reading the game's icon", "Saving the game files")  # (steps 1-7: what the preparing does)
 
 
 def progress(done, total):
@@ -94,7 +97,7 @@ def swap_in(new, old):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--folder", type=Path, required=True, help="the folder with the game's two .nsp files")
+    parser.add_argument("--folder", type=Path, required=True, help="the folder with the game's .nsp files (the base game, and its update if any)")
     parser.add_argument("--games", type=Path, required=True, help="the library: the game goes to <games>/<name>")
     parser.add_argument("--prod-keys", type=Path)
     parser.add_argument("--hactool")
@@ -110,23 +113,26 @@ def main():
         game = installed = args.output
         update = False
         if (installed / "picgame.so").is_file():
-            have = json.loads((installed / "title.json").read_text()) if (installed / "title.json").is_file() else {}
-            if have.get("main_build_id") == title["main_build_id"]:
-                raise ValueError(f"{title['name']} is already in the library" +
-                                 (f" (version {have['display_version']})" if have.get("display_version") else ""))
-            # another version of a game that is in the library: built beside it, swapped in when it is done
+            # a game that is in the library, imported again (another version, or the same: found out below): built beside
+            # it, swapped in when it is done
             update = True
             game = args.output = installed.with_name("." + installed.name + ".new")  # (a dot: the start screen skips it)
             shutil.rmtree(game, ignore_errors=True)
         if (game / "exefs" / "main").is_file() and (game / "title.json").is_file():  # added before, never finished
-            for n, text in enumerate(("Looking for the game's packages", "Reading the base package", "Reading the update package",
-                                      "Reading the game's metadata", "Applying the update and extracting the game data",
-                                      "Reading the game's icon", "Saving the game files"), 1):
+            for n, text in enumerate(PREPARED, 1):
                 prepare.step(n, text + " (already done)")
         else:
             prepare.prepare(args)
         if (game / "picgame.so").is_file():
             raise ValueError(f"{title['name']} is already in the library")
+        if update:
+            def info(folder):
+                return json.loads((folder / "title.json").read_text()) if (folder / "title.json").is_file() else {}
+            have, now = info(installed), info(game)
+            if have.get("main_build_id") == now.get("main_build_id") and have.get("update_version") == now.get("update_version"):
+                shutil.rmtree(game, ignore_errors=True)
+                raise ValueError(f"{title['name']} is already in the library" +
+                                 (f" (version {have['display_version']})" if have.get("display_version") else ""))
         if update and build_ids(game) == build_ids(installed):  # only the data changed: the game code is still right
             prepare.step(8, "Generating the game code (not needed: the code is unchanged)")
             prepare.step(9, "Compiling the game code (not needed)")

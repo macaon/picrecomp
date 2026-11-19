@@ -306,7 +306,7 @@ typedef struct Landing {
 
 static _Thread_local Landing *active_landing;
 
-_Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *)) {
+bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *)) {
     Landing landing = {.cpu = c, .pc = pc, .sp = c->sp,
                        .previous = active_landing};
     active_landing = &landing;
@@ -319,7 +319,7 @@ _Bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *)) {
     return 0;
 }
 
-_Bool rt_call_with_landing(Cpu *c, uint64_t pc) {
+bool rt_call_with_landing(Cpu *c, uint64_t pc) {
     return rt_invoke_with_landing(c, pc, rt_dispatch);
 }
 

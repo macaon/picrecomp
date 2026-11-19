@@ -1,22 +1,7 @@
 {
   "slug": "picross-shield-hero",
   "name": "PICROSS Records of The Shield Hero",
-  "order": "120",
+  "released": "2024-10-03",
   "base_id": "01004c602018a000",
-  "update_id": "01004c602018a800",
-  "update_version": 131072,
-  "main_build_id": "4c1cf04820df7f24166defcac3409e4a",
-  "exception_landings": {
-    "call": [
-      {
-        "return": "0x70023e6d58",
-        "landing": "0x70023e6e98"
-      },
-      {
-        "return": "0x7001aa62b4",
-        "landing": "0x7001aa62c0",
-        "callee": "0x7001aa6350"
-      }
-    ]
-  }
+  "update_id": "01004c602018a800"
 }

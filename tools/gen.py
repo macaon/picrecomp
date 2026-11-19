@@ -19,6 +19,7 @@ from collections import Counter
 import unicorn as uc
 from unicorn import arm64_const as A
 
+import lsda
 from analyze import eh_frame_functions
 from lifter import Insn, Lifter, Unsupported, bits, emit_asm_batch, hx, sext
 from nso import Nso, R_AARCH64_RELATIVE
@@ -62,6 +63,44 @@ class Module:
         self.cache = {}
         self.stats = Counter()
         self.mu = None
+        self._landings = None
+        self.resume_rets = self.find_resume_rets() if name == 'sdk' else set()
+
+    # ------------------------------------------------------------ exceptions
+
+    def landings(self):
+        """{a call's return address: the landing pad it can unwind into}, from the compiler's exception tables (lsda.py).
+        Only the game's own code (main): the Unity code that throws and catches C# exceptions. The guest unwinder jumps to
+        a pad by longjmp-ing to the C frame of the call (rt_invoke_with_landing), which therefore has to wrap every such
+        call; the pad is a label there."""
+        if self._landings is None:
+            self._landings = {}
+            if self.name == 'main':
+                for begin, end, rows in lsda.all_call_sites(self.nso, self.base):
+                    for start, length, pad, _ in rows:
+                        if not pad:
+                            continue
+                        for a in range(start, start + length, 4):
+                            if self.in_text(a) and self.lift(a).kind in ('bl', 'blr'):
+                                self._landings[a + 4] = pad
+            self.pads = sorted(set(self._landings.values()))
+        return self._landings
+
+    def find_resume_rets(self):
+        """The `ret` that ends the sdk's unwinder resume (libunwind's register-restore jump: a newer sdk ends it
+        `mov sp, x16; ret`, an older one `ldr d31, [x0, #0x208]; ldp x0, x1, [x0]; ret`): there the guest unwind goes on
+        at the landing pad (rt_resume_landing) instead of returning. Found by its code: the sdk differs between games."""
+        w, found = self.words, []
+        for i in range(len(w) - 2):
+            if w[i] == 0x9100021F and w[i + 1] == 0xD65F03C0:
+                found.append(self.lo + 4 * (i + 1))
+            elif w[i] == 0xFD41041F and w[i + 1] == 0xA9400400 and w[i + 2] == 0xD65F03C0:
+                found.append(self.lo + 4 * (i + 2))
+        if len(found) != 1:
+            print(f'warning: {len(found)} places in the sdk look like the unwinder\'s resume, expected one: C# exceptions '
+                  f'will not resume', file=sys.stderr)
+            return set()
+        return set(found)
 
     def in_text(self, a):
         return self.lo <= a < self.hi and a % 4 == 0
@@ -417,6 +456,8 @@ class Module:
     def scan(self, entry, end):
         """Collect labels and external entries referenced by a function."""
         labels, ext, tables = {entry}, set(), {}
+        self.landings()
+        labels.update(p for p in self.pads if entry <= p < end)  # (landing pads: entered by the guest unwinder, not a branch)
         terminated = False
         for a in range(entry, end, 4):
             ins = self.lift(a)
@@ -446,31 +487,6 @@ class Module:
         if not terminated and end < self.hi:
             ext.add(end)
         return labels, ext, tables
-
-    def render_single(self, ins, a, jump, refs):
-        """C for one lifted instruction (no batching); used for patch variants."""
-        k = ins.kind
-        if k == 'asm':
-            return [emit_asm_batch([ins.asm])]
-        if k in ('op', 'trap'):
-            return [ins.code]
-        if k == 'b':
-            return [jump(ins.target)]
-        if k == 'bcond':
-            return [f'if ({ins.cond}) {{ {jump(ins.target)} }}']
-        if k == 'bl':
-            t = ins.target
-            if self.in_text(t):
-                refs.add(t)
-                return [f'c->x[30] = {hx(a + 4)}; {fname(t)}(c);']
-            return [f'c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c);']
-        if k == 'blr':
-            return [f'c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; rt_dispatch(c);']
-        if k == 'br':
-            return [f'c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);']
-        if k == 'ret':
-            return ['return;']
-        raise Unsupported(k)
 
     def emit_function(self, entry, end, labels, tables, hle):
         # A huge function with the all-instruction fallback (thousands of labels, one big switch) sends clang's
@@ -540,6 +556,17 @@ class Module:
                 out.append('    ' + jump(ins.target))
             elif k == 'bcond':
                 out.append(f'    if ({ins.cond}) {{ {jump(ins.target)} }}')
+            elif k in ('bl', 'blr') and (pad := self.landings().get(a + 4)) is not None and entry <= pad < end:
+                # a call that can unwind into a landing pad of this function: the unwinder resumes there
+                go = f'goto {label(pad)};'
+                if k == 'blr':
+                    out.append(f'    c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; if (rt_call_with_landing(c, {hx(pad)})) {go}')
+                elif self.in_text(ins.target):
+                    refs.add(ins.target)
+                    out.append(f'    c->x[30] = {hx(a + 4)}; if (rt_invoke_with_landing(c, {hx(pad)}, {fname(ins.target)})) {go}')
+                else:
+                    out.append(f'    c->x[30] = {hx(a + 4)}; c->pc = {hx(ins.target)}; if (rt_call_with_landing(c, {hx(pad)})) {go}')
+                self.stats['wrapped_calls'] += 1
             elif k == 'bl':
                 t = ins.target
                 if self.in_text(t):
@@ -564,7 +591,7 @@ class Module:
                     continue
                 out.append(f'    c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);')
             elif k == 'ret':
-                out.append('    return;')
+                out.append('    rt_resume_landing(c);' if a in self.resume_rets else '    return;')
             last = k
         flush()
         if last not in ('b', 'br', 'ret', 'trap'):

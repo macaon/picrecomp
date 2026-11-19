@@ -5,6 +5,7 @@ import lz4.block
 
 DT_NULL, DT_NEEDED, DT_PLTRELSZ, DT_HASH, DT_STRTAB, DT_SYMTAB, DT_RELA, DT_RELASZ = 0, 1, 2, 4, 5, 6, 7, 8
 DT_STRSZ, DT_JMPREL, DT_RELACOUNT = 10, 23, 0x6FFFFFF9
+DT_RELRSZ, DT_RELR = 35, 36  # RELR: the compact relative relocations of a newer toolchain (a game's modules from 2024)
 R_AARCH64_ABS64, R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_RELATIVE = 257, 1025, 1026, 1027
 
 
@@ -75,6 +76,21 @@ class Nso:
                 for i in range(n):
                     r_off, r_info, r_add = struct.unpack_from('<QQq', self.image, b + i * 24)
                     self.relocs.append((r_off, r_info & 0xFFFFFFFF, r_info >> 32, r_add))
+        if dyn.get(DT_RELR) and dyn.get(DT_RELRSZ):
+            # an even entry is the address of a word to relocate, an odd one a bitmap of the 63 words after the last; the
+            # word's own value is the addend (as a RELATIVE entry's)
+            where = None
+            for i in range(dyn[DT_RELRSZ] // 8):
+                x = self.u64(dyn[DT_RELR] + i * 8)
+                if not x & 1:
+                    where = x
+                    self.relocs.append((where, R_AARCH64_RELATIVE, 0, self.u64(where)))
+                    where += 8
+                elif where is not None:
+                    for j in range(63):
+                        if x >> (j + 1) & 1:
+                            self.relocs.append((where + 8 * j, R_AARCH64_RELATIVE, 0, self.u64(where + 8 * j)))
+                    where += 63 * 8
 
     def cstr(self, off):
         end = self.image.index(b'\0', off)

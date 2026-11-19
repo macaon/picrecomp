@@ -1,5 +1,6 @@
 // Guest CPU state and helpers used by recompiled code.
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -47,6 +48,11 @@ RT_API void rt_svc(Cpu *c, uint32_t imm, uint64_t pc);
 RT_API void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) __attribute__((noreturn));
 RT_API void rt_udf(Cpu *c, uint64_t pc) __attribute__((noreturn));
 RT_API uint64_t rt_ticks(void);
+// A call that can unwind into a landing pad of the calling function (gen.py wraps the calls the compiler's exception tables
+// name): true = the guest unwinder resumed at pc, the caller goes on there. rt_resume_landing is the unwinder's final jump.
+RT_API bool rt_call_with_landing(Cpu *c, uint64_t pc);                                  // c->pc is the callee
+RT_API bool rt_invoke_with_landing(Cpu *c, uint64_t pc, void (*call)(Cpu *));
+RT_API void rt_resume_landing(Cpu *c) __attribute__((noreturn));
 
 #if defined(__aarch64__)
 static inline uint64_t rt_get_fpcr(void) { uint64_t v; __asm__ volatile("mrs %0, fpcr" : "=r"(v)); return v; }

@@ -72,10 +72,10 @@ def package_version(nsp):
 
 
 def find_packages(folder, metas=None):
-    """(manifest, base .nsp, update .nsp) for the one game whose packages are in the folder. A package's title ID is the
-    start of its ticket's file name (a package without a ticket: its own
-    content metadata, read with the keys: an error if they cannot). With several updates of a game the newest one that has a manifest is used (a
-    newer one that has none is mentioned, not used); a game that was never updated has no update package."""
+    """(manifest, base .nsp, update .nsp or None) for the one game whose packages are in the folder: the base game alone is
+    enough, and with several updates the newest is used (any version: the generator does not depend on one). A package's
+    title ID is the start of its ticket's file name (a package without a ticket: its own content metadata, read with the
+    keys: an error if they cannot)."""
     manifests = load_manifests()
     base_ids = {t["base_id"]: t["slug"] for t in manifests}
     update_ids = {t["update_id"]: t["slug"] for t in manifests if "update_id" in t}  # (a game never updated has none)
@@ -89,24 +89,14 @@ def find_packages(folder, metas=None):
             if tid in base_ids:
                 bases[base_ids[tid]] = nsp
             elif tid in update_ids:
-                updates.setdefault(update_ids[tid], []).append((version if version is not None else package_version(nsp), nsp))
+                updates.setdefault(update_ids[tid], []).append((version if version is not None else package_version(nsp) or 0, nsp))
     games = []
     for slug, base in bases.items():
-        versions = {t.get("update_version"): t for t in manifests if t["slug"] == slug}
-        if None in versions:  # (never updated: the base package is the game)
-            games.append((versions[None], base, None))
-            continue
-        offered = [(v, nsp) for v, nsp in updates.get(slug, []) if v in versions]
-        if offered:
-            v, nsp = max(offered, key=lambda o: o[0])
-            newer = [n for n, _ in updates[slug] if n is None or n > v]
-            if newer:
-                print(f"Note: an update newer than the supported v{v} is in the folder and is not used", flush=True)
-            games.append((versions[v], base, nsp))
-        elif updates.get(slug):
-            raise ValueError("That update isn't supported yet (supported: %s)" % ", ".join(f"v{v}" for v in sorted(versions)))
+        manifest = next(t for t in manifests if t["slug"] == slug)
+        newest = max(updates[slug], key=lambda u: u[0])[1] if updates.get(slug) else None
+        games.append((manifest, base, newest))
     if len(games) != 1:
-        raise ValueError("No supported game in that folder (it needs the base .nsp and the update .nsp)" if not games
+        raise ValueError("No supported game in that folder (it needs at least the game's base .nsp)" if not games
                          else "More than one game in that folder; keep one game's packages there")
     return games[0]
 
@@ -215,10 +205,10 @@ def content_nca(directory, meta, content_type):
     return found[0] if len(found) == 1 else None
 
 
-def pick_meta(metas, kind, title_id, version):
-    found = [m for m in metas if m["kind"] == kind and m["id"] == title_id and m["version"] == version]
+def pick_meta(metas, kind, title_id):
+    found = [m for m in metas if m["kind"] == kind and m["id"] == title_id]
     if len(found) != 1:
-        raise ValueError(f"Expected one {title_id} v{version} entry in the package metadata")
+        raise ValueError(f"Expected one {title_id} entry in the package metadata")
     return found[0]
 
 
@@ -271,25 +261,19 @@ def prepare(args):
         base_metas = read_metas(base, hactool)
         update_metas = read_metas(update, hactool) if args.update else []
         found = next((m["id"] for m in base_metas if m["kind"] == META_APPLICATION), None)
-        candidates = [t for t in load_manifests() if t["base_id"] == found]
-        if not candidates:
+        title = next((t for t in load_manifests() if t["base_id"] == found), None)
+        if title is None:
             raise ValueError(f"Title {found} has no manifest in titles/")
-        base_meta = pick_meta(base_metas, META_APPLICATION, found, 0)
-        if args.update:  # the manifest of the update's own version
-            patches = [m for m in update_metas if m["kind"] == META_PATCH and m["id"] == candidates[0].get("update_id")]
+        base_meta = pick_meta(base_metas, META_APPLICATION, found)
+        update_meta = None
+        if args.update:
+            patches = [m for m in update_metas if m["kind"] == META_PATCH and m["id"] == title.get("update_id")]
             if len(patches) != 1:
                 raise ValueError("The update package isn't this game's")
-            title = next((t for t in candidates if t.get("update_version") == patches[0]["version"]), None)
-            if title is None:
-                raise ValueError(f"Update v{patches[0]['version']} of {candidates[0]['name']} isn't supported yet")
-        else:
-            title = next((t for t in candidates if "update_id" not in t), None)
-            if title is None:
-                raise ValueError(f"{candidates[0]['name']} needs its update package")
-        print(f"Title: {title['name']}" + (f" (update v{title['update_version']})" if args.update else ""), flush=True)
+            update_meta = patches[0]
+        print(f"Title: {title['name']}" + (f" (update v{update_meta['version']})" if update_meta else ""), flush=True)
         base_nca = content_nca(base, base_meta, CONTENT_PROGRAM)
         if args.update:
-            update_meta = pick_meta(update_metas, META_PATCH, title["update_id"], title["update_version"])
             update_nca = content_nca(update, update_meta, CONTENT_PROGRAM)
         else:  # the game as it came: the base program is the one to extract
             update_nca = None
@@ -317,9 +301,8 @@ def prepare(args):
                 raise ValueError(f"Missing extracted ExeFS file: {name}")
         with (exefs / "main").open("rb") as stream:
             header = stream.read(0x60)
-        if header[:4] != b"NSO0" or header[0x40:0x50].hex() != title["main_build_id"]:
-            raise ValueError("Extracted executable has build ID %s, the manifest expects %s" %
-                             (header[0x40:0x50].hex(), title["main_build_id"]))
+        if header[:4] != b"NSO0":
+            raise ValueError("The extracted main executable is not an NSO")
         if not romfs.is_file() or romfs.stat().st_size == 0:
             raise ValueError("hactool did not produce an updated RomFS image")
         # The control data (card image, and the NACP with the version the Switch shows): the update's when it has
@@ -327,6 +310,9 @@ def prepare(args):
         control = (content_nca(update, update_meta, CONTENT_CONTROL) if args.update else None) \
             or content_nca(base, base_meta, CONTENT_CONTROL)
         info = dict(title)
+        info["main_build_id"] = header[0x40:0x50].hex()  # (the library is checked against it at start: runtime/gamelib.c)
+        if update_meta:
+            info["update_version"] = update_meta["version"]
         if getattr(args, "addons", None):
             info["addons"] = args.addons
             print(f"Add-on content: {len(args.addons)} package(s)", flush=True)

@@ -1,20 +1,6 @@
 {
   "slug": "picross-s8",
   "name": "PICROSS S8",
-  "order": "090",
-  "base_id": "01002ce017d26000",
-  "main_build_id": "8dc7537c47d3ac4f998a5231204d9c0b",
-  "exception_landings": {
-    "call": {
-      "return": "0x7001b844f4",
-      "landing": "0x7001b84628",
-      "resume": "0x7001b84638"
-    },
-    "catch": {
-      "return": "0x7001478a9c",
-      "callee": "0x7001478b30",
-      "landing": "0x7001478aa8",
-      "target": "0x7001478b20"
-    }
-  }
+  "released": "2022-09-29",
+  "base_id": "01002ce017d26000"
 }

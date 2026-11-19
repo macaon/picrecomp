@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Lifts a prepared game's three modules to C: GAME_DIRECTORY/generated (never committed). The game's manifest in titles/
-# is found by its main build ID; the exception-landing patches come from it.
+# Lifts a prepared game's three modules to C: GAME_DIRECTORY/generated (never committed). Exception landings, the compact
+# relocations and the unwinder's resume are all the generator's own work (tools/gen.py), whatever the game's version.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$root"
@@ -13,29 +13,13 @@ if [[ -e "$game/generated" || -L "$game/generated" ]]; then
 fi
 stage=$(mktemp -d "$game/.generate.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-ln -s "$game/exefs" "$stage/exefs"
-PYTHONPATH="$root/tools" "$python" - "$stage/exefs/main" "$stage" <<'PY'
-import glob, json, sys
-from gen import Module
-
-main = Module("main", sys.argv[1], 0x7000000000, "c")
-titles = [json.load(open(f)) for f in sorted(glob.glob("titles/*.json"))]
-# the build ID is the first 16 bytes of the NSO's module id, as the runtime reads it (nso.py strips trailing zero bytes:
-# KEMONO FRIENDS PICROSS's ends in one)
-build_id = open(sys.argv[1], "rb").read()[0x40:0x50].hex()
-title = next((t for t in titles if t["main_build_id"] == build_id), None)
-if title is None:
-    raise SystemExit(f"Unsupported build ID {build_id}: no manifest in titles/")
-print(f"Generating {title['name']}")
-json.dump(title, open(sys.argv[2] + "/title.json", "w"))
-open(sys.argv[2] + "/build-id", "w").write(build_id + "\n")
-PY
 for spec in main:0x7000000000 subsdk0:0x7008000000 sdk:0x700c000000; do
     module=${spec%%:*}
-    "$python" tools/picross/gen_relr.py "$module" "$stage/exefs/$module" "${spec#*:}" "$stage/lift/$module" \
+    "$python" tools/gen.py "$module" "$game/exefs/$module" "${spec#*:}" "$stage/lift/$module" \
         --hle runtime/hle/hle_symbols.txt --simd c
 done
 # (the jump tables of main are resolved by gen.py itself: tools/test_jumptable.py)
-"$python" tools/picross/fix-exception-resume.py "$stage" "$stage/title.json"
+# the build ID the library is checked against at start: the first 16 bytes of the main module's id, as the runtime reads it
+"$python" -c 'import sys; print(open(sys.argv[1], "rb").read()[0x40:0x50].hex())' "$game/exefs/main" > "$stage/build-id"
 mv -- "$stage/lift" "$game/generated"
 mv -- "$stage/build-id" "$game/generated/build-id"

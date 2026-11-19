@@ -1,20 +1,6 @@
 {
   "slug": "kemono-friends-picross",
   "name": "KEMONO FRIENDS PICROSS",
-  "order": "030",
-  "base_id": "01004b100bda2000",
-  "main_build_id": "b3a956031cee684b8a4df42874cb3e00",
-  "exception_landings": {
-    "call": {
-      "return": "0x700020ae24",
-      "landing": "0x700020af54",
-      "resume": "0x700020af68"
-    },
-    "catch": {
-      "return": "0x7000222a70",
-      "callee": "0x7000222c80",
-      "landing": "0x7000222a84",
-      "target": "0x7000222c74"
-    }
-  }
+  "released": "2018-10-04",
+  "base_id": "01004b100bda2000"
 }

@@ -1,22 +1,7 @@
 {
   "slug": "picross-s-genesis",
   "name": "PICROSS S GENESIS & Master System edition",
-  "order": "075",
+  "released": "2021-08-05",
   "base_id": "010089701567a000",
-  "update_id": "010089701567a800",
-  "update_version": 196608,
-  "main_build_id": "1466f9109e267e458c517ada6b115e99",
-  "exception_landings": {
-    "call": [
-      {
-        "return": "0x7001b75d64",
-        "landing": "0x7001b75e98"
-      },
-      {
-        "return": "0x7001494c9c",
-        "landing": "0x7001494ca8",
-        "callee": "0x7001494d30"
-      }
-    ]
-  }
+  "update_id": "010089701567a800"
 }

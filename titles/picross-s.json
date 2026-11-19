@@ -1,22 +1,7 @@
 {
   "slug": "picross-s",
   "name": "PICROSS S",
-  "order": "010",
+  "released": "2017-09-28",
   "base_id": "0100ba0003eea000",
-  "update_id": "0100ba0003eea800",
-  "update_version": 524288,
-  "main_build_id": "260797018fefb8459d1bf07815e71c23",
-  "exception_landings": {
-    "call": {
-      "return": "0x7001b40d84",
-      "landing": "0x7001b40eb8",
-      "resume": "0x7001b40ec8"
-    },
-    "catch": {
-      "return": "0x7001510f9c",
-      "callee": "0x7001511030",
-      "landing": "0x7001510fa8",
-      "target": "0x7001511020"
-    }
-  }
+  "update_id": "0100ba0003eea800"
 }

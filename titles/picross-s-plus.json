@@ -1,22 +1,7 @@
 {
   "slug": "picross-s-plus",
   "name": "PICROSS S+",
-  "order": "100",
+  "released": "2024-02-29",
   "base_id": "0100d7b01ae58000",
-  "update_id": "0100d7b01ae58800",
-  "update_version": 65536,
-  "main_build_id": "5eb832c899625df5b6bbe8aea93d073c",
-  "exception_landings": {
-    "call": {
-      "return": "0x70020101f8",
-      "landing": "0x7002010338",
-      "resume": "0x7002010348"
-    },
-    "catch": {
-      "return": "0x7001d35444",
-      "callee": "0x7001d354e0",
-      "landing": "0x7001d35450",
-      "target": "0x7001d354c8"
-    }
-  }
+  "update_id": "0100d7b01ae58800"
 }
