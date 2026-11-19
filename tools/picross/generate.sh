@@ -32,7 +32,7 @@ open(sys.argv[2] + "/build-id", "w").write(build_id + "\n")
 PY
 for spec in main:0x7000000000 subsdk0:0x7008000000 sdk:0x700c000000; do
     module=${spec%%:*}
-    "$python" tools/gen.py "$module" "$stage/exefs/$module" "${spec#*:}" "$stage/lift/$module" \
+    "$python" tools/picross/gen_relr.py "$module" "$stage/exefs/$module" "${spec#*:}" "$stage/lift/$module" \
         --hle runtime/hle/hle_symbols.txt --simd c
 done
 # (the jump tables of main are resolved by gen.py itself: tools/test_jumptable.py)
