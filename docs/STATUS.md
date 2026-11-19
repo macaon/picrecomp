@@ -227,6 +227,23 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
    why a card cannot be played, and test the cards with a gamepad.
 4. The cleanup above, then Windows.
 
+### Consolidation once every game is in
+
+Adding the licensed games went through the generator's neighbours on purpose (wrappers and post-passes), because
+`tools/gen.py`, `lifter.py`, `analyze.py`, `nso.py`, `passes.py`, `patches.py` and `runtime/hle/hle_symbols.txt` are the game
+library's ID: an edit makes every installed game rebuild (about four minutes each, once). When the last game is in, fold
+them into the generator in **one** change, so the rebuild happens once, and delete the scaffolding:
+- `nso.py` reads `DT_RELR` itself; `tools/picross/gen_relr.py` goes, `generate.sh` calls `gen.py` again, and a rebuild from
+  the start screen (`runtime/gamebuild.c`, which calls `gen.py` directly) is right for the RELR game.
+- `gen.py` labels every landing pad of the compiler's exception tables (`tools/picross/lsda.py` moves next to it); then
+  `pad_labels.py` goes, and a manifest site is just `{"return", "landing"[, "callee"]}`.
+- One form of `exception_landings`: S, S+ and Kemono still use the older `resume` / `catch` groups; convert them (and
+  re-check each of those games for exceptions) and drop the legacy branches of `fix-exception-resume.py`.
+- Fold the bring-up loop that lives in scratch scripts (placeholder manifest, read the build ID, import, run, find the
+  landing for each "no continuation", patch, recompile) into one `tools/picross/` helper, and move the shared bits of
+  `prepare.py` / `install.py` that grew per game into plain functions.
+- Re-measure every game afterwards (title screen, a puzzle, 60 fps, no `[shader] ... failed`).
+
 ## PICROSS S+
 
 An older build (its `sdk`, `subsdk0` and `main` all differ from the others; Unity code compiled with other vtable offsets),
