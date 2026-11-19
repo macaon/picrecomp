@@ -94,7 +94,7 @@ The builds below are the ones the importer has been run on (main build ID: the g
 |  |  | 1.5.3 (update) | `41f118c8371c79478ee2cdf9ea5038ff` |
 | KEMONO FRIENDS PICROSS | `01004b100bda2000` | 1.0.0 (base) | `b3a956031cee684b8a4df42874cb3e00` |
 | PICROSS S3 | `010079200d330000` | 1.0.0 (base) | `7570c9e44f5889459d98794425aee552` |
-|  |  | 1.5.2 (update) | `7615bc81de189a40a9e3e213554bb8a4` |
+|  |  | 1.5.3 (update) | `7b2a38a86026464c8b4d4d3ffee0aabc` |
 | PICROSS LORD OF THE NAZARICK | `010012100e8dc000` | 1.0.0 (base) | `2424aca935dd5f4188d5bafb92a83504` |
 | PICROSS S4 | `0100c250115dc000` | 1.0.0 (base) | `9b6fca808b3f1748942eeb59481c1e60` |
 |  |  | 1.4.1 (update) | `4b604f7df57e0043b1a32ae2dbc8d1a8` |
