@@ -73,17 +73,18 @@ def package_version(nsp):
 
 def find_packages(folder):
     """(manifest, base .nsp, update .nsp) for the one game whose packages are in the folder. A package's title ID is the
-    start of its ticket's file name. With several updates of a game the newest one that has a manifest is used (a
+    start of its ticket's file name (a package without a ticket: the [ID] in its file name). With several updates of a game the newest one that has a manifest is used (a
     newer one that has none is mentioned, not used); a game that was never updated has no update package."""
     manifests = load_manifests()
     base_ids = {t["base_id"]: t["slug"] for t in manifests}
     update_ids = {t["update_id"]: t["slug"] for t in manifests if "update_id" in t}  # (a game never updated has none)
     bases, updates = {}, {}
     for nsp in sorted(folder.glob("*.nsp")):
-        for name in pfs0_names(nsp):
-            if not name.endswith(".tik"):
-                continue
-            tid = name[:16].lower()
+        tids = [name[:16].lower() for name in pfs0_names(nsp) if name.endswith(".tik")]
+        if not tids:  # a package with no ticket (standard crypto: nothing to unlock): the title ID in its file name
+            named = re.search(r"\[([0-9A-Fa-f]{16})\]", nsp.name)  # (prepare() checks it against the real metadata)
+            tids = [named.group(1).lower()] if named else []
+        for tid in tids:
             if tid in base_ids:
                 bases[base_ids[tid]] = nsp
             elif tid in update_ids:
