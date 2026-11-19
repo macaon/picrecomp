@@ -39,12 +39,14 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   `OpenSaveDataFileSystem` with another title's program id in the attribute (what S2 would send to read S's saves) mounts
   that title's folder read-only, or returns ResultTargetNotFound (for S4; no title here calls it).
 
-- PICROSS S4, S5, S6, S7 and S8 have manifests. Each was installed here (prepare, generate, compile, about four minutes)
+- PICROSS S4, S5, S6, S7, S8 and S9 have manifests. Each was installed here (prepare, generate, compile, about four minutes)
   and started to its title screen: 60 fps, no fatal error, no unimplemented call, in a scratch data root. S4 to S6 and
   S8 use the same `sdk` and `subsdk0` as S; **S7's are different** (a newer SDK), which works because the sdk's import
   of `nninitStartup` is found by what it is (`loader_import_slot`) and the generator finds the unwinder's resume
   function by its code, not by address. S8 has no update package (the base game is the whole game; its manifest has no
   `update_id`). Nothing past the title screen has been played on S4 to S8.
+- PICROSS S9 (`010021a0197ba000`, base only, v1.0.0) imports and reaches its main menu at 60 fps (Vulkan, Linux); it found the S5 save and
+  unlocked an extra puzzle (the cross-save feature, see the S4 notes). No update package exists here; nothing past the menu played.
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
@@ -67,7 +69,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - The start screen shows the chosen game's real version ("Game version 1.4.1"), read from the NACP of its update's
   control data (the base game's when it has no update): `prepare.py` writes it as `display_version` in the game's
-  `title.json`. Seen: S 1.6.1, S2 1.5.3 (earlier 1.5.2), S3 1.5.3, S4 1.4.2, S5 1.3.2, S6 1.3.1, S7 1.2.0, S8 1.0.0. Games added before this
+  `title.json`. Seen: S 1.6.1, S2 1.5.3 (earlier 1.5.2), S3 1.5.3, S4 1.4.2, S5 1.3.2, S6 1.3.1, S7 1.2.0, S8 1.0.0, S9 1.0.0. Games added before this
   have no such field; the line is left out for them (the ones here were filled in by hand from their packages).
   With the mouse a click chooses a card, the Play button at the bottom (lit while the chosen game can be played) starts it,
   and so does a double click; A / Enter / Start play it from the cursor. Settings is the "F1 Settings" hint, which is a
