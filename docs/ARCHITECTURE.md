@@ -45,8 +45,7 @@ The generated code is never committed and never edited by hand. Changes go in `t
   `LD64(a)` is a direct pointer dereference.
 - **`patches.py`** replaces single instructions by address with C. Every patch first checks the original instruction
   word (`expect()`), so a wrong address or a different game build fails the generation loudly. It is a mechanism only;
-  there are no per-game entries yet. `tools/picross/fix-exception-resume.py` is the one post-generation patch that
-  remains (landing pads for an exception unwind path); it finds the generated chunks it edits by their content.
+  there are no per-game entries.
 
 ### The game code is a separate library
 

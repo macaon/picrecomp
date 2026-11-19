@@ -81,8 +81,8 @@ The same from a terminal:
 python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .picrecomp/runtime/games
 ```
 
-Each game's ids, update version, main build ID and exception-landing patches are in its manifest, `titles/<name>.json`;
-the importer picks the manifest from the packages and refuses a game or version without one. Today there are manifests for PICROSS S, S2 to S8, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
+Each game's name, release date and title ids are in its manifest, `titles/<name>.json`; the importer picks the manifest
+from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S8, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
 
