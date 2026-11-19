@@ -1,0 +1,32 @@
+{
+  "slug": "picross-juufuutei-raden",
+  "name": "Picross: Juufuutei Raden's Guide for Pixel Museum",
+  "order": "130",
+  "base_id": "01003d2020aba000",
+  "update_id": "01003d2020aba800",
+  "update_version": 327680,
+  "main_build_id": "7cff713af0d89e278142db4fd0279a4b",
+  "exception_landings": {
+    "call": [
+      {
+        "return": "0x7003407840",
+        "landing": "0x7003407988",
+        "callee": "0x7000432640"
+      },
+      {
+        "return": "0x7003407864",
+        "landing": "0x7003407988",
+        "callee": "0x700341a750"
+      },
+      {
+        "return": "0x7002370dcc",
+        "landing": "0x7002370f00"
+      },
+      {
+        "return": "0x7001d40f7c",
+        "landing": "0x7001d40f8c",
+        "callee": "0x7001d41020"
+      }
+    ]
+  }
+}

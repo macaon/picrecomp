@@ -82,8 +82,7 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 ```
 
 Each game's ids, update version, main build ID and exception-landing patches are in its manifest, `titles/<name>.json`;
-the importer picks the manifest from the packages and refuses a game or version without one. Today PICROSS S, S2 to S8, S+,
-KEMONO FRIENDS PICROSS, PICROSS LORD OF THE NAZARICK and PICROSS S GENESIS & Master System edition and PICROSS S NAMCO LEGENDARY edition and PICROSS Records of The Shield Hero have manifests; S4 to S8 and S+ boot to their title screens (see `docs/STATUS.md` for what has been played).
+the importer picks the manifest from the packages and refuses a game or version without one. Today there are manifests for PICROSS S, S2 to S8, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
 

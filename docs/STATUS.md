@@ -50,7 +50,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
-  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+, Namco Legendary, Shield Hero), read by slug so a game added
+  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+, Namco Legendary, Shield Hero, Juufuutei Raden), read by slug so a game added
   before the field needs no re-import. Right / Left step through the cards in reading order, and past a page's last /
   first card turn the page; L / R, PageUp / PageDown, the mouse wheel and the gold arrows at the sides turn it too, and
   dots under the cards show the page. The block is the same size on every page. Seen with 12 cards in scripted runs
@@ -405,6 +405,21 @@ Its modules come from a newer toolchain, which was the new thing:
   main menu at 60 fps with no fatal error; S, S+, Nazarick, Namco and Kemono with the validation layer too (one
   message, on Nazarick, once, not seen again).
 Not done: past the Main Menu.
+
+## Picross: Juufuutei Raden's Guide for Pixel Museum
+
+The June 2025 game after Shield Hero (sort order 130): id `01003d2020aba000`, update `01003d2020aba800` v327680
+(display version 1.0.5), main build ID `7cff713af0d89e278142db4fd0279a4b`, manifest `titles/picross-juufuutei-raden.json`.
+The card is named without the "™" marks the game's own title carries (the manifest's `name` is ours; the packages' file
+names have them too, which nothing reads). It imports and **plays** to its story: the title screen (Start Game /
+Options), a press, and the curator's introduction in the museum ("Thank you for visiting the Pixel Museum today ..."), at
+60 fps, seen in screenshots from scripted presses; the puzzles themselves have not been reached. RELR modules like
+Shield Hero's. What was new:
+- The SDK's own constructors (its libc registering the module) allocate through `VammManager::AllocateAddressRegion`,
+  which needs `nn::os::InitializeVirtualAddressMemory` to have run: a null region (`signal 11 accessing 0xc0`).
+  The runtime called it before the game's constructors only; it is before the SDK's now (`rtld_init_sdk`), once.
+- Four exception landing sites (two `blr`, direct calls with a pad shared by two calls), in the unified `call` form.
+Not done: the puzzles; its languages (English and Japanese only: the language list already follows the game's flags).
 
 ## What to test and watch for
 
