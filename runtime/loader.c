@@ -8,7 +8,8 @@ Module g_modules[GAME_NMODULES];
 int g_nmodules;
 
 enum { DT_NULL = 0, DT_PLTRELSZ = 2, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
-       DT_JMPREL = 23, DT_INIT_ARRAY = 25, DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28 };
+       DT_JMPREL = 23, DT_INIT_ARRAY = 25, DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28,
+       DT_RELRSZ = 35, DT_RELR = 36 };
 enum { R_ABS64 = 257, R_GLOB_DAT = 1025, R_JUMP_SLOT = 1026, R_RELATIVE = 1027 };
 
 typedef struct { uint32_t name; uint8_t info, other; uint16_t shndx; uint64_t value, size; } Elf64Sym;
@@ -162,12 +163,31 @@ static uint64_t resolve(Module *m, uint32_t symidx) {
 }
 
 static void relocate(Module *m) {
-    uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0;
+    uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0, relr = 0, relrsz = 0;
     for (uint64_t *d = (uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
+        if (d[0] == DT_RELR) relr = m->base + d[1];
+        if (d[0] == DT_RELRSZ) relrsz = d[1];
         if (d[0] == DT_RELA) rela = m->base + d[1];
         if (d[0] == DT_RELASZ) relasz = d[1];
         if (d[0] == DT_JMPREL) jmprel = m->base + d[1];
         if (d[0] == DT_PLTRELSZ) pltsz = d[1];
+    }
+    // RELR (DT_RELR: the compact relative relocations of a newer toolchain, PICROSS Records of The Shield Hero's modules):
+    // an even entry is the address of a word to add the base to, an odd one a bitmap of the next 63 words after the last
+    if (relr) {
+        const uint64_t *e = (const uint64_t *)relr;
+        uint64_t *where = NULL;
+        for (uint64_t i = 0; i < relrsz / 8; i++) {
+            uint64_t x = e[i];
+            if (!(x & 1)) {
+                where = (uint64_t *)(m->base + x);
+                *where++ += m->base;
+            } else if (where) {
+                for (int j = 0; (x >>= 1) != 0; j++)
+                    if (x & 1) where[j] += m->base;
+                where += 63;
+            }
+        }
     }
     int unresolved = 0;
     for (int pass = 0; pass < 2; pass++) {
