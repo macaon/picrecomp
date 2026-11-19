@@ -13,11 +13,11 @@ static uint64_t next_debug_id = 1;
 // ================================================================== device
 // NVNdeviceInfo -> value
 static uint32_t device_integer(uint32_t which) {
-    // the API minor version a game is told: 207 unless its manifest says it was built for a newer driver
-    // ("nvn_api_minor": PICROSS LORD OF THE NAZARICK checks for more than 309 and traps otherwise)
-    if (which == 1) return (uint32_t)settings_title_int("nvn_api_minor", 207);
+    // the API minor version a game is told: the games trap when it is older than what they were built for (Nazarick
+    // wants more than 309, S3's base 309, S4's base 311, the older updates less); none checks for an upper bound
+    if (which == 1) return 350;
     static const uint32_t v[] = {
-        [0] = 53, [1] = 207,           // API version
+        [0] = 53, [1] = 350,           // API version
         [2] = 14, [3] = 65536, [4] = 256, [5] = 8, [6] = 16, [7] = 4, [8] = 16, [9] = 32,
         [10] = 16, [11] = 4, [12] = 4, [13] = 4, [14] = 16, [15] = 32, [16] = 32,
         [17] = 256, [18] = 256,        // reserved texture / sampler descriptors

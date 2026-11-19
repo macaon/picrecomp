@@ -71,18 +71,7 @@ bool settings_language_supported(int index) {
 static const int8_t k_flag_to_index[16] = {2, 3, 1, 4, 6, 9, 8, 7, 10, 5, 15, 11, 12, 14, 13, 15};
 
 // The add-on content the game's title.json lists ("addons": [1, 2, ...], the importer found their packages): aoc:u
-static char g_title_text[2048];  // the title.json read at boot (settings_title_int)
-
-// A number from the game's title.json (its manifest's fields): `"key": 123`, or def
-int settings_title_int(const char *key, int def) {
-    char pat[64];
-    snprintf(pat, sizeof pat, "\"%s\"", key);
-    const char *k = strstr(g_title_text, pat);
-    if (!k || !(k = strchr(k + strlen(pat), ':'))) return def;
-    char *end;
-    long v = strtol(k + 1, &end, 10);
-    return end == k + 1 ? def : (int)v;
-}
+static char g_title_text[2048];  // the title.json read at boot
 
 static uint32_t g_addons[64];
 static int g_addon_count;
