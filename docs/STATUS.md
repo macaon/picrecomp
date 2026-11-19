@@ -50,7 +50,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
-  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+), read by slug so a game added
+  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+, Namco Legendary), read by slug so a game added
   before the field needs no re-import. Right / Left step through the cards in reading order, and past a page's last /
   first card turn the page; L / R, PageUp / PageDown, the mouse wheel and the gold arrows at the sides turn it too, and
   dots under the cards show the page. The block is the same size on every page. Seen with 12 cards in scripted runs
@@ -330,6 +330,25 @@ own parts were new:
   instruction that can write a predicate (`writes_predicate`: the SETPs, PSETP, CSETP, R2P, VOTE, SHFL, LOP / LOP3 with a
   predicate result). `tools/test_translate.c` has the shader (`check_predicated_tex`): it fails on the old translator.
 Not done: past the tutorial question (the retro "Clip Picross" and the emulated-console parts have not been tried).
+
+## PICROSS S NAMCO LEGENDARY edition
+
+The 2024 edition after S+ (sort order 110): id `010015101def8000`, update `010015101def8800` v65536 (display version 1.0.1),
+main build ID `aa44d9a3064ec70be4f8835f3e3f14aa`, manifest `titles/picross-s-namco-legendary.json`. It imports and
+**plays** to its Main Menu (Picross, Mega, Color, Clip, Extra, Tutorials, Options), at 60 fps, seen in screenshots from
+scripted presses; nothing beyond the menu has been played. Its sdk is S+'s (same build), so the kernel and Maxwell work
+from S+ carried over. What was new:
+- Its two packages have **no tickets** (standard crypto), and the importer told a package's game by its ticket's file
+  name: `find_packages` takes the `[ID]` of a ticketless package's file name now (prepare() still checks it against the
+  real metadata).
+- Two exception sites in the unified `call` form (a `blr` and a direct call).
+- Two fragment shaders (the CRT-style title and menu background, two draws a frame) did not translate: **HSETP2 with a
+  constant-buffer operand** (`7e8x` / `7c8x`: the layout checked against Eden's HSETP2_cbuf: compare 49-52, H_AND 53,
+  |b| 54, -b 56, the word one F32 for both halves) and a **bindless handle copied with MOV** before the sample (the
+  resolver follows `MOV Rd, Rb` back to Rb's instructions). Both are in `tools/test_translate.c`
+  (`check_copied_handle_and_hsetp2_cbuf`: they fail on the old translator). `PICRECOMP_LOG_TEX_FAIL=1` prints every
+  instruction before a bindless TEX that did not resolve.
+Not done: past the Main Menu.
 
 ## What to test and watch for
 

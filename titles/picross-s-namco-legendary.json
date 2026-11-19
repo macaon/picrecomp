@@ -1,0 +1,22 @@
+{
+  "slug": "picross-s-namco-legendary",
+  "name": "PICROSS S NAMCO LEGENDARY edition",
+  "order": "110",
+  "base_id": "010015101def8000",
+  "update_id": "010015101def8800",
+  "update_version": 65536,
+  "main_build_id": "aa44d9a3064ec70be4f8835f3e3f14aa",
+  "exception_landings": {
+    "call": [
+      {
+        "return": "0x700239f318",
+        "landing": "0x700239f458"
+      },
+      {
+        "return": "0x7001f61c04",
+        "landing": "0x7001f61c10",
+        "callee": "0x7001f61ca0"
+      }
+    ]
+  }
+}
