@@ -84,14 +84,13 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 Each game's name, release date and title ids are in its manifest, `titles/<name>.json`; the importer picks the manifest
 from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S8, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
 
-The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Other versions of these games should import too: nothing in the generated code is tied to a build.
+The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Each game is listed with its base and the newest update it has been run on; any version in between should import too, since nothing in the generated code is tied to a build.
 
 | Game | Title ID | Version | Main build ID |
 |---|---|---|---|
 | PICROSS S | `0100ba0003eea000` | 1.0.0 (base) | `acd7476b42407f4ea50c663a99b6db70` |
 |  |  | 1.6.2 (update) | `3b86ba97f214ea43929e3a4a0947bf1b` |
 | PICROSS S2 | `0100c9600a88e000` | 1.0.0 (base) | `99af6113a64a574695f39af02cdbe6e1` |
-|  |  | 1.5.2 (update) | `427cae759f236b478379bcbe56b90914` |
 |  |  | 1.5.3 (update) | `41f118c8371c79478ee2cdf9ea5038ff` |
 | KEMONO FRIENDS PICROSS | `01004b100bda2000` | 1.0.0 (base) | `b3a956031cee684b8a4df42874cb3e00` |
 | PICROSS S3 | `010079200d330000` | 1.0.0 (base) | `7570c9e44f5889459d98794425aee552` |
