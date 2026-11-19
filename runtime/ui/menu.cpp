@@ -178,6 +178,10 @@ bool menu_handle_event(const SDL_Event *e) {
             return true;
         }
         ImGuiKey k = key_from_scancode(e->key.scancode);
+        // K confirms and J goes back (the keyboard's default A and B, as the Controls tab shows them, fixed like Enter
+        // and Esc: a rebinding must not lock the player out of the menu); letters while a field is being typed in
+        if (!typing && e->key.scancode == SDL_SCANCODE_K) k = ImGuiKey_GamepadFaceDown;
+        if (!typing && e->key.scancode == SDL_SCANCODE_J) k = ImGuiKey_GamepadFaceRight;
         if (k != ImGuiKey_None) { QEvent q = {}; q.kind = QEvent::KEY; q.key = k; q.down = down; push(q); }
         return true;
     }
@@ -495,21 +499,33 @@ static void tab_audio(void) {
 // Quit: back to the start screen (in game: the game reboots to it) or out to the desktop. Each asks first (progress
 // since the last save is lost); B / Esc or Cancel backs out.
 extern "C" void rt_request_reboot(int kind);  // runtime/main.c (RT_REBOOT_TITLE = 2: the start screen)
+static bool g_back_used;  // this frame's B / Esc was taken by a page (backing out of the Quit question): it must not also close the menu
 static void tab_quit(float scale, bool in_game) {
     static int ask;  // 0: the two choices; 1: start screen?; 2: desktop?
     if (ask && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
-        ask = 0;
+        ask = 0, g_back_used = true;
     const char *lost = in_game ? "\n\nProgress since your last save is lost." : "";
     char d1[200], d2[200];
     snprintf(d1, sizeof d1, "Leaves the game and goes back to the PicRecomp start screen.%s", lost);
     snprintf(d2, sizeof d2, "Closes PicRecomp.%s", lost);
+    // the page changes under the cursor (the row it was on is gone): the first row of the new one takes it - "Yes", or
+    // back on the choice it came from (without this the next Down went to Cancel, skipping "Yes")
+    static int shown, came_from;
+    int take = 0;  // 1 / 2: the row (of the two choices, or "Yes" / "Cancel") to give the cursor
+    if (ask != shown) {
+        if (ask) take = 1, came_from = ask; else take = came_from == 2 ? 2 : 1;
+        shown = ask;
+    }
     opt_begin("##quit", scale);
     opt_section("Quit");
     if (!ask) {
         if (!in_game) opt_disable_next();  // (already on it)
+        if (take == 1) ImGui::SetKeyboardFocusHere();
         if (opt_action("Quit to Start Screen", "", in_game ? d1 : "You're on the start screen.")) ask = 1;
+        if (take == 2) ImGui::SetKeyboardFocusHere();
         if (opt_action("Quit to Desktop", "", d2)) ask = 2;
     } else {
+        if (take) ImGui::SetKeyboardFocusHere();
         if (opt_action(ask == 1 ? "Yes, quit to Start Screen" : "Yes, quit to Desktop", "", ask == 1 ? d1 : d2)) {
             settings_save();
             if (ask == 1) {
@@ -784,7 +800,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (open) {
         // dim the game behind the menu
         ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 110));
-        float w = fminf(io.DisplaySize.x * 0.9f, 1500 * scale), h = io.DisplaySize.y - 2 * 18 * scale;  // (all the height: a slim margin)
+        float w = fminf(io.DisplaySize.x * 0.9f, 1500 * scale), h = io.DisplaySize.y * 0.9f;  // (a margin of 5% above and below)
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
         ImGui::Begin("##menu", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
@@ -818,10 +834,11 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         }
 
         bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId), typing = ui_text_busy();  // (before the
+        g_back_used = false;
         tabs_body(scale, true, NULL);                                                                          //  pages run)
         // B with nothing focused-deeper closes the menu (not the Esc / B that ends typing: typing is from the frame
-        // before, so it's still true the frame a field lets go)
-        if (!any_popup && !typing && !ui_text_busy() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        // before, so it's still true the frame a field lets go; nor the one that backed out of the Quit question)
+        if (!any_popup && !typing && !ui_text_busy() && !g_back_used && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
             (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
             set_open(false);
         ImGui::PopFont();

@@ -155,6 +155,13 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   menu layout, so no binding can lock the player out. Seen in the F1 menu with scripted pad events: Xbox layout, bottom
   button opens the Language list, right button closes the menu; Switch layout, right button opens it.
 
+- F1 menu: K confirms and J goes back as well as Enter / Space and Esc (the keyboard's default A and B, fixed: menus never
+  use the rebindable keys; not while a field is being typed in). On the Quit tab the cursor goes to the first row of the
+  page it switches to ("Yes, quit ..." / back on the choice), where it used to vanish so that the first Down landed on
+  Cancel, and B / Esc backs out of the question without also closing the menu. The window keeps 5% of the height free above
+  and below. Seen with scripted keys (`PICRECOMP_HOST_INPUT` `sdlkey:`) on Linux; Start does not confirm (it never did: it
+  opens the menu with Select).
+
 ## Not verified
 
 - Other game modes, the options screens, quitting from the game, other GPUs and drivers, gamepads.
