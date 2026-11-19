@@ -320,7 +320,7 @@ story prologue ("The Fortress City E-Rantel ..."): title screen, a button press,
 seen in screenshots from scripted presses. The same older SDK as Kemono's (four-argument `nn::init::Start`, the older
 unwinder), so those fixes carried over unchanged. What was new:
 - It asks `nvnDeviceGetInteger` for the NVN API minor version and traps unless it is above 309 (the others got 207).
-  `"nvn_api_minor"` in a manifest sets it per title (`settings_title_int`, read from title.json); this one says 310.
+  Every game is told 350 now: the base builds of S3 and S4 trap below 309 and 311 too, and none checks an upper bound.
 - Its exception landing pads are code of their own (real clean-up code, not one jump to a shared handler): the generator
   labels every pad from the compiler's exception table and wraps the calls that reach it. Three sites were once found by
   hand; nothing is hand-found now.
