@@ -71,24 +71,30 @@ def package_version(nsp):
     return int(found.group(1)) if found else None
 
 
-def find_packages(folder):
+def find_packages(folder, metas=None):
     """(manifest, base .nsp, update .nsp) for the one game whose packages are in the folder. A package's title ID is the
-    start of its ticket's file name (a package without a ticket: the [ID] in its file name). With several updates of a game the newest one that has a manifest is used (a
+    start of its ticket's file name (a package without a ticket: its own
+    content metadata, else the [ID] in its file name). With several updates of a game the newest one that has a manifest is used (a
     newer one that has none is mentioned, not used); a game that was never updated has no update package."""
     manifests = load_manifests()
     base_ids = {t["base_id"]: t["slug"] for t in manifests}
     update_ids = {t["update_id"]: t["slug"] for t in manifests if "update_id" in t}  # (a game never updated has none)
     bases, updates = {}, {}
     for nsp in sorted(folder.glob("*.nsp")):
-        tids = [name[:16].lower() for name in pfs0_names(nsp) if name.endswith(".tik")]
-        if not tids:  # a package with no ticket (standard crypto: nothing to unlock): the title ID in its file name
-            named = re.search(r"\[([0-9A-Fa-f]{16})\]", nsp.name)  # (prepare() checks it against the real metadata)
-            tids = [named.group(1).lower()] if named else []
-        for tid in tids:
+        tids = [(name[:16].lower(), None) for name in pfs0_names(nsp) if name.endswith(".tik")]
+        if not tids:  # a package with no ticket (standard crypto: nothing to unlock): its own metadata says what it is
+            try:
+                tids = [(m["id"], m["version"]) for m in (metas(nsp) if metas else [])]
+            except (ValueError, OSError):
+                tids = []
+            if not tids:  # (no keys / extractor to read it with: the [ID] in the file name)
+                named = re.search(r"\[([0-9A-Fa-f]{16})\]", nsp.name)
+                tids = [(named.group(1).lower(), None)] if named else []
+        for tid, version in tids:
             if tid in base_ids:
                 bases[base_ids[tid]] = nsp
             elif tid in update_ids:
-                updates.setdefault(update_ids[tid], []).append((package_version(nsp), nsp))
+                updates.setdefault(update_ids[tid], []).append((version if version is not None else package_version(nsp), nsp))
     games = []
     for slug, base in bases.items():
         versions = {t.get("update_version"): t for t in manifests if t["slug"] == slug}
@@ -161,6 +167,47 @@ def read_metas(directory, hactool):
     return metas
 
 
+def hactool_env(work, prod_keys):
+    """A HOME for hactool under `work` holding only the keys the NCAs need (never the whole prod.keys): (home, environment)."""
+    home = work / "home"
+    key_dir = home / ".switch"
+    key_dir.mkdir(parents=True)
+    entries = []
+    for line in Path(prod_keys).read_text(encoding="utf-8-sig").splitlines():
+        name, _, value = line.partition("=")
+        name = name.strip().lower()
+        if not re.fullmatch(r"header_key|titlekek_\w+|key_area_key_application_\w+", name):
+            continue
+        value = value.strip()
+        width = 64 if name == "header_key" else 32
+        if not re.fullmatch(rf"[0-9a-fA-F]{{{width}}}", value):
+            raise ValueError(f"Invalid value for {name} in prod.keys")
+        entries.append(f"{name} = {value}\n")
+    (key_dir / "prod.keys").write_text("".join(entries), encoding="ascii")
+    return home, {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home)}
+
+
+def package_metas(nsp, tool, prod_keys):
+    """The content metadata (read_metas) of one package, without extracting it: only its small *.cnmt.nca files are read
+    out of the package and decrypted (they use standard crypto: the header key is enough, no ticket)."""
+    with tempfile.TemporaryDirectory(prefix=".picrecomp-meta-") as temporary:
+        work = Path(temporary)
+        home, env = hactool_env(work, prod_keys)
+        folder = work / "meta"
+        folder.mkdir()
+        for name in pfs0_names(nsp):
+            if name.endswith(".cnmt.nca"):
+                (folder / name).write_bytes(pfs0_read(nsp, name) or b"")
+
+        def hactool(what, *arguments):
+            result = subprocess.run([tool, *map(str, arguments)], cwd=work, env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if result.returncode:
+                raise ValueError(f"Reading the metadata of {nsp.name} failed (hactool exit {result.returncode})")
+
+        return read_metas(folder, hactool)
+
+
 def content_nca(directory, meta, content_type):
     found = [directory / f"{cid}.nca" for cid, size, ctype in meta["contents"]
              if ctype == content_type and (directory / f"{cid}.nca").is_file()
@@ -202,23 +249,8 @@ def prepare(args):
     tool = find_hactool(args.hactool)
     with tempfile.TemporaryDirectory(prefix=".picrecomp-", dir=output.parent) as temporary:
         work = Path(temporary)
-        home = work / "home"
+        home, env = hactool_env(work, args.prod_keys)
         key_dir = home / ".switch"
-        key_dir.mkdir(parents=True)
-        # Only forward NCA keys used for this title by hactool.
-        entries = []
-        for line in args.prod_keys.read_text(encoding="utf-8-sig").splitlines():
-            name, _, value = line.partition("=")
-            name = name.strip().lower()
-            if not re.fullmatch(r"header_key|titlekek_\w+|key_area_key_application_\w+", name):
-                continue
-            value = value.strip()
-            width = 64 if name == "header_key" else 32
-            if not re.fullmatch(rf"[0-9a-fA-F]{{{width}}}", value):
-                raise ValueError(f"Invalid value for {name} in prod.keys")
-            entries.append(f"{name} = {value}\n")
-        (key_dir / "prod.keys").write_text("".join(entries), encoding="ascii")
-        env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home)}
 
         def hactool(what, *arguments):
             result = subprocess.run(
@@ -327,14 +359,15 @@ def resolve_folder(args):
     if not args.games:
         raise ValueError("--folder needs --games")
     step(1, "Looking for the game's packages")
-    title, args.base, args.update = find_packages(args.folder)
-    args.output = args.games / title["slug"]
-    args.addons = addon_indices(args.folder, title["base_id"])
     if not args.prod_keys:  # beside the packages, else where Switch tools keep it
         args.prod_keys = next((k for k in (args.folder / "prod.keys", Path.home() / ".switch" / "prod.keys")
                                if k.is_file()), None)
     if not args.prod_keys:
         raise ValueError("No prod.keys beside the game packages or in ~/.switch")
+    tool = find_hactool(args.hactool)  # (a package with no ticket is read through them: its metadata says which game)
+    title, args.base, args.update = find_packages(args.folder, lambda nsp: package_metas(nsp, tool, args.prod_keys))
+    args.output = args.games / title["slug"]
+    args.addons = addon_indices(args.folder, title["base_id"])
     args.games.mkdir(parents=True, exist_ok=True)
     for stale in args.games.glob(".picrecomp-*"):  # (an import that was stopped)
         shutil.rmtree(stale, ignore_errors=True)

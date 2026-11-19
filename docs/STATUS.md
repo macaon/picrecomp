@@ -339,8 +339,11 @@ main build ID `aa44d9a3064ec70be4f8835f3e3f14aa`, manifest `titles/picross-s-nam
 scripted presses; nothing beyond the menu has been played. Its sdk is S+'s (same build), so the kernel and Maxwell work
 from S+ carried over. What was new:
 - Its two packages have **no tickets** (standard crypto), and the importer told a package's game by its ticket's file
-  name: `find_packages` takes the `[ID]` of a ticketless package's file name now (prepare() still checks it against the
-  real metadata).
+  name. A package without one is now read through its own content metadata: only its small `.cnmt.nca` files are taken
+  out of the package and decrypted with `hactool` (header key only), which gives the title ID, kind and version
+  (`package_metas` in `prepare.py`; the keys and the extractor are found before the packages are matched). The `[ID]` in
+  the file name is the last resort when that cannot run. Checked with the two packages under names with no ID in them
+  (identified and imported), and with a ticketed game (S2) unchanged.
 - Two exception sites in the unified `call` form (a `blr` and a direct call).
 - Two fragment shaders (the CRT-style title and menu background, two draws a frame) did not translate: **HSETP2 with a
   constant-buffer operand** (`7e8x` / `7c8x`: the layout checked against Eden's HSETP2_cbuf: compare 49-52, H_AND 53,
