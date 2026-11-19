@@ -99,7 +99,7 @@ The builds below are the ones the importer has been run on (main build ID: the g
 | PICROSS S4 | `0100c250115dc000` | 1.0.0 (base) | `9b6fca808b3f1748942eeb59481c1e60` |
 |  |  | 1.4.2 (update) | `1d49a7937187f94c884c65b2a6a214fb` |
 | PICROSS S5 | `0100ac30133ec000` | 1.0.0 (base) | `836b5804280cda4395fe9844bc726a49` |
-|  |  | 1.3.1 (update) | `1fc7f2c5b18ef14299ef8200e140264f` |
+|  |  | 1.3.2 (update) | `8437b2f0aaba5c40ac8f3be47070f855` |
 | PICROSS S6 | `010025901432a000` | 1.0.0 (base) | `3b27925f9e8e03429986ca7f5a095558` |
 |  |  | 1.3.1 (update) | `5e0294a0884a0e4a8ae64a4535214e90` |
 | PICROSS S GENESIS & Master System edition | `010089701567a000` | 1.0.0 (base) | `dd82c4e72dadca46838654d03f8c2414` |
