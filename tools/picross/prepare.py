@@ -74,7 +74,7 @@ def package_version(nsp):
 def find_packages(folder, metas=None):
     """(manifest, base .nsp, update .nsp) for the one game whose packages are in the folder. A package's title ID is the
     start of its ticket's file name (a package without a ticket: its own
-    content metadata, else the [ID] in its file name). With several updates of a game the newest one that has a manifest is used (a
+    content metadata, read with the keys: an error if they cannot). With several updates of a game the newest one that has a manifest is used (a
     newer one that has none is mentioned, not used); a game that was never updated has no update package."""
     manifests = load_manifests()
     base_ids = {t["base_id"]: t["slug"] for t in manifests}
@@ -82,14 +82,9 @@ def find_packages(folder, metas=None):
     bases, updates = {}, {}
     for nsp in sorted(folder.glob("*.nsp")):
         tids = [(name[:16].lower(), None) for name in pfs0_names(nsp) if name.endswith(".tik")]
-        if not tids:  # a package with no ticket (standard crypto: nothing to unlock): its own metadata says what it is
-            try:
-                tids = [(m["id"], m["version"]) for m in (metas(nsp) if metas else [])]
-            except (ValueError, OSError):
-                tids = []
-            if not tids:  # (no keys / extractor to read it with: the [ID] in the file name)
-                named = re.search(r"\[([0-9A-Fa-f]{16})\]", nsp.name)
-                tids = [(named.group(1).lower(), None)] if named else []
+        if not tids:  # a package with no ticket (standard crypto: nothing to unlock): its own metadata says what it is. No
+            # fallback: without keys that can read it the import cannot go on anyway, and the reason is worth saying
+            tids = [(m["id"], m["version"]) for m in (metas(nsp) if metas else [])]
         for tid, version in tids:
             if tid in base_ids:
                 bases[base_ids[tid]] = nsp
@@ -183,6 +178,8 @@ def hactool_env(work, prod_keys):
         if not re.fullmatch(rf"[0-9a-fA-F]{{{width}}}", value):
             raise ValueError(f"Invalid value for {name} in prod.keys")
         entries.append(f"{name} = {value}\n")
+    if not any(e.startswith("header_key") for e in entries):
+        raise ValueError(f"{prod_keys} has no header_key: the game's files cannot be read without it")
     (key_dir / "prod.keys").write_text("".join(entries), encoding="ascii")
     return home, {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home)}
 
@@ -203,9 +200,12 @@ def package_metas(nsp, tool, prod_keys):
             result = subprocess.run([tool, *map(str, arguments)], cwd=work, env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if result.returncode:
-                raise ValueError(f"Reading the metadata of {nsp.name} failed (hactool exit {result.returncode})")
+                raise ValueError(f"Reading the metadata of {nsp.name} failed (hactool exit {result.returncode}); are the keys complete?")
 
-        return read_metas(folder, hactool)
+        metas = read_metas(folder, hactool)
+        if not metas and any(folder.glob("*.cnmt.nca")):  # (hactool decrypts nothing with a wrong header key, and says nothing)
+            raise ValueError(f"The metadata of {nsp.name} could not be read: is the header_key in prod.keys right?")
+        return metas
 
 
 def content_nca(directory, meta, content_type):

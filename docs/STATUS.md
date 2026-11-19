@@ -341,8 +341,8 @@ from S+ carried over. What was new:
 - Its two packages have **no tickets** (standard crypto), and the importer told a package's game by its ticket's file
   name. A package without one is now read through its own content metadata: only its small `.cnmt.nca` files are taken
   out of the package and decrypted with `hactool` (header key only), which gives the title ID, kind and version
-  (`package_metas` in `prepare.py`; the keys and the extractor are found before the packages are matched). The `[ID]` in
-  the file name is the last resort when that cannot run. Checked with the two packages under names with no ID in them
+  (`package_metas` in `prepare.py`; the keys and the extractor are found before the packages are matched). There is no
+  filename fallback: keys that cannot read the package stop the import with that message. Checked with the two packages under names with no ID in them
   (identified and imported), and with a ticketed game (S2) unchanged.
 - Two exception sites in the unified `call` form (a `blr` and a direct call).
 - Two fragment shaders (the CRT-style title and menu background, two draws a frame) did not translate: **HSETP2 with a
