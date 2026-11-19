@@ -92,6 +92,7 @@ The builds below are the ones the importer has been run on (main build ID: the g
 |  |  | 1.6.2 (update) | `3b86ba97f214ea43929e3a4a0947bf1b` |
 | PICROSS S2 | `0100c9600a88e000` | 1.0.0 (base) | `99af6113a64a574695f39af02cdbe6e1` |
 |  |  | 1.5.2 (update) | `427cae759f236b478379bcbe56b90914` |
+|  |  | 1.5.3 (update) | `41f118c8371c79478ee2cdf9ea5038ff` |
 | KEMONO FRIENDS PICROSS | `01004b100bda2000` | 1.0.0 (base) | `b3a956031cee684b8a4df42874cb3e00` |
 | PICROSS S3 | `010079200d330000` | 1.0.0 (base) | `7570c9e44f5889459d98794425aee552` |
 |  |  | 1.5.2 (update) | `7615bc81de189a40a9e3e213554bb8a4` |
