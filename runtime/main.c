@@ -50,15 +50,17 @@ static void rtld_init_sdk(Cpu *c) {
         g_system_resource_size = resource_size;
         *startup = hle_register("<picross_startup_complete>", picross_startup_complete);
     }
+    {   // Before the SDK's own constructors: a newer SDK's libc registration allocates from it (VammManager::
+        // AllocateAddressRegion through a null region: PICROSS Juufuutei Raden's Guide for Pixel Museum), an older one never
+        // did before the game's constructors; once, so the game's constructors are not the first to find it set up
+        uint64_t entry = loader_find_symbol("_ZN2nn2os30InitializeVirtualAddressMemoryEv");
+        if (!entry) FATAL("InitializeVirtualAddressMemory not found\n");
+        LOG("initializing SDK virtual address memory before the SDK constructors\n");
+        guest_call(c, entry);
+    }
     module_init(c, sdk);
 }
 static void rtld_init_main(Cpu *c) {
-    {   // Always, for the same reason as the early heap in rtld_init_sdk
-        uint64_t entry = loader_find_symbol("_ZN2nn2os30InitializeVirtualAddressMemoryEv");
-        if (!entry) FATAL("InitializeVirtualAddressMemory not found\n");
-        LOG("initializing SDK virtual address memory before game constructors\n");
-        guest_call(c, entry);
-    }
     for (int i = g_nmodules - 1; i >= 0; i--)
         if (strcmp(g_modules[i].name, "sdk")) module_init(c, &g_modules[i]);
 }
