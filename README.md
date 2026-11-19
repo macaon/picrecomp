@@ -97,7 +97,7 @@ The builds below are the ones the importer has been run on (main build ID: the g
 |  |  | 1.5.3 (update) | `7b2a38a86026464c8b4d4d3ffee0aabc` |
 | PICROSS LORD OF THE NAZARICK | `010012100e8dc000` | 1.0.0 (base) | `2424aca935dd5f4188d5bafb92a83504` |
 | PICROSS S4 | `0100c250115dc000` | 1.0.0 (base) | `9b6fca808b3f1748942eeb59481c1e60` |
-|  |  | 1.4.1 (update) | `4b604f7df57e0043b1a32ae2dbc8d1a8` |
+|  |  | 1.4.2 (update) | `1d49a7937187f94c884c65b2a6a214fb` |
 | PICROSS S5 | `0100ac30133ec000` | 1.0.0 (base) | `836b5804280cda4395fe9844bc726a49` |
 |  |  | 1.3.1 (update) | `1fc7f2c5b18ef14299ef8200e140264f` |
 | PICROSS S6 | `010025901432a000` | 1.0.0 (base) | `3b27925f9e8e03429986ca7f5a095558` |
