@@ -387,6 +387,16 @@ Its modules come from a newer toolchain, which was the new thing:
   ID: folded in the next time the ID changes anyway (every game rebuilds then), and until then a rebuild through
   `runtime/gamebuild.c`, which calls `gen.py` directly, would not know RELR for this game.
 - Two exception sites (a `blr`, a direct call), in the unified `call` form.
+- **Episode background garbled** (vertical stripes, seen by the user against Eden). The episode pictures are 800x450
+  textures the game only uploads (`CopyBufferToTexture`, straight into the Vulkan image, never into guest memory) but
+  flags as render targets, so they count as "scalable" (a 16:9 target is allocated at the output scale). One was created
+  at scale 1.0 and, when the scale became 0.667, reallocated empty: its guest memory is not the picture, so it showed
+  whatever was there. `tex_backend` now scales the old image into the new one when it reallocates a colour texture
+  (`vkCmdBlitImage` in the upload command buffer: the reallocation can happen in the middle of a draw's setup, inside a
+  render pass, where recording into the main command buffer lost the device: found with `PICRECOMP_VK_VALIDATION=1`).
+  `PICRECOMP_LOG_UPLOADS=1` logs every buffer upload and every such reallocation. Checked: all fourteen games reach their
+  main menu at 60 fps with no fatal error; S, S+, Nazarick, Namco and Kemono with the validation layer too (one
+  message, on Nazarick, once, not seen again).
 Not done: past the Main Menu.
 
 ## What to test and watch for

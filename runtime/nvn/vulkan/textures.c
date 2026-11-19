@@ -391,8 +391,24 @@ static TexBackend *tex_backend(NvnTexture *t) {
     TexBackend *b = t->backend;
     if (b) {
         if (b->scalable && (b->sx != g_rs_x || b->sy != g_rs_y)) {  // output resolution changed: reallocate
+            if (getenv("PICRECOMP_LOG_UPLOADS")) LOG("[tex] %p %ux%u reallocated: scale %.3f -> %.3f\n", (void *)t, t->width, t->height, b->sx, g_rs_x);
+            // A 16:9 texture the game only uploads once (PICROSS Records of The Shield Hero's episode pictures, flagged as
+            // render targets like the screen) would come back empty - its old guest memory is not the picture, the
+            // upload went straight to the image: the old image is scaled into the new one (it is kept until the GPU is done)
+            VkImage old = b->image;
+            uint32_t ow = b->width, oh = b->height;
+            bool keep = old && b->samples == 1 && !(b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) &&
+                        format_supports(b->format, VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT);
             destroy_image(b);
             create_image(t, b);
+            if (keep && b->image) {  // (the upload command buffer: this can be called in the middle of a draw's setup, in a pass)
+                VkCommandBuffer cb = vk_upload_cmd();
+                vk_full_barrier(cb);
+                VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)ow, (int32_t)oh, 1}},
+                                  .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                  .dstOffsets = {{0, 0, 0}, {(int32_t)b->width, (int32_t)b->height, 1}}};
+                vkCmdBlitImage(cb, old, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
+            }
         }
         return b;
     }
