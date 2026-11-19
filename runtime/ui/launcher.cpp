@@ -526,10 +526,10 @@ static void scan_cards(const std::string &current) {
         if (r == current) g_card = g_cards.size(), found = true;
         g_cards.push_back(c);
     }
-    // Release order, from the manifests next to the program ("order" in titles/<game>.json, by slug: a game added before
-    // it was there needs no re-import); a game they don't know (a package without the manifests) goes by name, after
-    // the known ones, with "+" sorting after the digits
-    std::map<std::string, std::string> order;
+    // Release order: the date ("released": "YYYY-MM-DD") in the game's own title.json, else in the manifest next to the
+    // program (by slug: a game added before the field was there needs no re-import); a game neither knows (a package
+    // without the manifests) goes by name, after the known ones, with "+" sorting after the digits
+    std::map<std::string, std::string> released;
     char probe[1100];
     if (rt_resource(NULL, "titles/picross-s.json", probe, sizeof probe)) {
         std::string titles(probe, strlen(probe) - strlen("picross-s.json"));
@@ -537,15 +537,16 @@ static void scan_cards(const std::string &current) {
             while (dirent *e = readdir(d)) {
                 size_t n = strlen(e->d_name);
                 if (n > 5 && !strcmp(e->d_name + n - 5, ".json"))
-                    order[json_str(titles + e->d_name, "slug")] = json_str(titles + e->d_name, "order");
+                    released[json_str(titles + e->d_name, "slug")] = json_str(titles + e->d_name, "released");
             }
             closedir(d);
         }
     }
     auto key = [&](const Card &c) {
-        std::string k = c.name, o = order[json_str(c.root + "/title.json", "slug")];
+        std::string k = c.name, r = json_str(c.root + "/title.json", "released");
+        if (r.empty()) r = released[json_str(c.root + "/title.json", "slug")];
         for (auto &ch : k) if (ch == '+') ch = '~';
-        return (o.empty() ? "999" : o) + k;
+        return (r.empty() ? "9999-99-99" : r) + k;
     };
     std::stable_sort(g_cards.begin(), g_cards.end(), [&](const Card &a, const Card &b) { return key(a) < key(b); });
     for (size_t i = 0; i < g_cards.size(); i++)
