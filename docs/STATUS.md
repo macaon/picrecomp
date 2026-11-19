@@ -47,6 +47,8 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   `update_id`). Nothing past the title screen has been played on S4 to S8.
 - PICROSS S9 (`010021a0197ba000`, base only, v1.0.0) imports and reaches its main menu at 60 fps (Vulkan, Linux); it found the S5 save and
   unlocked an extra puzzle (the cross-save feature, see the S4 notes). No update package exists here; nothing past the menu played.
+- PICROSS S Doraemon & F Characters edition (`01002b901fa74000`, base only, v1.0.0, released 2025-03-26): no code-side work; imports (11 minutes: a
+  larger game) and reaches its puzzle select at 60 fps on a fresh save (Vulkan, Linux). Nothing played.
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort

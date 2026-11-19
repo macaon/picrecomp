@@ -82,7 +82,7 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 ```
 
 Each game's name, release date and title ids are in its manifest, `titles/<name>.json`; the importer picks the manifest
-from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S9, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
+from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S9, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary and Doraemon & F Characters editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
 
 The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Each game is listed with its base and the newest update it has been run on; any version in between should import too, since nothing in the generated code is tied to a build.
 
@@ -114,6 +114,7 @@ The builds below are the ones the importer has been run on (main build ID: the g
 |  |  | 1.0.1 (update) | `aa44d9a3064ec70be4f8835f3e3f14aa` |
 | PICROSS Records of The Shield Hero | `01004c602018a000` | 1.0.0 (base) | `4252758df60a9acb4b226962e97e26e6` |
 |  |  | 1.0.2 (update) | `4c1cf04820df7f24166defcac3409e4a` |
+| PICROSS S Doraemon & F Characters edition | `01002b901fa74000` | 1.0.0 (base) | `edf8578a6cc16a6185679a63960314bd` |
 | Picross: Juufuutei Raden's Guide for Pixel Museum | `01003d2020aba000` | 1.0.0 (base) | `0f6fb55fcdfc915715594dfe8a1bd751` |
 |  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |
 
