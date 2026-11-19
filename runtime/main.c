@@ -54,9 +54,10 @@ static void rtld_init_sdk(Cpu *c) {
         // AllocateAddressRegion through a null region: PICROSS Juufuutei Raden's Guide for Pixel Museum), an older one never
         // did before the game's constructors; once, so the game's constructors are not the first to find it set up
         uint64_t entry = loader_find_symbol("_ZN2nn2os30InitializeVirtualAddressMemoryEv");
-        if (!entry) FATAL("InitializeVirtualAddressMemory not found\n");
-        LOG("initializing SDK virtual address memory before the SDK constructors\n");
-        guest_call(c, entry);
+        if (entry) {  // (the first PICROSS S's SDK has none, and never needed it)
+            LOG("initializing SDK virtual address memory before the SDK constructors\n");
+            guest_call(c, entry);
+        }
     }
     module_init(c, sdk);
 }
@@ -66,6 +67,35 @@ static void rtld_init_main(Cpu *c) {
 }
 // After nnMain returns: the game is quitting (nnosQuickExit follows); destructors aren't worth running.
 static void rtld_fini(Cpu *c) { (void)c; LOG("nnMain returned\n"); }
+
+// The first PICROSS S (SDK before nn::init::Start): rtld itself runs the sequence, the same steps in the same order,
+// each from the symbol that does it (the modules' own: sdk exports nnosInitialize, the game exports nnMain ...; the
+// SDK-module and abort-observer steps are weak there, absent from a build without them). Entered like Start:
+// x0 = the main thread's handle, x2/x3/x4 = the callbacks above. nninitStartup is not here: rtld_init_sdk has run it.
+static void call_symbol(Cpu *c, const char *name, bool required, uint64_t x0, uint64_t x1) {
+    uint64_t fn = loader_find_symbol(name);
+    if (!fn) { if (required) FATAL("%s not found\n", name); return; }
+    c->x[0] = x0;
+    c->x[1] = x1;
+    guest_call(c, fn);
+}
+
+static void rtld_old_start(Cpu *c) {
+    uint64_t handle = c->x[0], init_sdk = c->x[2], init = c->x[3], fini = c->x[4];
+    call_symbol(c, "__nnDetailInitLibc0", true, 0, 0);
+    call_symbol(c, "nnosInitialize", true, handle, 0);
+    guest_call(c, init_sdk);
+    call_symbol(c, "__nnDetailInitLibc1", true, 0, 0);
+    call_symbol(c, "nndiagStartup", false, 0, 0);
+    call_symbol(c, "nninitInitializeSdkModule", false, 0, 0);
+    call_symbol(c, "nninitInitializeAbortObserver", false, 0, 0);
+    call_symbol(c, "__nnDetailInitLibc2", true, 0, 0);
+    guest_call(c, init);
+    call_symbol(c, "nnMain", true, 0, 0);
+    guest_call(c, fini);
+    call_symbol(c, "nninitFinalizeSdkModule", false, 0, 0);
+    call_symbol(c, "nnosQuickExit", true, 0, 0);
+}
 
 // Claim the guest address range before anything else can map there. The host allocator places
 // regions at random addresses in the same window; on a collision, re-exec for a fresh layout.
@@ -206,7 +236,7 @@ static void boot(const char *root) {
     // fifth argument just goes unread
     uint64_t start = loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_S2_");
     if (!start) start = loader_find_symbol("_ZN2nn4init5StartEmmPFvvES2_");
-    if (!start) FATAL("nn::init::Start not found\n");
+    if (!start) start = hle_register("<rtld_old_start>", rtld_old_start);  // (no Start: the first PICROSS S)
     uint64_t init_fn = hle_register("<rtld_init_sdk>", rtld_init_sdk);
     uint64_t main_fn = hle_register("<rtld_init_main>", rtld_init_main);
     uint64_t fini_fn = hle_register("<rtld_fini>", rtld_fini);
