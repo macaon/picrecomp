@@ -84,6 +84,39 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 Each game's name, release date and title ids are in its manifest, `titles/<name>.json`; the importer picks the manifest
 from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S8, S+, and the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System and Namco Legendary editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum). `docs/STATUS.md` says how far each has been played.
 
+The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Other versions of these games should import too: nothing in the generated code is tied to a build.
+
+| Game | Title ID | Version | Main build ID |
+|---|---|---|---|
+| PICROSS S | `0100ba0003eea000` | 1.0.0 (base) | `acd7476b42407f4ea50c663a99b6db70` |
+|  |  | 1.6.2 (update) | `3b86ba97f214ea43929e3a4a0947bf1b` |
+| PICROSS S2 | `0100c9600a88e000` | 1.0.0 (base) | `99af6113a64a574695f39af02cdbe6e1` |
+|  |  | 1.5.2 (update) | `427cae759f236b478379bcbe56b90914` |
+| KEMONO FRIENDS PICROSS | `01004b100bda2000` | 1.0.0 (base) | `b3a956031cee684b8a4df42874cb3e00` |
+| PICROSS S3 | `010079200d330000` | 1.0.0 (base) | `7570c9e44f5889459d98794425aee552` |
+|  |  | 1.5.2 (update) | `7615bc81de189a40a9e3e213554bb8a4` |
+| PICROSS LORD OF THE NAZARICK | `010012100e8dc000` | 1.0.0 (base) | `2424aca935dd5f4188d5bafb92a83504` |
+| PICROSS S4 | `0100c250115dc000` | 1.0.0 (base) | `9b6fca808b3f1748942eeb59481c1e60` |
+|  |  | 1.4.1 (update) | `4b604f7df57e0043b1a32ae2dbc8d1a8` |
+| PICROSS S5 | `0100ac30133ec000` | 1.0.0 (base) | `836b5804280cda4395fe9844bc726a49` |
+|  |  | 1.3.1 (update) | `1fc7f2c5b18ef14299ef8200e140264f` |
+| PICROSS S6 | `010025901432a000` | 1.0.0 (base) | `3b27925f9e8e03429986ca7f5a095558` |
+|  |  | 1.3.1 (update) | `5e0294a0884a0e4a8ae64a4535214e90` |
+| PICROSS S GENESIS & Master System edition | `010089701567a000` | 1.0.0 (base) | `dd82c4e72dadca46838654d03f8c2414` |
+|  |  | 1.2.1 (update) | `1466f9109e267e458c517ada6b115e99` |
+| PICROSS S7 | `01009b2016104000` | 1.0.0 (base) | `aa4cdc0eab6d4e4db6dd46e996f1ac47` |
+|  |  | 1.2.0 (update) | `528b2e6d6d8a5c448471b84d4d54836f` |
+| PICROSS S8 | `01002ce017d26000` | 1.0.0 (base) | `8dc7537c47d3ac4f998a5231204d9c0b` |
+| PICROSS S+ | `0100d7b01ae58000` | 1.0.0 (base) | `8ba04068aa05ab45b15e9566fe5452d5` |
+|  |  | 1.0.1 (update) | `5eb832c899625df5b6bbe8aea93d073c` |
+| PICROSS S NAMCO LEGENDARY edition | `010015101def8000` | 1.0.0 (base) | `94682e93edc1b2f824d0f765d29484a5` |
+|  |  | 1.0.1 (update) | `aa44d9a3064ec70be4f8835f3e3f14aa` |
+| PICROSS Records of The Shield Hero | `01004c602018a000` | 1.0.0 (base) | `4252758df60a9acb4b226962e97e26e6` |
+|  |  | 1.0.2 (update) | `4c1cf04820df7f24166defcac3409e4a` |
+| Picross: Juufuutei Raden's Guide for Pixel Museum | `01003d2020aba000` | 1.0.0 (base) | `0f6fb55fcdfc915715594dfe8a1bd751` |
+|  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |
+
+
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
 
 ## Controls

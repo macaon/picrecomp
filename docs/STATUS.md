@@ -247,8 +247,11 @@ manifests carry no code addresses:
 - **A rebuild from the start screen** (`runtime/gamebuild.c`, which calls `gen.py`) is therefore right for every game; it
   used to skip the per-game patches.
 - **Versions.** Since nothing is tied to an executable, the base game alone imports for every game, and any update does.
-  Checked with the base package only: S2 (ticketed) and Namco Legendary (ticketless) import, boot at 60 fps and S2 reaches a
-  puzzle (Vulkan, Linux). Measured: for 12 of 14 games the base package's main executable differs from the update's build.
+  Checked with the base package only, for all twelve games that have an update (Vulkan, Linux): each imports and reaches
+  its main menu at 60 fps. Two base builds needed runtime changes: S3's and S4's trap on the NVN API minor (every game is told
+  350 now), and the first PICROSS S (2017) has no `nn::init::Start`: its rtld runs the startup steps itself, so
+  `runtime/main.c` (`rtld_old_start`) runs the same sequence from the sdk's and the game's own symbols (its SDK has no
+  `InitializeVirtualAddressMemory` either, now optional). It reaches its tutorial puzzle. Measured: for 12 of 14 games the base package's main executable differs from the update's build.
 - **Cost of the generator change:** the library ID changed once (every installed game's code was rebuilt, 3 to 5 minutes
   each); a library with another ID is shown as "Game code not built yet" and rebuilt by importing the game again (its own
   packages). There is no one-click rebuild on the start screen.
