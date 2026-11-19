@@ -50,7 +50,7 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
-  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+, Namco Legendary), read by slug so a game added
+  by `"order"` in the manifests (release order: S, S2, Kemono Friends, S3, Lord of the Nazarick, S4 .. S6, Genesis & Master System, S7, S8, S+, Namco Legendary, Shield Hero), read by slug so a game added
   before the field needs no re-import. Right / Left step through the cards in reading order, and past a page's last /
   first card turn the page; L / R, PageUp / PageDown, the mouse wheel and the gold arrows at the sides turn it too, and
   dots under the cards show the page. The block is the same size on every page. Seen with 12 cards in scripted runs
@@ -351,6 +351,25 @@ from S+ carried over. What was new:
   resolver follows `MOV Rd, Rb` back to Rb's instructions). Both are in `tools/test_translate.c`
   (`check_copied_handle_and_hsetp2_cbuf`: they fail on the old translator). `PICRECOMP_LOG_TEX_FAIL=1` prints every
   instruction before a bindless TEX that did not resolve.
+Not done: past the Main Menu.
+
+## PICROSS Records of The Shield Hero
+
+The October 2024 game after Namco Legendary (sort order 120): id `01004c602018a000`, update `01004c602018a800` v131072
+(display version 1.0.2), main build ID `4c1cf04820df7f24166defcac3409e4a`, manifest `titles/picross-shield-hero.json`. It
+imports and **plays** to its Main Menu (Picross / Mega, Color, Episode, Extra, Clip, Tutorials, Options), at 60 fps, seen
+in screenshots from scripted presses; the title screen shows its image carousel. Nothing past the menu has been played.
+Its modules come from a newer toolchain, which was the new thing:
+- **RELR relocations.** All three modules have `DT_RELR` (tags 0x23-0x25, the compact relative relocations), which the
+  loader ignored: the SDK's first constructor read a module offset as an address (`signal 11 accessing 0xb19020`).
+  `runtime/loader.c` applies them now (an even entry is a word to add the base to, an odd one a bitmap of the 63 after).
+- The generator took code pointers stored in data (thread entries, vtables, callbacks) as function starts from `.rela`'s
+  RELATIVE entries only, so a thread entry was "no function at 700115db04". `tools/picross/gen_relr.py` runs
+  `tools/gen.py` with the RELR entries added to `nso.py`'s `relocs` (a module without RELR is untouched: every other
+  game's code is exactly gen.py's); `generate.sh` calls it. **The proper home is `nso.py`**, which is part of the library
+  ID: folded in the next time the ID changes anyway (every game rebuilds then), and until then a rebuild through
+  `runtime/gamebuild.c`, which calls `gen.py` directly, would not know RELR for this game.
+- Two exception sites (a `blr`, a direct call), in the unified `call` form.
 Not done: past the Main Menu.
 
 ## What to test and watch for
