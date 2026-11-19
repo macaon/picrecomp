@@ -258,8 +258,40 @@ static int check_predicated_tex(void) {
     return fails;
 }
 
+// A bindless TEX whose handle register is a copy (MOV Rd, Rb) of the register the handle was built in, and HSETP2 with a
+// constant-buffer operand (PICROSS S NAMCO LEGENDARY edition's fragment shaders: the CRT-style title background)
+static int check_copied_handle_and_hsetp2_cbuf(void) {
+    static const uint64_t tex_words[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078806270014ull,  // MOV R20, c[2][..]   (the texture half of the handle)
+        0x4c47020815a71414ull,  // LOP.OR R20, R20, c[2][..]   (the sampler half)
+        0x5c98078001470016ull,  // MOV R22, R20
+        0x001fc000e24007f0ull,
+        0xdeb80040a1671008ull,  // TEX R8, R16, R22 (pc 0x28)
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static const uint64_t hset_words[] = {
+        0x001fc000e24007f0ull,
+        0x7e86838400370407ull,  // HSETP2 with c[..] as operand B
+        0xe30000000007000full, 0xe2400fffff87000full};
+    int fails = 0;
+    for (int which = 0; which < 2; which++) {
+        const uint64_t *words = which ? hset_words : tex_words;
+        size_t size = which ? sizeof hset_words : sizeof tex_words;
+        static uint8_t buf[0x80 + 128];
+        memset(buf, 0, sizeof buf);
+        memcpy(buf + 0x80, words, size);
+        ShaderKey key;
+        memset(&key, 0, sizeof key);
+        key.glsl = 1;
+        ShaderInfo *a = maxwell_translate(buf, 0x80 + size, STAGE_FRAGMENT, &key);
+        if (!a->msl) { printf("FAIL: %s test: %s\n", which ? "HSETP2 cbuf" : "copied bindless handle", a->error); fails++; }
+        maxwell_free(a);
+    }
+    return fails;
+}
+
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);

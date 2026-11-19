@@ -422,16 +422,24 @@ static bool emit_half(Ctx *c, uint64_t w) {
     }
     // ---- HSETP2 / HSET2: reg forms (5d20 / 5d18) and immediate forms (7e0x / 7c0x). The immediate takes bits 20-38 and
     // 56 (himm), so the comparison moves to 49-52 and H_AND / BF to 53 (checked on shader
-    // 7e0683bc0f071507: HSETP2.LE.AND P0, PT, R21.F32, 1.0, 1.0, PT). The cbuf forms (7e8x / 7c8x) aren't done.
+    // 7e0683bc0f071507: HSETP2.LE.AND P0, PT, R21.F32, 1.0, 1.0, PT). The cbuf forms (7e8x / 7c8x) have the same layout
+    // around the operand (offset 20-33, index 34-38): comparison 49-52, H_AND / BF 53, |b| 54, -b 56, and the word is one
+    // F32 used for both halves (checked against Eden's HSETP2_cbuf; PICROSS S NAMCO LEGENDARY edition's 7e86838400370407).
     bool himm_form = (op & 0xfe80) == 0x7e00 || (op & 0xfe80) == 0x7c00;
-    if ((op & 0xfff8) == 0x5d20 || (op & 0xfff8) == 0x5d18 || himm_form) {
-        bool setp = (op & 0xfff8) == 0x5d20 || (op & 0xfe80) == 0x7e00;
+    bool hcb_form = (op & 0xfe80) == 0x7e80 || (op & 0xfe80) == 0x7c80;
+    if ((op & 0xfff8) == 0x5d20 || (op & 0xfff8) == 0x5d18 || himm_form || hcb_form) {
+        bool setp = (op & 0xfff8) == 0x5d20 || (op & 0xfe80) == 0x7e00 || (op & 0xfe80) == 0x7e80;
         const char *x = HS(R(a), (int)bits(w, 47, 2), bits(w, 43, 1), bits(w, 44, 1));
         const char *y;
         int cop, bop = (int)bits(w, 45, 2), flag_bit;
         if (himm_form) {
             sprintf(ib, "0x%08xu", himm(w));
             y = HS(ib, 0, false, false);
+            cop = (int)bits(w, 49, 4);
+            flag_bit = 53;
+        } else if (hcb_form) {
+            char cb[256];
+            y = HS(cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb), 1, bits(w, 56, 1), bits(w, 54, 1));
             cop = (int)bits(w, 49, 4);
             flag_bit = 53;
         } else {
@@ -820,6 +828,13 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
             return false;
         if (bits(prev, 0, 8) != reg) continue;
         if (predicate != PT && pred == (predicate ^ 8)) continue;
+        if (!found && opcode == 0x5c98000000000000ull && bits(prev, 39, 4) == 0xf && (pred == PT || pred == predicate)) {
+            // MOV Rd, Rb: the handle is a copy (PICROSS S NAMCO LEGENDARY edition samples twice with one handle, the
+            // second through a copy): the handle's instructions are the ones that built Rb, before this MOV
+            reg = (unsigned)bits(prev, 20, 8);
+            if (reg == RZ) return false;
+            continue;
+        }
         if ((pred != PT && pred != predicate) || bits(prev, 34, 5) != 2) return false;
         if (!found) {
             if (opcode != 0x4c40000000000000ull || bits(prev, 39, 4) != 4) return false;
@@ -851,6 +866,15 @@ static void emit_tex(Ctx *c, uint64_t w, uint32_t pc, bool bindless) {
     unsigned texture_offset = 0, sampler_offset = 0;
     if (bindless) {
         if (!separate_texture_pair(c, pc, b, (unsigned)bits(w, 16, 4), &texture_offset, &sampler_offset)) {
+            if (getenv("PICRECOMP_LOG_TEX_FAIL")) {  // every instruction before it (what the handle is built from)
+                fprintf(stderr, "[tex-fail] TEX at %#x reg R%u pred %u; words (scheduling words at 32-byte steps):\n", pc, b,
+                        (unsigned)bits(w, 16, 4));
+                for (unsigned at = 0; at <= pc; at += 8) {
+                    uint64_t word;
+                    memcpy(&word, c->code + at, sizeof word);
+                    fprintf(stderr, "[tex-fail]   %x: %016llx\n", at, (unsigned long long)word);
+                }
+            }
             fail(c, "unresolved bindless tex at %#x", pc);
             return;
         }
