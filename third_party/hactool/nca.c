@@ -1149,7 +1149,10 @@ void nca_process_bktr_section(nca_section_ctx_t *ctx) {
     /* Validate magics. */
     if (sb->relocation_header.magic == MAGIC_BKTR && sb->subsection_header.magic == MAGIC_BKTR) {
         if (sb->relocation_header.offset + sb->relocation_header.size != sb->subsection_header.offset ||
-            sb->subsection_header.offset + sb->subsection_header.size != ctx->size) {
+            sb->subsection_header.offset + sb->subsection_header.size > ctx->size) {
+            /* (PicRecomp: upstream demands that the subsection table ends exactly at the section's end. The newer
+               updates (PICROSS S CAPCOM CLASSICS edition v1.0.2) have 0x4200 more bytes after it; only the two tables
+               are read, so what must hold is that they are consecutive and inside the section.) */
             fprintf(stderr, "Invalid BKTR layout!\n");
             exit(EXIT_FAILURE);
         }
@@ -1180,7 +1183,10 @@ void nca_process_bktr_section(nca_section_ctx_t *ctx) {
         ctx->bktr_ctx.relocation_block = relocs;
         ctx->bktr_ctx.subsection_block = subs;
 
-        if (ctx->bktr_ctx.subsection_block->total_size != sb->subsection_header.offset) {
+        /* (PicRecomp: the newer updates' subsection table counts the data up to the relocation table only; upstream
+           accepts just the table's own offset. The IVFC hashes of the patched RomFS tell whether it was right.) */
+        if (ctx->bktr_ctx.subsection_block->total_size != sb->subsection_header.offset &&
+            ctx->bktr_ctx.subsection_block->total_size != sb->relocation_header.offset) {
             free(relocs);
             free(subs);
             ctx->bktr_ctx.relocation_block = NULL;
