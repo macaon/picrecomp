@@ -74,7 +74,6 @@ typedef struct {
     int tex_slot[8192];           // texture index -> Metal slot + 1
     bool tex_weak[64];            // slot type only guessed (from a size query): the next sample decides
     bool fail;
-    uint32_t block_start;
     bool branchy;  // program uses the pc state machine
     char fwd_tail[2048];  // loop closings after the last block (structured mode)
     bool fwd;      // ... structured instead: blocks in pc order, loops as for (;;) (see FWD below)
@@ -809,10 +808,13 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
     unsigned found = 0;
     for (unsigned distance = 8; distance < pc; distance += 8) {
         unsigned at = pc - distance;
-        if (at < c->block_start) break;
         if ((at & 31) == 0) continue;  // scheduling word
         uint64_t prev;
         memcpy(&prev, c->code + at, sizeof prev);
+        // The handle may be built before a block boundary (PICROSS X : PICBITS VS UZBOROSS builds it once, at the start, and
+        // samples after branches): the search goes on, and any instruction on the way that writes the register still ends
+        // it. A DEPBAR (a scoreboard wait) has no destination.
+        if ((prev & 0xfff8000000000000ull) == 0xf0f0000000000000ull) continue;
         unsigned pred = (unsigned)bits(prev, 16, 4);
         uint64_t opcode = prev & 0xfff8000000000000ull;
         if ((prev & 0xfff8000000000000ull) == 0xdeb8000000000000ull) {
@@ -2273,7 +2275,6 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     for (size_t i = 0; i < end && !c->fail; i++) {
         if (i % 4 == 0) continue;
         uint32_t pc = (uint32_t)(i * 8);
-        if (label[i]) c->block_start = pc;
         if (any_branch && label[i]) {
             if (!c->fwd) sp(&c->body, "  case %uu:\n", pc);
             else {

@@ -290,8 +290,34 @@ static int check_copied_handle_and_hsetp2_cbuf(void) {
     return fails;
 }
 
+// A bindless TEX in a later basic block than its handle (PICROSS X : PICBITS VS UZBOROSS's fragment shader builds the handle
+// once, at the start, and samples after branches), with a DEPBAR (a scoreboard wait: it has no register destination) in
+// between. The search for the handle's instructions goes on across a block boundary and past the DEPBAR.
+static int check_handle_across_blocks(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078805a70000ull,  // MOV R0, c[2][..]   (pc 8: the texture half of the handle)
+        0x4c47020815a70000ull,  // LOP.OR R0, R0, c[2][..]   (the sampler half)
+        0xe24000000087000full,  // BRA 0x28: the next instruction starts a block
+        0x001fc000e24007f0ull,
+        0xf0f0000034470000ull,  // DEPBAR (pc 0x28, the block's first instruction)
+        0xdeba0007a0070a08ull,  // TEX R8, R10, R0 (pc 0x30)
+        0xe30000000007000full, 0x001fc000e24007f0ull, 0xe2400fffff87000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x80 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    memcpy(buf + 0x80, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: bindless handle across blocks test: %s\n", a->error); fails++; }
+    maxwell_free(a);
+    return fails;
+}
+
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);
