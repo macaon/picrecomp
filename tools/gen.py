@@ -70,19 +70,18 @@ class Module:
 
     def landings(self):
         """{a call's return address: the landing pad it can unwind into}, from the compiler's exception tables (lsda.py).
-        Only the game's own code (main): the Unity code that throws and catches C# exceptions. The guest unwinder jumps to
-        a pad by longjmp-ing to the C frame of the call (rt_invoke_with_landing), which therefore has to wrap every such
-        call; the pad is a label there."""
+        Every module: the Unity code in main throws and catches C# exceptions, and the newer SDKs' own code catches too
+        (PICROSS S CAPCOM CLASSICS edition). The guest unwinder jumps to a pad by longjmp-ing to the C frame of the call
+        (rt_invoke_with_landing), which therefore has to wrap every such call; the pad is a label there."""
         if self._landings is None:
             self._landings = {}
-            if self.name == 'main':
-                for begin, end, rows in lsda.all_call_sites(self.nso, self.base):
-                    for start, length, pad, _ in rows:
-                        if not pad:
-                            continue
-                        for a in range(start, start + length, 4):
-                            if self.in_text(a) and self.lift(a).kind in ('bl', 'blr'):
-                                self._landings[a + 4] = pad
+            for begin, end, rows in lsda.all_call_sites(self.nso, self.base):
+                for start, length, pad, _ in rows:
+                    if not pad:
+                        continue
+                    for a in range(start, start + length, 4):
+                        if self.in_text(a) and self.lift(a).kind in ('bl', 'blr'):
+                            self._landings[a + 4] = pad
             self.pads = sorted(set(self._landings.values()))
         return self._landings
 

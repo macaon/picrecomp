@@ -4,6 +4,7 @@ import sys
 import lz4.block
 
 DT_NULL, DT_NEEDED, DT_PLTRELSZ, DT_HASH, DT_STRTAB, DT_SYMTAB, DT_RELA, DT_RELASZ = 0, 1, 2, 4, 5, 6, 7, 8
+DT_GNU_HASH = 0x6ffffef5
 DT_STRSZ, DT_JMPREL, DT_RELACOUNT = 10, 23, 0x6FFFFFF9
 DT_RELRSZ, DT_RELR = 35, 36  # RELR: the compact relative relocations of a newer toolchain (a game's modules from 2024)
 R_AARCH64_ABS64, R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_RELATIVE = 257, 1025, 1026, 1027
@@ -59,10 +60,24 @@ class Nso:
         strtab = dyn.get(DT_STRTAB, 0)
         self.strtab = strtab
         self.needed = [self.cstr(strtab + n) for n in needed]
-        # dynsym count from DT_HASH nchain
+        # dynsym count: DT_HASH's nchain, or from DT_GNU_HASH (the newer toolchain's modules have only that): the symbols
+        # past symoffset up to the end of the last bucket's chain (it ends at a hash with its low bit set)
         self.syms = []
-        if DT_HASH in dyn and DT_SYMTAB in dyn:
+        nchain = 0
+        if DT_HASH in dyn:
             nchain = self.u32(dyn[DT_HASH] + 4)
+        elif DT_GNU_HASH in dyn:
+            h = dyn[DT_GNU_HASH]
+            nbuckets, symoffset, bloom = self.u32(h), self.u32(h + 4), self.u32(h + 8)
+            buckets = h + 16 + 8 * bloom
+            last = max((self.u32(buckets + 4 * i) for i in range(nbuckets)), default=0)
+            if last >= symoffset:
+                chain = buckets + 4 * nbuckets
+                while not self.u32(chain + 4 * (last - symoffset)) & 1:
+                    last += 1
+                last += 1
+            nchain = max(last, symoffset)
+        if nchain and DT_SYMTAB in dyn:
             st = dyn[DT_SYMTAB]
             for i in range(nchain):
                 o = st + i * 24

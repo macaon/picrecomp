@@ -9,7 +9,7 @@ int g_nmodules;
 
 enum { DT_NULL = 0, DT_PLTRELSZ = 2, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
        DT_JMPREL = 23, DT_INIT_ARRAY = 25, DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28,
-       DT_RELRSZ = 35, DT_RELR = 36 };
+       DT_RELRSZ = 35, DT_RELR = 36, DT_GNU_HASH = 0x6ffffef5 };
 enum { R_ABS64 = 257, R_GLOB_DAT = 1025, R_JUMP_SLOT = 1026, R_RELATIVE = 1027 };
 
 typedef struct { uint32_t name; uint8_t info, other; uint16_t shndx; uint64_t value, size; } Elf64Sym;
@@ -80,8 +80,10 @@ static void load_nso(Module *m, const char *path, uint64_t base) {
     uint32_t mod0 = *(uint32_t *)(base + 4);
     uint64_t mod = base + mod0;
     m->dynamic = mod + *(int32_t *)(mod + 4);
+    uint64_t gnu_hash = 0;
     for (uint64_t *d = (uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
         switch (d[0]) {
+        case DT_GNU_HASH: gnu_hash = base + d[1]; break;
         case DT_SYMTAB: m->symtab = base + d[1]; break;
         case DT_STRTAB: m->strtab = base + d[1]; break;
         case DT_HASH: m->nsyms = *(uint32_t *)(base + d[1] + 4); break;
@@ -92,6 +94,16 @@ static void load_nso(Module *m, const char *path, uint64_t base) {
         case DT_FINI_ARRAY: m->fini_array = base + d[1]; break;
         case DT_FINI_ARRAYSZ: m->fini_array_sz = d[1]; break;
         }
+    }
+    if (!m->nsyms && gnu_hash) {  // a module with only DT_GNU_HASH (the newer toolchain's): the symbols are the ones past
+        // symoffset up to the end of the last bucket's chain (the chain ends at a hash with its low bit set)
+        const uint32_t *h = (const uint32_t *)gnu_hash;
+        uint32_t nbuckets = h[0], symoffset = h[1], bloom = h[2];
+        const uint32_t *buckets = h + 4 + 2 * bloom, *chain = buckets + nbuckets;
+        uint32_t last = 0;
+        for (uint32_t i = 0; i < nbuckets; i++) if (buckets[i] > last) last = buckets[i];
+        if (last >= symoffset) while (!(chain[last++ - symoffset] & 1)) {}
+        m->nsyms = last > symoffset ? last : symoffset;
     }
     LOG("loaded %-5s at %llx size %llx syms %llu\n", m->name, base, size, m->nsyms);
 }
