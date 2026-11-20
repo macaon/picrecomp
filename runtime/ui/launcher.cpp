@@ -33,9 +33,7 @@ extern "C" {
 #include "gamebuild.h"
 #include "gamelib.h"
 #include "importer.h"
-#include "nxpkg.h"
 #include "touch.h"
-#include "romfs_build.h"
 #include "settings.h"
 #include "input_bind.h"
 void controls_bindings_draw(float scale);  // ui/controls_ui.mm
@@ -50,7 +48,6 @@ void vk_imgui_backend_shutdown(void);
 uint64_t vk_imgui_texture_rgba(const void *rgba, int w, int h);
 }
 
-static const uint8_t BUILD_ID[8] = {0x26, 0x07, 0x97, 0x01, 0x8f, 0xef, 0xb8, 0x45};  // PICROSS S v524288 main (docs/STATUS.md)
 // The release tag this build is (also names the release files; Makefile / tools/bundle_macos.sh / make_dmg.sh read
 // it): alpha_<n> while the game isn't playable, beta_<n> until 1.0, then v<major>.<minor>.<patch>.
 #define PICRECOMP_VERSION "alpha_1"
@@ -164,11 +161,10 @@ static std::string check_copied_files(const std::string &root) {
     fseek(f, 0x40, SEEK_SET);
     size_t n = fread(id, 1, 8, f);
     fclose(f);
-    std::string want = json_str(root + "/title.json", "main_build_id");  // (a folder prepared before manifests: PICROSS S)
+    std::string want = json_str(root + "/title.json", "main_build_id");  // (what the import recorded: prepare.py)
     char have[17] = {0};
     for (int k = 0; k < 8; k++) snprintf(have + 2 * k, 3, "%02x", id[k]);
-    if (n != 8 || (want.empty() ? memcmp(id, BUILD_ID, 8) != 0 : want.compare(0, 16, have) != 0))
-        return "Unsupported game version (needs the latest update)";
+    if (n != 8 || want.compare(0, 16, have) != 0) return "The game files don't match their record";
     // the data the game reads (services/fs.c): an image, or the description of where it is in the game package
     if (!file_exists(root + "/romfs.bin") && !file_exists(root + "/romfs.src")) return "Game data missing";
     return "";
@@ -181,16 +177,14 @@ static std::string check_game_files(const std::string &root) {
     return why;
 }
 
-// ------------------------------------------------------------------ setup (background thread)
-// The player brings their own game files: a folder holding exefs/ and romfs/. They're copied into the data root (APFS
-// clones / hard links where the file system allows) and the data image the game reads is built from romfs/
-// (runtime/romfs_build.c).
+// ------------------------------------------------------------------ rebuild (background thread)
+// Games are added by the importer (runtime/importer.c, tools/picross/install.py). What the start screen does itself: build
+// the game code again for a game whose library is missing or from another PicRecomp version, and delete a game's files.
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static std::string g_src;           // the picked folder
 static std::string g_add_keys;      // its prod.keys, when not beside them
 static std::string g_add_dir;       // the folder chosen on the Add a game page
 static bool g_add_auto;             // (test) start the import at once
-static std::string g_job;           // current setup step / result for the status line
+static std::string g_job;           // current step / result for the status line
 static std::string g_job_hint;      // a failure: what to do about it (shown under it)
 static bool g_busy, g_job_failed;
 static bool g_confirm_delete;       // game-files page: "Delete the game files?" shown
@@ -203,92 +197,19 @@ static void set_job(const std::string &s, bool failed = false, const std::string
     pthread_mutex_unlock(&g_lock);
 }
 
-// Setup failures: a short headline and what to do next (also PICRECOMP_LAUNCHER_SHOT=<f>:fail<1-6>, screenshots)
-enum { FAIL_NOT_FOUND = 1, FAIL_UNUSABLE, FAIL_COPY, FAIL_VERSION, FAIL_MISSING, FAIL_BUILD };
-static void set_failure(int k) {
-    static const char *const head[] = {"", "No game files found in that folder", "Those files can't be used",
-                                       "Setup didn't finish", "Wrong version of the game", "Game files incomplete",
-                                       "The game code didn't build"};
-    static const char *const hint[] = {
-        "",
-        "Choose the folder that holds the game files.",
-        "Compressed packages (.nsz / .xcz) can't be read: decompress them to .nsp / .xci first.",
-        "Make sure there's about 12 GB free and try again.",
-        "PicRecomp needs version 1.0.0 of the game, without updates.",
-        "Some files are missing. Choose the folder again; if it happens again, copy your extracted game files again.",
-        "Make sure there's about 2 GB free and try again. If it keeps happening, report it on GitHub."};
-    if (k >= 1 && k <= 6) set_job(head[k], true, hint[k]);
-}
-
-static bool is_dir(const std::string &p) {
-    struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-// exefs: the folder with main and main.npdm; romfs: a folder named romfs (the game's data root); or the game package
-// itself (package: .nsp / .xci / .nca, read in place by runtime/nxpkg.c) and the keys file beside it (prod.keys).
-// Found in the picked folder or a few levels below it (some folder layouts nest them).
-static void find_game(const std::string &dir, int depth, std::string &exefs, std::string &romfs, std::string &package,
-                      std::string &keys, bool &unusable) {
-    if (depth > 4 || (!exefs.empty() && !romfs.empty())) return;
-    if (exefs.empty() && file_exists(dir + "/main") && file_exists(dir + "/main.npdm")) exefs = dir;
-    DIR *d = opendir(dir.c_str());
-    if (!d) return;
-    std::vector<std::string> sub;
-    uint64_t best = 0;
-    while (struct dirent *e = readdir(d)) {
-        std::string n = e->d_name, lower = n;
-        if (n[0] == '.') continue;
-        for (auto &ch : lower) ch = (char)tolower((unsigned char)ch);
-        std::string ext = lower.size() > 4 ? lower.substr(lower.size() - 4) : "";
-        struct stat st;
-        if (stat((dir + "/" + n).c_str(), &st)) continue;
-        if (ext == ".nsz" || ext == ".xcz") unusable = true;  // (compressed packages: decompress them first)
-        if ((ext == ".xci" || ext == ".nsp" || ext == ".nca") && !S_ISDIR(st.st_mode) && (uint64_t)st.st_size > best &&
-            package.empty()) {
-            best = (uint64_t)st.st_size;  // (the biggest: the base game, not a small update or DLC)
-            package = dir + "/" + n;
-        }
-        if (lower == "prod.keys" && keys.empty()) keys = dir + "/" + n;
-        if (S_ISDIR(st.st_mode)) {
-            if (lower == "romfs" && romfs.empty()) romfs = dir + "/" + n;
-            else sub.push_back(dir + "/" + n);
-        }
-    }
-    closedir(d);
-    std::sort(sub.begin(), sub.end());
-    for (auto &s : sub) find_game(s, depth + 1, exefs, romfs, package, keys, unusable);
-}
-
-static bool build_id_ok(const std::string &main_path) {
-    FILE *f = fopen(main_path.c_str(), "rb");
-    if (!f) return false;
-    uint8_t id[8] = {0};
-    fseek(f, 0x40, SEEK_SET);
-    size_t n = fread(id, 1, 8, f);
-    fclose(f);
-    return n == 8 && !memcmp(id, BUILD_ID, 8);
-}
-
-// progress (the overlay's bar): the romfs copy, then the image build - each about the size of romfs/
-static std::atomic<unsigned long long> g_done, g_total;
-// The bar: copying and the data image are the first tenth, building the game code (runtime/gamebuild.c) the rest
-static unsigned long long g_phase_base;
+// The overlay's bar while the game code is built (runtime/gamebuild.c)
 static std::atomic<float> g_build_frac{-1};  // -1: not building
-static bool g_copy_skipped;                  // (only the game code to build: the bar is all of that)
-static void setup_progress(uint64_t done, uint64_t) { g_done = g_phase_base + done; }
 static void build_progress(double f, const char *step) {
     g_build_frac = (float)f;
     static const char *last;
     if (step != last) last = step, set_job(step);
 }
-static float extract_progress(void) {
-    unsigned long long t = g_total, d = g_done;
-    float b = g_build_frac, f = b >= 0 ? (g_copy_skipped ? b : 0.1f + 0.9f * b) : t ? 0.1f * (float)((double)d / (double)t) : 0;
+static float build_fraction(void) {
+    float f = g_build_frac;
     return f < 0 ? 0 : f > 0.99f ? 0.99f : f;
 }
 
-// Builds the game code from the copied files (a few minutes); false = failed (the job line says so)
+// Builds the game code from the game's files (a few minutes); false = failed (the job line says so)
 static bool build_game_code(void) {
     int cores = SDL_GetNumLogicalCPUCores(), ram_gb = SDL_GetSystemRAM() / 1024;
     GameBuildOpts o = {build_progress, cores < ram_gb - 2 ? cores : ram_gb - 2 > 1 ? ram_gb - 2 : 1};
@@ -297,105 +218,26 @@ static bool build_game_code(void) {
     bool ok = gamebuild_run(g_root.c_str(), &o, why, sizeof why);
     if (!ok) {
         fprintf(stderr, "[launcher] game code: %s\n", why);
-        set_failure(FAIL_BUILD);
+        set_job("The game code didn't build", true, "Make sure there's about 2 GB free and try again. If it keeps happening, "
+                "report it on GitHub.");
     }
     return ok;
 }
 
-static void *extract_thread(void *) {
-    std::string src;
-    pthread_mutex_lock(&g_lock);
-    src = g_src;
-    pthread_mutex_unlock(&g_lock);
-    g_done = 0, g_total = 0, g_phase_base = 0, g_build_frac = -1, g_copy_skipped = false;
-    std::string exefs, romfs, package, keys;
-    bool unusable = false;  // (compressed game packages)
-    bool cleaned = false;   // (an earlier setup's files removed already: the keys copied in since stay)
-    if (src.empty() && check_copied_files(g_root).empty()) {  // copied already (an update needs new game code)
-        g_copy_skipped = true;
-        if (!build_game_code()) goto done;
-        goto check;
-    }
-    set_job("Looking for the game files...");
-    find_game(src, 0, exefs, romfs, package, keys, unusable);
-    if ((exefs.empty() || romfs.empty()) && !package.empty()) {  // the game package: ExeFS out, RomFS read in place
-        if (keys.empty()) {
-            set_job("No prod.keys beside the game package", true, "Put the keys file from your own Switch (prod.keys) in "
-                    "the same folder as the game and choose it again.");
-            goto done;
-        }
-        if (!cleaned) rt_remove_game_files(g_root.c_str());
-        mkdir(g_root.c_str(), 0755);
-        set_job("Reading the game package...");
-        char why[256] = "";
-        uint64_t tid = 0;
-        if (!nx_setup(package.c_str(), keys.c_str(), g_root.c_str(), &tid, why, sizeof why)) {
-            fprintf(stderr, "[launcher] %s: %s\n", package.c_str(), why);
-            why[0] = (char)toupper((unsigned char)why[0]);
-            set_job("Those files can't be used", true, why);
-            goto done;
-        }
-        if (tid != 0x01008CF01BAAC000ull || !build_id_ok(g_root + "/exefs/main")) {
-            rt_remove_game_files(g_root.c_str());
-            set_failure(FAIL_VERSION);
-            goto done;
-        }
-        if (!build_game_code()) goto done;
-        goto check;
-    }
-    if (exefs.empty() || romfs.empty()) { set_failure(unusable ? FAIL_UNUSABLE : FAIL_NOT_FOUND); goto done; }
-    if (!build_id_ok(exefs + "/main")) { set_failure(FAIL_VERSION); goto done; }
-    {
-        // (the picked folder can't be PicRecomp's own copy: setting up again deletes that first)
-        char a[4096], b[4096];
-        mkdir(g_root.c_str(), 0755);
-        if (realpath(exefs.c_str(), a) && realpath(g_root.c_str(), b) && !strncmp(a, b, strlen(b)) &&
-            (a[strlen(b)] == '/' || a[strlen(b)] == '\\' || !a[strlen(b)])) {
-            set_failure(FAIL_NOT_FOUND);
-            goto done;
-        }
-        rt_remove_game_files(g_root.c_str());  // (an earlier or interrupted setup's; removes the folder too)
-        mkdir(g_root.c_str(), 0755);
-        unsigned long long rbytes = romfs_dir_bytes(romfs.c_str());
-        g_total = 2 * rbytes;
-        set_job("Copying the game files...");
-        if (!romfs_copy_tree(exefs.c_str(), (g_root + "/exefs").c_str(), NULL) ||
-            !romfs_copy_tree(romfs.c_str(), (g_root + "/romfs").c_str(), setup_progress)) {
-            set_failure(FAIL_COPY);
-            goto done;
-        }
-        g_phase_base = rbytes, g_done = rbytes;
-        set_job("Building the game data image...");
-        char why[256] = "";
-        if (!romfs_build((g_root + "/romfs").c_str(), (g_root + "/romfs.bin").c_str(), setup_progress, why, sizeof why)) {
-            fprintf(stderr, "[launcher] romfs image: %s\n", why);
-            set_failure(FAIL_COPY);
-            goto done;
-        }
-        if (!build_game_code()) goto done;
-    }
-check:
-    {
+static void *rebuild_thread(void *) {
+    g_build_frac = -1;
+    if (check_copied_files(g_root).empty() && build_game_code()) {
         std::string why = check_game_files(g_root);
-        if (why.empty()) set_job("Game files ready.");
-        else set_failure(why.find("version") != std::string::npos ? FAIL_VERSION : FAIL_MISSING);
+        if (why.empty()) set_job("The game is ready.");
+        else set_job(why, true, "Add the game again with + on the start screen.");
     }
-done:
     pthread_mutex_lock(&g_lock);
     g_busy = false;
     pthread_mutex_unlock(&g_lock);
     return NULL;
 }
 
-// ------------------------------------------------------------------ folder dialog (SDL calls back on any thread)
-static void SDLCALL picked(void *, const char *const *files, int) {
-    if (!files || !files[0]) return;
-    pthread_mutex_lock(&g_lock);
-    g_src = files[0];
-    pthread_mutex_unlock(&g_lock);
-}
-
-
+// ------------------------------------------------------------------ folder / file dialogs (SDL calls back on any thread)
 static void SDLCALL picked_add(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_lock);
@@ -1036,7 +878,6 @@ extern "C" void launcher_run(const char *root) {
             g_add_dir = d, g_add_auto = true, page = ADD;
             if (const char *k = strchr(d, '|')) g_add_keys = k + 1, g_add_dir.resize(k - d);
         }
-        if (pg && !strncmp(pg + 1, "fail", 4)) page = SETUP, set_failure(atoi(pg + 5));  // (the failure messages)
         if (pg && !strncmp(pg + 1, "settings", 8) && pg[9] == ':') g_tab_request_ext = atoi(pg + 10);  // settings:<tab>
         if (pg && !strcmp(pg + 1, "delete")) page = SETUP, g_confirm_delete = true;
         if (pg && !strcmp(pg + 1, "tip")) g_settings.menu_tip_seen = false, g_tip_test = true;
@@ -1047,19 +888,11 @@ extern "C" void launcher_run(const char *root) {
     const char *ap = getenv("PICRECOMP_LAUNCHER_AUTOPLAY");
     if (ap && status.empty() && !(runs && !strcmp(ap, "once"))) play = true;  // (test: PLAY at once)
     runs++;
-    if (const char *t = getenv("PICRECOMP_LAUNCHER_EXTRACT")) {  // (test) <folder>: set the game files up, log, exit
-        g_src = t;
-        g_busy = true;
-        extract_thread(NULL);
-        fprintf(stderr, "[launcher] setup: %s -> %s\n", g_job.c_str(), check_game_files(g_root).empty() ? "READY" : "NOT READY");
-        exit(0);
-    }
-    if (const char *t = getenv("PICRECOMP_LAUNCHER_SETUP")) {  // (test) <folder>: Set up started on the start screen
-        g_src = t;
+    if (getenv("PICRECOMP_LAUNCHER_REBUILD")) {  // (test) a game with a stale library, Recompile started on the start screen
         g_busy = true;
         page = SETUP;
         pthread_t th;
-        pthread_create(&th, NULL, extract_thread, NULL);
+        pthread_create(&th, NULL, rebuild_thread, NULL);
         pthread_detach(th);
     }
     if (getenv("PICRECOMP_LAUNCHER_DELETE")) {  // (test) what DELETE GAME FILES does, logged; then the start screen
@@ -1661,32 +1494,17 @@ extern "C" void launcher_run(const char *root) {
                 ImGui::Spacing();
 
                 pthread_mutex_lock(&g_lock);
-                std::string src = g_src, job = g_job, job_hint = g_job_hint;
+                std::string job = g_job, job_hint = g_job_hint;
                 bool failed = g_job_failed;
                 pthread_mutex_unlock(&g_lock);
                 bool ready = status.empty() && !busy;  // (set up: the window offers to delete them)
+                bool can_rebuild = !ready && check_copied_files(g_root).empty();  // (the files are fine, the game code is not)
                 static double files_gb = -1;
-                // chosen: "Selected" with a green check (long paths ran over the label); the path is in the
-                // explanation, and choosing again opens the picker again
-                std::string src_v = src.empty() ? "Choose..." : "Selected";
-                auto check_left_of_value = [&](const std::string &v) {
-                    if (v != "Selected") return;
-                    ImVec2 rb = ImGui::GetItemRectMax(), ra = ImGui::GetItemRectMin();
-                    float fs = ImGui::GetFontSize(), vw = ImGui::CalcTextSize(v.c_str()).x;
-                    float x = rb.x - 16 * sc - vw - fs * 0.95f, cy = (ra.y + rb.y) * 0.5f, u = fs * 0.62f;
-                    ImU32 g = IM_COL32(120, 220, 120, 255);
-                    ImDrawList *dl = ImGui::GetWindowDrawList();
-                    dl->AddLine(ImVec2(x, cy), ImVec2(x + u * 0.35f, cy + u * 0.35f), g, fs * 0.11f);
-                    dl->AddLine(ImVec2(x + u * 0.35f, cy + u * 0.35f), ImVec2(x + u, cy - u * 0.4f), g, fs * 0.11f);
-                };
-                std::string src_d = "The folder with your own copy of a PICROSS game for Nintendo Switch (S, S2 to S8), "
-                                    "with its latest update: the .nsp files with the prod.keys of your Switch beside them, "
-                                    "or the extracted exefs / romfs folders. The game isn't included with PicRecomp.";
-                if (!src.empty()) src_d += "\n\nChosen: " + (src.compare(0, 8, "android:") ? src : src.substr(8));
                 // the step that's running / its result, under the rows and in the Set up row's explanation
                 const std::string &job_line = job;
-                std::string ex_d = "Copies the game files PicRecomp needs and recompiles the game from them. This only "
-                                   "needs to be done once and may take a while. Your own files aren't changed.";
+                std::string ex_d = "Builds the game code again from the game files PicRecomp already has (this version of "
+                                   "PicRecomp needs new code for them). It only needs to be done once and may take a while. "
+                                   "Your own files aren't changed.";
                 if (!job.empty()) ex_d += "\n\n" + job + (job_hint.empty() ? "" : ".\n" + job_hint);
 
                 // the controller's cursor starts on the first row (not the X), a few frames while the window lays out
@@ -1697,24 +1515,19 @@ extern "C" void launcher_run(const char *root) {
                     if (focus_first > 0 && focus_first--) ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
                 };
                 opt_begin("##files", sc);
-                if (!ready) {
-                    opt_section("Your copy of the game");
+                if (can_rebuild) {
+                    opt_section("Game code");
                     if (busy) opt_disable_next();
-                    if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
-                        SDL_ShowOpenFolderDialog(picked, NULL, win, NULL, false);
-                    check_left_of_value(src_v);
-                    first_row();
-                    opt_section("Set up");
-                    if (busy || (src.empty() && !check_copied_files(g_root).empty())) opt_disable_next();
-                    if (opt_action("Set up game files", busy ? "Working..." : "", ex_d.c_str(), true)) {
+                    if (opt_action("Recompile the game", busy ? "Working..." : "", ex_d.c_str(), true)) {
                         pthread_mutex_lock(&g_lock);
                         g_busy = true;
                         pthread_mutex_unlock(&g_lock);
                         pthread_t t;
-                        pthread_create(&t, NULL, extract_thread, NULL);
+                        pthread_create(&t, NULL, rebuild_thread, NULL);
                         pthread_detach(t);
                     }
-                    files_gb = -1;  // (re-measured after a setup)
+                    first_row();
+                    files_gb = -1;  // (re-measured after a build)
                 } else {
                     // DELETE: frees PicRecomp's copy (runtime/paths.c removes only what the setup made, only inside
                     // the data root). Saves, settings and the user's own files stay.
@@ -1722,10 +1535,12 @@ extern "C" void launcher_run(const char *root) {
                     char gb[32];
                     snprintf(gb, sizeof gb, "%.1f GB", files_gb);
                     opt_section("Game files");
+                    std::string del_d = "Frees the space PicRecomp's copy of the game files takes. Saves and settings are "
+                                        "kept, and your own game files aren't touched: you can add the game again from them.";
+                    if (!ready) del_d = "These game files can't be used (" + status + "). Delete them, then add the game again "
+                                        "with + on the start screen.\n\n" + del_d;
                     if (!g_confirm_delete) {
-                        if (opt_action("Delete game files", gb, "Frees the space PicRecomp's copy of the game files takes. "
-                                       "Saves and settings are kept, and your own game files aren't touched: you can "
-                                       "set the game files up again from them.", true))
+                        if (opt_action("Delete game files", gb, del_d.c_str(), true))
                             g_confirm_delete = true;
                         first_row();
                     } else {
@@ -1769,12 +1584,11 @@ extern "C" void launcher_run(const char *root) {
                     ImDrawList *fg = ImGui::GetForegroundDrawList();
                     ImVec2 o = ImGui::GetMainViewport()->Pos;
                     fg->AddRectFilled(o, ImVec2(o.x + ds.x, o.y + ds.y), IM_COL32(0, 0, 0, 170));
-                    float f = test_busy ? 0.42f : extract_progress();
-                    // (while the game code is built: what's happening, on whose files - runtime/gamebuild.c)
-                    bool recompiling = g_build_frac >= 0;
-                    const char *title = recompiling ? "Recompiling the game" : "Setting up the game files";
+                    float f = test_busy ? 0.42f : build_fraction();
+                    // (what the game code build is doing - runtime/gamebuild.c)
+                    const char *title = "Recompiling the game";
                     static const char *const notes[] = {"This only needs to be done once and may take a while."};
-                    int nnotes = recompiling ? 1 : 0;
+                    int nnotes = 1;
                     float tfs = g_font_menu->FontSize * 0.75f, sfs = g_font_small->FontSize * 0.85f;
                     ImVec2 ts = g_font_menu->CalcTextSizeA(tfs, FLT_MAX, 0, title);
                     float line_h = g_font_small->CalcTextSizeA(sfs, FLT_MAX, 0, "A").y;
@@ -1791,7 +1605,7 @@ extern "C" void launcher_run(const char *root) {
                     fg->AddRectFilled(ba, bb, IM_COL32(255, 255, 255, 25), 12 * sc);
                     if (f > 0) fg->AddRectFilled(ba, ImVec2(ba.x + (bb.x - ba.x) * f, bb.y), IM_COL32(236, 194, 84, 255), 12 * sc);
                     char line[200];
-                    snprintf(line, sizeof line, "%s   %d%%", test_busy ? "Setting up the game files..." : job.c_str(),
+                    snprintf(line, sizeof line, "%s   %d%%", test_busy ? "Recompiling the game..." : job.c_str(),
                              (int)(f * 100));
                     ImVec2 ls = g_font_small->CalcTextSizeA(sfs, FLT_MAX, 0, line);
                     fg->AddText(g_font_small, sfs, ImVec2((a.x + b.x - ls.x) * 0.5f, bb.y + 26 * sc), IM_COL32(220, 216, 205, 255), line);
@@ -1810,7 +1624,7 @@ extern "C" void launcher_run(const char *root) {
             if (status.empty()) {
                 // (nothing: a game that is ready needs no line; its version is in Settings > Game files)
             } else {
-                ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Setting up the game files..." : g_cards.empty() ? "No game added" : status.c_str());
+                ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  %s", busy ? "Recompiling the game..." : g_cards.empty() ? "No game added" : status.c_str());
                 ImGui::SetCursorPosX(x0);
                 ImGui::TextDisabled(g_cards.empty() ? "Choose + to add a game." : "This game can't be played yet.");
             }

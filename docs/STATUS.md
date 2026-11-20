@@ -316,8 +316,13 @@ manifests carry no code addresses:
   `runtime/main.c` (`rtld_old_start`) runs the same sequence from the sdk's and the game's own symbols (its SDK has no
   `InitializeVirtualAddressMemory` either, now optional). It reaches its tutorial puzzle. Measured: for 12 of 14 games the base package's main executable differs from the update's build.
 - **Cost of the generator change:** the library ID has changed twice (a third of an hour to rebuild a few games, an hour and a half
-  for all eighteen; 3 to 13 minutes each); a library with another ID is shown as "Game code not built yet" and rebuilt by importing the game again (its own
-  packages). There is no one-click rebuild on the start screen.
+  for all eighteen; 3 to 13 minutes each); a library with another ID is shown as "Game code not built yet". The start screen's Game Files window then offers "Recompile the
+  game" (`runtime/gamebuild.c`, from the game files already there: it needs the generator and compiler of a shipped build, or
+  a source checkout started from its own folder with `extracted/` in it; the `PICRECOMP_DATA_ROOT` runs used here count as
+  neither). Tested natively on S2 (2026-11-20): the build finishes, the id file has both lines and the game runs from it. The
+  importer refuses the same version again ("already in the library"), so the other way is to delete the game first. The
+  launcher's old "choose a folder, set up the game files" part (it only accepted another project's title ID) is gone; Add
+  a game (the importer) is the way in. `nxpkg.c` and `romfs_build.c` are left for a possible native importer.
 
 ## PICROSS S+
 
