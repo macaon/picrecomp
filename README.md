@@ -107,6 +107,7 @@ The builds below are the ones the importer has been run on (main build ID: the g
 | PICROSS S7 | `01009b2016104000` | 1.0.0 (base) | `aa4cdc0eab6d4e4db6dd46e996f1ac47` |
 |  |  | 1.2.0 (update) | `528b2e6d6d8a5c448471b84d4d54836f` |
 | PICROSS S8 | `01002ce017d26000` | 1.0.0 (base) | `8dc7537c47d3ac4f998a5231204d9c0b` |
+| PICROSS X : PICBITS VS UZBOROSS | `0100f08018840000` | 1.0 (base) | `40e9866d26170441d914ea4811003d9f` |
 | PICROSS S9 | `010021a0197ba000` | 1.0.0 (base) | `93d7947d262dc4468eb1ae92b53b11b4` |
 | PICROSS S+ | `0100d7b01ae58000` | 1.0.0 (base) | `8ba04068aa05ab45b15e9566fe5452d5` |
 |  |  | 1.0.1 (update) | `5eb832c899625df5b6bbe8aea93d073c` |

@@ -64,6 +64,14 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 - PICROSS S SNK CLASSICS & NEOGEO edition (`0100122023706000`, released 2025-11-27; base v1.0.0 and update v1.0.2 / 131072): same SDK as
   Capcom's, nothing new needed: imports (base alone, and with the update) and reaches its puzzle select at 60 fps on a fresh
   save (Vulkan, Linux). The manifest name uses a plain `&`, not the fullwidth one of the package's file name. Nothing played.
+- PICROSS X : PICBITS VS UZBOROSS (`0100f08018840000`, v1.0, base only, released 2022-12-19; seven add-on skin packages in the folder
+  with it, listed as `addons` like S+'s): a different game from the S series (Japanese only: its NACP says so; the
+  language list follows). Imports and runs past the title screen to its first tutorial page at 60 fps, with the add-on
+  message ("additional content confirmed") shown at start (Vulkan, Linux). One shader did not translate: a bindless TEX
+  whose handle (MOV + LOP.OR from the driver's c2 tables) is built once at the start of the program and sampled after
+  branches; the search for the handle stopped at the block boundary, and a DEPBAR on the way would have ended it. It goes
+  on across blocks now (any instruction that writes the register still ends it) and a DEPBAR, which has no destination,
+  is passed; `check_handle_across_blocks` in `tools/test_translate.c` fails on the old translator. Nothing else played.
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
