@@ -20,7 +20,7 @@ static char g_loaded_dir[1100];  // the game folder the loaded library was chose
 // The library's id file (<library>.id, written next to it by the build): line 1 its GAMELIB_ID, line 2 the build id of
 // the game's main module it was generated from. Read without loading the library. The second line must match the
 // game being started: the generated code is only valid for the exact executable it came from.
-static bool game_build_id(const char *game_dir, char out[33]) {
+bool gamelib_game_build_id(const char *game_dir, char out[33]) {
     char path[1100];
     snprintf(path, sizeof path, "%s/exefs/main", game_dir);
     FILE *f = fopen(path, "rb");
@@ -46,7 +46,7 @@ static bool id_matches(const char *lib, const char *game_dir) {
     char have[33], want[33] = {0};
     if (!built) return false;
     for (n = 0; built[n] && built[n] != '\n' && built[n] != '\r' && n < 32; n++) want[n] = built[n];
-    return game_build_id(game_dir, have) && !strcmp(have, want);
+    return gamelib_game_build_id(game_dir, have) && !strcmp(have, want);
 }
 
 static bool exists(const char *p) {

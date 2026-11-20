@@ -19,6 +19,9 @@ typedef struct {
 bool gamebuild_run(const char *game_dir, const GameBuildOpts *opts, char *why, size_t why_size);
 // The generator and the compiler are there (shipped builds; a source checkout with tools/venv and clang).
 bool gamebuild_available(void);
+// The build id of the game's main module (exefs/main, header 0x40, 16 bytes as hex): what its generated code is valid for
+// (gamelib.c; here, not in gamelib.h, whose text is part of the library id).
+bool gamelib_game_build_id(const char *game_dir, char out[33]);
 
 #ifdef __cplusplus
 }

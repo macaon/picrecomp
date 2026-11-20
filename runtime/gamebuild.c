@@ -514,7 +514,9 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         char idp[1100];
         snprintf(idp, sizeof idp, "%s.id", lib);
         FILE *f = NULL;
-        if (rename(tmp, lib) != 0 || !(f = fopen(idp, "wb")) || fprintf(f, "%s\n", GAMELIB_ID) < 0) {
+        char built[33];  // (line 2: the executable it was generated from, which gamelib.c checks against the game)
+        if (rename(tmp, lib) != 0 || !gamelib_game_build_id(game_dir, built) || !(f = fopen(idp, "wb")) ||
+            fprintf(f, "%s\n%s\n", GAMELIB_ID, built) < 0) {
             snprintf(why, why_size, "the game code couldn't be saved");
             ok = false;
         }
