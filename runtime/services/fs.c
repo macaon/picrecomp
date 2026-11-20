@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "host_write.h"
 #include "../hle.h"
 #include "../ipc.h"
 #include "../nxpkg.h"
@@ -435,6 +436,8 @@ static uint32_t errno_result(void) {
     return MAKE_RESULT(2, 4000);
 }
 
+static uint32_t file_flush(int fd) { return host_fsync(fd) < 0 ? errno_result() : 0; }
+
 static void file(Service *s, IpcReq *req, IpcResp *resp) {
     HostFile *f = s->state;
     switch (req->cmd) {
@@ -453,12 +456,14 @@ static void file(Service *s, IpcReq *req, IpcResp *resp) {
     case 1: {  // Write(option, offset, size) <- A
         int64_t off = IN(int64_t, 8), size = IN(int64_t, 16);
         IpcBuf *a = in_buf(req, 0);
+        if (!a || off < 0 || size < 0 || size > INT64_MAX - off || (uint64_t)size > a->size) { resp->result = MAKE_RESULT(2, 6001); break; }
         if (strstr(f->path, "savedata"))
             LOG("[save] write %s off %lld size %lld <- guest %llx\n", f->path, (long long)off, (long long)size, (unsigned long long)a->addr);
-        if (pwrite(f->fd, (void *)(uintptr_t)a->addr, (size_t)size, off) < 0) resp->result = errno_result();
+        resp->result = host_pwrite_all(f->fd, (const void *)(uintptr_t)a->addr, off, size) < 0 ? errno_result() : 0;
+        if (!resp->result && (IN(uint32_t, 0) & 1)) resp->result = file_flush(f->fd);  // WriteOption::Flush
         break;
     }
-    case 2: fsync(f->fd); break;
+    case 2: resp->result = file_flush(f->fd); break;  // Flush
     case 3: if (ftruncate(f->fd, IN(int64_t, 0))) resp->result = errno_result(); break;
     case 4: {
         struct stat sb;
