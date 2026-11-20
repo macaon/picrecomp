@@ -321,7 +321,11 @@ def prepare(args):
             step(6, "Reading the game's icon and artwork")
             try:
                 hactool("icon", "-t", "nca", f"--romfsdir={icons}", control)
-                shutil.copyfile(icons / "icon_AmericanEnglish.dat", prepared / "icon.jpg")
+                # (a game without English text, PICROSS X : PICBITS VS UZBOROSS, has only the icon of its own language)
+                found = sorted(icons.glob("icon_*.dat"), key=lambda f: f.name != "icon_AmericanEnglish.dat")
+                if not found:
+                    raise ValueError("no icon")
+                shutil.copyfile(found[0], prepared / "icon.jpg")
             except (ValueError, OSError):
                 print("No icon found; the start screen will show the name only", flush=True)
             version = display_version(icons / "control.nacp")
