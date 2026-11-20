@@ -61,6 +61,9 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
     service's shared memory and wants its clock source id to match the contexts': without it `clock_gettime(CLOCK_REALTIME)`
     failed and `std::chrono::system_clock::now()` threw out of the game (terminate). All zero but the id is no adjustment.
   Nothing played.
+- PICROSS S SNK CLASSICS & NEOGEO edition (`0100122023706000`, released 2025-11-27; base v1.0.0 and update v1.0.2 / 131072): same SDK as
+  Capcom's, nothing new needed: imports (base alone, and with the update) and reaches its puzzle select at 60 fps on a fresh
+  save (Vulkan, Linux). The manifest name uses a plain `&`, not the fullwidth one of the package's file name. Nothing played.
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort

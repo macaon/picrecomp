@@ -117,6 +117,8 @@ The builds below are the ones the importer has been run on (main build ID: the g
 | PICROSS S Doraemon & F Characters edition | `01002b901fa74000` | 1.0.0 (base) | `edf8578a6cc16a6185679a63960314bd` |
 | PICROSS S CAPCOM CLASSICS edition | `01009ad023f90000` | 1.0.0 (base) | `1de3e8003bb4a76aa7fa308099cbd4d5` |
 |  |  | 1.0.2 (update) | `e212a43e76af2f1462a7eaa02e14680e` |
+| PICROSS S SNK CLASSICS & NEOGEO edition | `0100122023706000` | 1.0.0 (base) | `54fc92b03b3b30748bbc9bab4676dc88` |
+|  |  | 1.0.2 (update) | `7edb919a39cb182c5bc2f4a8d36991d9` |
 | Picross: Juufuutei Raden's Guide for Pixel Museum | `01003d2020aba000` | 1.0.0 (base) | `0f6fb55fcdfc915715594dfe8a1bd751` |
 |  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |
 
