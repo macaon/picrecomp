@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-11-17. Platform tested: Linux x86-64, Vulkan, NVIDIA RTX 5070 Ti (Wayland, PipeWire audio).
+Updated: 2026-11-20. Platform tested: Linux x86-64, Vulkan, NVIDIA RTX 5070 Ti (Wayland, PipeWire audio).
 Windows has not been built or run for PICROSS S.
 
 ## Pinned game
@@ -74,28 +74,36 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   would have ended it. It goes on across blocks now and passes a DEPBAR (no destination); `check_handle_across_blocks` in
   `tools/test_translate.c` fails on the old translator. The account name shown beside the character is "PicRecomp" (it was
   "Link", left from the project this one came from).
-  **Open: the jumping character in the main menu's top-left circle is missing** (it is there on Eden). Known so far:
-  - The circle's ground shadow (an orange ellipse that squashes) and its landing ripples animate, so the animation runs; the
-    character itself is never drawn: skipping each of the 18 draws of the 1920x1080 scene pass in turn removes something else
-    (panels, menu art, labels...) but none is the character, and there are no skipped draws, no translate failures and no
-    render target other than 1920x1080 / 1280x720 (checked over frames 1250-1530; nothing draws into a target of 512 or less).
-  - The cursor (a paw) is the game's stick pointer: it shows once the left stick moves, follows the stick and ignores the d-pad
-    (as on Eden); that part works.
-  - One 128x128 RGBA8 texture is sampled by a draw in the menu and is entirely opaque black (0,0,0,255); it is never rendered
-    into (the content comes from a CPU upload, `PICRECOMP_LOG_UPLOADS` shows many 128x128 uploads of 65536 bytes). Not yet
-    shown to be the character's.
-  - The profile-image calls are not the cause: the game never calls `IProfile::GetImageSize` / `LoadImage`.
-  - From the ROM (Unity, IL2CPP; tools: `romfs.bin` parsed for its file table, UnityPy 1.25.4 on `Data/StreamingAssets/
-    AssetBundles/chara` and `avatar`, strings of `global-metadata.dat`): the character is assembled from parts (metadata:
-    `MainMenu_CharaFrame`, `customizeBodyId` / `customizeEyeId` / `customizeHeadAcceId` / `customizeWearId`); the `chara` bundle
-    has the `UI_Chara` prefab (children `Skin_Body`, `Skin_Eye`, `Skin_HeadAcce`, `Skin_Wear`, `Skin_Ear_*`, `SRT_Jump`...), 285
-    sprites (`MainGame_Chara_*`), animator controllers (`Picture_Chara`...) and the shaders `Sprites/Default` (the ordinary UI
-    one) and `JupiterSystem/JSAdditionShader`; the `avatar` bundle has `Custom_Chara_*` UI sprites. `chara.manifest` is read at
-    start but `PICRECOMP_LOG_FILES` never lists the `chara` bundle itself (the list may be incomplete).
-  - Debugging aids that exist: `PICRECOMP_DEBUG_FRAME=<frame>` (every draw and pass image of that frame),
-    `PICRECOMP_DEBUG_DATA=1` (first vertex floats and cbufs per draw), `PICRECOMP_LOG_UPLOADS`, `PICRECOMP_LOG_FILES`, gdb (the
-    generated functions are `f_<guest address>`, the Cpu* is `$rdi`, x registers are `((unsigned long*)$rdi)[n]`). Test input:
-    `PICRECOMP_HOST_INPUT` times are frames; `lstick` moves the stick.
+  The jumping character in the main menu's top-left circle now appears (Linux, Vulkan, NVIDIA RTX 5070 Ti).
+  The game assembles its equipped character parts using `gs.CharaRendering.Render` before the main menu opens: a camera
+  renders four expressions into a 128x128 RenderTexture, then `Texture2D.ReadPixels` / `Apply` turns them into the menu's
+  sprites. The Vulkan texture-to-buffer copy rejected destinations below `HEAP_BASE`, but NVN buffer addresses are CPU
+  addresses and may live in the alias region: the portrait readback here targets `0x71508bb800`. Each copy was silently
+  skipped, leaving blank portrait images. The heap-only restriction is removed; no game code or assets changed.
+  Verified by running the installed game through the first-run tips into its main menu; the same scripted run before the
+  fix had no character, and after the fix shows the red body, eyes and turquoise ears. Captures 15 frames apart at
+  frames 1900/1915/1930 confirm its jumping motion; the menu runs at 60 fps with no skipped draws. The original expression renders
+  were already correct. Earlier draw tracing at frames 1250-1530 missed their one-time creation before the menu opened.
+  The paw cursor is the game's stick pointer: it shows once the left stick moves, follows it and ignores the d-pad (as on Eden).
+  The "Easy Puzzle!" tutorial video now plays in color (Linux, Vulkan, NVIDIA RTX 5070 Ti). Three runtime gaps hid it:
+  - Its VideoClip is embedded in a Unity asset bundle, with an `archive:/...resource` URL. The movie extractor ignored
+    the supplied `ClientStreamReader` and tried opening that URL as a host file. FFmpeg now reads and seeks through the
+    guest reader callbacks, using guest-addressed scratch memory and the current extractor thread's CPU state.
+  - This Unity version uses direct extractor exports, metadata assignment / 64-bit lookup, `Buffer::Data`, and the
+    decoder's output-buffer-plus-format overload (vtable slot 17). They now use the host implementations throughout;
+    the original SDK methods cannot operate on the host replacement objects.
+  - Unity supplies a client buffer and retains its pointer for uploading. Returning a different buffer left its original
+    Y/UV planes untouched (green after decoding was enabled). The decoder now copies tightly packed NV12 into the supplied
+    allocation, checks its capacity, and reports the matching stride, UV offset and slice height.
+  Verified with a scratch save and an in-memory selection of the actual Easy Puzzle tip: the original black panel becomes
+  an advancing video in captures at frames 1500/1800/2100, and playback reaches/restarts its loop without a crash.
+  `tools/test_movie_source.sh` tests synthetic MP4 decoding/seeking through short callback reads; `tools/test_movie_hle.sh`
+  tests metadata ownership, reader ABI/register preservation, and packed client output at 580x326 and odd dimensions,
+  including bounds and EOS. Both pass, also under ASan/UBSan. No game code regeneration or asset changes are needed.
+  No puzzle gameplay was tested; other tutorial clips and Windows playback remain unverified.
+  Debugging aids: `PICRECOMP_DEBUG_FRAME=<frame>` dumps each draw and pass image; `PICRECOMP_DEBUG_DATA=1` adds vertex
+  floats and constant buffers. `PICRECOMP_LOG_UPLOADS` / `PICRECOMP_LOG_FILES` trace uploads and RomFS reads.
+  Scripted host inputs use `PICRECOMP_HOST_INPUT` with frame times (`lstick` moves the stick).
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort

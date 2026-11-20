@@ -3080,7 +3080,9 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
 
 static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     NvnTexture *t = (NvnTexture *)(uintptr_t)src->tex;
-    if (!t || !dst || dst < HEAP_BASE) return;
+    // GPU buffer addresses can be in the alias region below HEAP_BASE. PICROSS X reads its character portraits
+    // into such a buffer before uploading the menu sprites; rejecting it leaves all four expressions blank.
+    if (!t || !dst) return;
     t = alias_read(t);
     vk_end_pass();
     const FormatInfo *fi;

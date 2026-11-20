@@ -61,7 +61,7 @@ GEN_SRC  := $(shell ls -S $(foreach m,$(GAME_MODULES),$(wildcard $(GEN)/$(firstw
 GEN_OBJ  := $(patsubst %.c,$(GOBJ)/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(GOBJ)/tools/gamelib_entry.o
 RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) \
             $(wildcard runtime/nvn/*.c) $(wildcard runtime/nvn/maxwell/*.c) runtime/platform/$(PLATFORM).c
-RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) \
+RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/hle/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) \
             $(wildcard runtime/nvn/maxwell/*.h) $(wildcard runtime/nvn/vulkan/*.h) $(wildcard runtime/ui/*.h)
 UI_SRC   := $(wildcard runtime/ui/*.cpp)
 UI_OBJ   := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(UI_SRC))

@@ -5,21 +5,24 @@
 //   9 GetSampleTrackIndex(size_t*), 10 Read(Buffer*), 11 Advance(), 12 GetSampleTime(int64*),
 //   15 SetDataSource(DataSource*, const char* path).
 // Decoder slots: 2 Configure(MediaData*), 3 RegisterClientEvents(EventType*[4]), 4 GetOutputFormat(MediaData*),
-//   6 Start, 9 AcquireInputBufferIndex(int*, int*), 10 GetInputBuffer(int, Buffer*),
+//   5 Start, 6 Stop, 9 AcquireInputBufferIndex(int*, int*), 10 GetInputBuffer(int, Buffer*),
 //   11 SendInputBufferForDecode(int, int off, int size, int64 time, uint32 flags),
 //   12 AcquireOutputBufferIndex(int*, int64*, uint32*, int*), 13 GetOutputBuffer(int, Buffer*),
-//   15 ReleaseOutputBufferIndex(int), 18 GetOutputBufferFormat(int, MediaData*).
+//   15 ReleaseOutputBufferIndex(int), 17 GetOutputBuffer(int, Buffer*, MediaData*),
+//   18 GetOutputBufferFormat(int, MediaData*).
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/time.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../hle.h"
 #include "../settings.h"
+#include "movie_source.h"
 
 #define MOVIE_EOS 4u
 
@@ -52,8 +55,9 @@ static void md_set_str(MediaData *m, const char *k, const char *v) {
 }
 
 HLE_FUNC("_ZN5movie9MediaDataC1Ev", md_ctor) { *(uint64_t *)(uintptr_t)c->x[0] = (uint64_t)(uintptr_t)calloc(1, sizeof(MediaData)); }
-HLE_FUNC("_ZN5movie9MediaDataC1ERKS0_", md_copy) {
-    MediaData *src = md(c->x[1]), *dst = calloc(1, sizeof(MediaData));
+static void md_assign_data(MediaData *dst, const MediaData *src) {
+    if (dst == src) return;
+    md_clear(dst);
     for (int i = 0; i < src->n; i++) {
         dst->e[i].key = strdup(src->e[i].key);
         dst->e[i].sval = src->e[i].sval ? strdup(src->e[i].sval) : NULL;
@@ -62,8 +66,13 @@ HLE_FUNC("_ZN5movie9MediaDataC1ERKS0_", md_copy) {
     }
     dst->n = src->n;
     dst->codecpar = src->codecpar;
+}
+HLE_FUNC("_ZN5movie9MediaDataC1ERKS0_", md_copy) {
+    MediaData *dst = calloc(1, sizeof(MediaData));
+    md_assign_data(dst, md(c->x[1]));
     *(uint64_t *)(uintptr_t)c->x[0] = (uint64_t)(uintptr_t)dst;
 }
+HLE_FUNC("_ZN5movie9MediaDataaSERKS0_", md_assign) { md_assign_data(md(c->x[0]), md(c->x[1])); }
 HLE_FUNC("_ZN5movie9MediaDataD1Ev", md_dtor) {
     MediaData *m = *(MediaData **)(uintptr_t)c->x[0];
     if (m) { md_clear(m); free(m); }
@@ -75,6 +84,17 @@ HLE_FUNC("_ZNK5movie9MediaData9FindInt32EPKcPi", md_find_int32) {
     const char *k = (const char *)(uintptr_t)c->x[1];
     for (int i = 0; i < m->n; i++)
         if (!m->e[i].is_str && !strcmp(m->e[i].key, k)) { *(int32_t *)(uintptr_t)c->x[2] = (int32_t)m->e[i].ival; c->x[0] = 1; return; }
+    c->x[0] = 0;
+}
+HLE_FUNC("_ZNK5movie9MediaData9FindInt64EPKcPl", md_find_int64) {
+    MediaData *m = md(c->x[0]);
+    const char *k = (const char *)(uintptr_t)c->x[1];
+    for (int i = 0; i < m->n; i++)
+        if (!m->e[i].is_str && !strcmp(m->e[i].key, k)) { *(int64_t *)(uintptr_t)c->x[2] = m->e[i].ival; c->x[0] = 1; return; }
+    c->x[0] = 0;
+}
+HLE_FUNC("_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_", md_find_rect) {
+    // Our decoder publishes the full image dimensions, without a separate crop rectangle.
     c->x[0] = 0;
 }
 HLE_FUNC("_ZNK5movie9MediaData10FindStringEPKcPS2_", md_find_string) {
@@ -115,6 +135,7 @@ HLE_FUNC("_ZN5movie6BufferC1ERKS0_", buf_copy) { *BUF(c->x[0]) = *BUF(c->x[1]); 
 HLE_FUNC("_ZN5movie6BufferaSERKS0_", buf_assign) { *BUF(c->x[0]) = *BUF(c->x[1]); }
 HLE_FUNC("_ZN5movie6BufferD1Ev", buf_dtor) { (void)c; }
 HLE_FUNC("_ZNK5movie6Buffer4BaseEv", buf_base) { c->x[0] = BUF(c->x[0])->base; }
+HLE_FUNC("_ZNK5movie6Buffer4DataEv", buf_data) { MBuffer *b = BUF(c->x[0]); c->x[0] = b->base + b->offset; }
 HLE_FUNC("_ZNK5movie6Buffer4SizeEv", buf_size) { c->x[0] = (uint32_t)BUF(c->x[0])->size; }
 HLE_FUNC("_ZNK5movie6Buffer6OffsetEv", buf_offset) { c->x[0] = (uint32_t)BUF(c->x[0])->offset; }
 HLE_FUNC("_ZNK5movie6Buffer8CapacityEv", buf_capacity) { c->x[0] = BUF(c->x[0])->capacity; }
@@ -132,6 +153,7 @@ HLE_FUNC("_ZN5movie6Buffer12SetInt32DataEi", buf_set_i32) { BUF(c->x[0])->i32 = 
 
 HLE_FUNC("_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", movie_set_allocator) { (void)c; }
 HLE_FUNC("_ZN5movie17SetThreadPriorityEi", movie_set_thread_priority) { (void)c; }
+HLE_FUNC("_ZN5movie11SetCoreMaskEm", movie_set_core_mask) { (void)c; }
 HLE_FUNC("_ZN5movie17GetThreadPriorityEv", movie_get_thread_priority) { c->x[0] = 16; }
 
 // ------------------------------------------------------------------ helpers
@@ -164,12 +186,59 @@ static void ok(Cpu *c) { c->x[0] = 0; }
 // ------------------------------------------------------------------ Extractor
 typedef struct {
     AVFormatContext *fmt;
+    AVIOContext *io;
+    MovieSource source;
+    Cpu *io_cpu;  // the current, serialized extractor call's guest thread
+    uint64_t reader, reader_handle;
+    uint8_t *reader_scratch;
     int map[16], ntracks;  // exposed track -> stream
     uint64_t selected;  // bitmask of streams
     AVPacket *pkt;
     bool have_pkt, eof;
     bool skippable;  // the launch opening (forced on the first launch, no save yet): A / B / + ends it
 } Extractor;
+
+#define MOVIE_IO_SIZE 32768
+
+// ClientStreamReader: Open(path, handle*), Read(handle, offset, dst, size), Close(handle), GetSize(handle, size*).
+// Unity's archive:/ VideoClips live inside loaded asset bundles, so the supplied reader (not the URL as a host
+// filename) owns access to their bytes. Scratch buffers must be guest addresses: a reader may pass them through IPC.
+static uint64_t ex_reader_call(Extractor *e, unsigned slot, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+    Cpu *c = e->io_cpu;
+    Cpu saved = *c;
+    uint64_t *vt = *(uint64_t **)(uintptr_t)e->reader;
+    c->x[0] = e->reader;
+    c->x[1] = a1; c->x[2] = a2; c->x[3] = a3; c->x[4] = a4;
+    guest_call(c, vt[slot]);
+    uint64_t result = c->x[0];
+    *c = saved;
+    return result;
+}
+
+static int64_t ex_reader_read(void *opaque, int64_t off, uint8_t *dst, int size) {
+    Extractor *e = opaque;
+    if (size > MOVIE_IO_SIZE) size = MOVIE_IO_SIZE;
+    int64_t n = (int64_t)ex_reader_call(e, 3, e->reader_handle, (uint64_t)off,
+                                     (uint64_t)(uintptr_t)e->reader_scratch + 16, (uint64_t)size);
+    if (n < 0 || n > size) return AVERROR(EIO);
+    memcpy(dst, e->reader_scratch + 16, (size_t)n);
+    return n;
+}
+
+static void ex_close(Extractor *e, bool close_reader) {
+    if (e->fmt) avformat_close_input(&e->fmt);
+    if (e->io) {
+        av_freep(&e->io->buffer);
+        avio_context_free(&e->io);
+    }
+    av_packet_free(&e->pkt);
+    if (close_reader && e->reader_handle) ex_reader_call(e, 4, e->reader_handle, 0, 0, 0);
+    e->reader = e->reader_handle = 0;
+    e->have_pkt = e->eof = false;
+    e->skippable = false;
+    e->selected = 0;
+    e->ntracks = 0;
+}
 
 static bool g_skip_held;           // ex_fill: A / B held at the last look
 static double g_skip_pressed_at;    // when they were pressed (0 = not yet)
@@ -212,14 +281,39 @@ static void ex_fill(Extractor *e) {
 
 static void ex_set_data_source(Cpu *c) {
     Extractor *e = self_state(c);
+    uint64_t reader = c->x[1];
     const char *path = (const char *)(uintptr_t)c->x[2];
+    ex_close(e, true);
     // "rom:/region_common/movie/title.webm" -> extracted/romfs/region_common/movie/title.webm
     const char *rel = path && strstr(path, ":/") ? strstr(path, ":/") + 2 : path;
     char host[1024];
     snprintf(host, sizeof host, "%s/%s", g_romfs_dir, rel ? rel : "");
-    LOG("[movie] open %s -> %s\n", path ? path : "(null)", host);
-    if (avformat_open_input(&e->fmt, host, NULL, NULL) < 0 || avformat_find_stream_info(e->fmt, NULL) < 0) {
+    const char *input = host;
+    if (reader) {
+        LOG("[movie] open %s through ClientStreamReader\n", path ? path : "(null)");
+        e->reader = reader;
+        if (!e->reader_scratch) e->reader_scratch = hle_alloc(MOVIE_IO_SIZE + 16);
+        memset(e->reader_scratch, 0, 16);
+        uint64_t opened = ex_reader_call(e, 2, (uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)e->reader_scratch, 0, 0);
+        e->reader_handle = *(uint64_t *)e->reader_scratch;
+        if (!(opened & 1) || !e->reader_handle) {
+            LOG("[movie] stream open failed\n");
+            ex_close(e, true); c->x[0] = 1; return;
+        }
+        ex_reader_call(e, 5, e->reader_handle, (uint64_t)(uintptr_t)e->reader_scratch + 8, 0, 0);
+        e->source = (MovieSource){.opaque = e, .size = *(int64_t *)(e->reader_scratch + 8), .read_at = ex_reader_read};
+        e->io = movie_source_io(&e->source);
+        e->fmt = avformat_alloc_context();
+        if (e->source.size <= 0 || !e->io || !e->fmt) {
+            ex_close(e, true); c->x[0] = 1; return;
+        }
+        e->fmt->pb = e->io;
+        e->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+        input = NULL;
+    } else LOG("[movie] open %s -> %s\n", path ? path : "(null)", host);
+    if (avformat_open_input(&e->fmt, input, NULL, NULL) < 0 || avformat_find_stream_info(e->fmt, NULL) < 0) {
         LOG("[movie] cannot open %s\n", host);
+        ex_close(e, true);
         c->x[0] = 1;
         return;
     }
@@ -345,7 +439,7 @@ static void movie_track(int kind, void *p, bool add) {
 
 static void ex_dtor(Cpu *c) {
     Extractor *e = self_state(c);
-    if (e && e->fmt) avformat_close_input(&e->fmt);
+    if (e) ex_close(e, true);
     if (e) movie_track(0, e, false);
     c->x[0] = 0;
 }
@@ -357,7 +451,13 @@ static void movie_log_slot(Cpu *c) {
 }
 
 #define EX_LOCKED(fn) \
-    static void fn##_l(Cpu *c) { pthread_mutex_lock(&ex_lock); fn(c); pthread_mutex_unlock(&ex_lock); }
+    static void fn##_l(Cpu *c) { \
+        pthread_mutex_lock(&ex_lock); \
+        Extractor *e = self_state(c); \
+        if (e) e->io_cpu = c; \
+        fn(c); \
+        pthread_mutex_unlock(&ex_lock); \
+    }
 EX_LOCKED(ex_dtor)
 EX_LOCKED(ex_get_track_count)
 EX_LOCKED(ex_get_track_config)
@@ -369,6 +469,16 @@ EX_LOCKED(ex_advance)
 EX_LOCKED(ex_get_sample_time)
 EX_LOCKED(ex_cached_duration)
 EX_LOCKED(ex_set_data_source)
+
+// Some Unity versions call the exported wrappers directly instead of dispatching through the public vtable.
+// Those SDK wrappers expect native private objects at +8 and must not run against the host-side replacements.
+HLE_FUNC("_ZN5movie9Extractor13GetTrackCountEPi", movie_ex_track_count) { ex_get_track_count_l(c); }
+HLE_FUNC("_ZN5movie9Extractor21GetTrackConfigurationEiPNS_9MediaDataE", movie_ex_track_config) { ex_get_track_config_l(c); }
+HLE_FUNC("_ZN5movie9Extractor13SetDataSourceEPKc", movie_ex_source_path) {
+    c->x[2] = c->x[1]; c->x[1] = 0;
+    ex_set_data_source_l(c);
+}
+HLE_FUNC("_ZN5movie9ExtractorD1Ev", movie_ex_dtor) { ex_dtor_l(c); }
 
 HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", movie_extractor_ctor) {
     uint64_t vt = g_ex_vt;
@@ -473,11 +583,13 @@ static void dec_configure(Cpu *c) {
     d->video = p->codec_type == AVMEDIA_TYPE_VIDEO;
     d->width = p->width;
     d->height = p->height;
-    d->stride = (p->width + 255) & ~255;
+    // CPU output is tightly packed NV12. Unity allocates width * height * 3/2 bytes for its client buffer;
+    // the hardware decoder's 256-byte pitch / 16-row padding must not leak into that software copy contract.
+    d->stride = (p->width + 1) & ~1;
     d->sample_rate = p->sample_rate;
     d->channels = p->ch_layout.nb_channels;
     d->in_cap = d->video ? 4 << 20 : 256 << 10;
-    d->out_cap = d->video ? (uint32_t)(d->stride * ((d->height + 15) & ~15) * 3 / 2) : 64 << 10;
+    d->out_cap = d->video ? (uint32_t)(d->stride * ((d->height + 1) & ~1) * 3 / 2) : 64 << 10;
     for (int i = 0; i < NIN; i++) d->in_mem[i] = buf_get(d->in_cap);
     for (int i = 0; i < NOUT; i++) d->out_mem[i] = buf_get(d->out_cap);
     LOG("[movie] decoder %s configured: %dx%d %d Hz %d ch\n", codec->name, d->width, d->height, d->sample_rate, d->channels);
@@ -496,9 +608,10 @@ static void dec_output_format(Decoder *d, MediaData *m) {
         md_set_str(m, "mime", "video/raw");
         md_set_int(m, "width", d->width);
         md_set_int(m, "height", d->height);
+        md_set_int(m, "slice-height", (d->height + 1) & ~1);
         md_set_int(m, "nv12-y-stride", d->stride);
         md_set_int(m, "nv12-y-offset", 0);
-        md_set_int(m, "nv12-uv-offset", d->stride * ((d->height + 15) & ~15));
+        md_set_int(m, "nv12-uv-offset", d->stride * ((d->height + 1) & ~1));
         md_set_int(m, "nv12-colorspace", 0);
     } else {
         md_set_str(m, "mime", "audio/raw");
@@ -592,14 +705,14 @@ static bool emit_frame(Decoder *d, AVFrame *f, int64_t time, uint32_t flags) {
     if (flags & MOVIE_EOS) {
         size = 0;
     } else if (d->video) {
-        int h = d->height, w = d->width, uv_off = d->stride * ((h + 15) & ~15);
+        int h = d->height, w = d->width, uv_off = d->stride * ((h + 1) & ~1);
         for (int y = 0; y < h; y++) memcpy(o + y * d->stride, f->data[0] + y * f->linesize[0], w);
-        for (int y = 0; y < h / 2; y++) {  // interleave U and V into NV12
+        for (int y = 0; y < (h + 1) / 2; y++) {  // interleave U and V into NV12
             uint8_t *uv = o + uv_off + y * d->stride;
             const uint8_t *u = f->data[1] + y * f->linesize[1], *v = f->data[2] + y * f->linesize[2];
-            for (int x = 0; x < w / 2; x++) { uv[2 * x] = u[x]; uv[2 * x + 1] = v[x]; }
+            for (int x = 0; x < (w + 1) / 2; x++) { uv[2 * x] = u[x]; uv[2 * x + 1] = v[x]; }
         }
-        size = (uint32_t)(uv_off + d->stride * (h / 2));
+        size = (uint32_t)(uv_off + d->stride * ((h + 1) / 2));
     } else {
         // planar float -> interleaved s16
         int ch = f->ch_layout.nb_channels, n = f->nb_samples;
@@ -710,7 +823,7 @@ static void dec_get_output_buffer(Cpu *c) {
         if (!d->sws)
             d->sws = sws_getContext(w, h, AV_PIX_FMT_NV12, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
         if (!d->rgba) d->rgba = malloc((size_t)w * h * 4);
-        const uint8_t *src[2] = {d->out_mem[i], d->out_mem[i] + d->stride * ((h + 15) & ~15)};
+        const uint8_t *src[2] = {d->out_mem[i], d->out_mem[i] + d->stride * ((h + 1) & ~1)};
         int src_stride[2] = {d->stride, d->stride};
         uint8_t *dst[1] = {d->rgba};
         int dst_stride[1] = {w * 4};
@@ -719,11 +832,28 @@ static void dec_get_output_buffer(Cpu *c) {
         c->x[0] = 0;
         return;
     }
+    if (b->base) {
+        // The player retains this client allocation separately from Buffer::Data(). Replacing the pointer leaves
+        // the upload reading untouched Y/UV planes (a solid green video in PICROSS X).
+        if (b->capacity < d->out_size[i]) { c->x[0] = 1; return; }
+        memcpy((void *)(uintptr_t)b->base, d->out_mem[i], d->out_size[i]);
+        b->offset = 0;
+        b->size = (int32_t)d->out_size[i];
+        c->x[0] = 0;
+        return;
+    }
     memset(b, 0, sizeof *b);
     b->base = (uint64_t)(uintptr_t)d->out_mem[i];
     b->capacity = d->out_cap;
     b->size = (int32_t)d->out_size[i];
     c->x[0] = 0;
+}
+
+static void dec_get_output_buffer_with_format(Cpu *c) {
+    Decoder *d = self_state(c);
+    uint64_t format = c->x[3];
+    dec_get_output_buffer(c);
+    if (!c->x[0] && format) dec_output_format(d, md(format));
 }
 
 static void dec_release_output(Cpu *c) {
@@ -762,7 +892,7 @@ static void dec_dtor(Cpu *c) {
 RT_ON_RESET(movie_reset) {
     for (int i = 0; i < MAX_MOVIE_OBJS; i++) {
         Extractor *e = g_movie_objs[0][i];
-        if (e && e->fmt) avformat_close_input(&e->fmt);
+        if (e) ex_close(e, false);  // guest threads are stopped; their stream reader is about to be discarded
         Decoder *d = g_movie_objs[1][i];
         if (d && d->ctx) avcodec_free_context(&d->ctx);
         g_movie_objs[0][i] = g_movie_objs[1][i] = NULL;
@@ -784,7 +914,7 @@ HLE_FUNC("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11Dec
         HostFn f[19] = {dec_dtor, dec_dtor, dec_configure, dec_register_events, dec_get_output_format,
                         dec_start, dec_stop, ok, ok, dec_acquire_input, dec_get_input_buffer, dec_send_input,
                         dec_acquire_output, dec_get_output_buffer, dec_get_counts, dec_release_output, ok,
-                        movie_log_slot, dec_get_output_buffer_format};
+                        dec_get_output_buffer_with_format, dec_get_output_buffer_format};
         vt = g_dec_vt = make_vtable(f, 19, "Decoder");
     }
     uint64_t *self = (uint64_t *)(uintptr_t)c->x[0];
