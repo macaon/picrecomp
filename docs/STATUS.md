@@ -49,6 +49,18 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   unlocked an extra puzzle (the cross-save feature, see the S4 notes). No update package exists here; nothing past the menu played.
 - PICROSS S Doraemon & F Characters edition (`01002b901fa74000`, base only, v1.0.0, released 2025-03-26): no code-side work; imports (11 minutes: a
   larger game) and reaches its puzzle select at 60 fps on a fresh save (Vulkan, Linux). Nothing played.
+- PICROSS S CAPCOM CLASSICS edition (`01009ad023f90000`, released 2025-11-27; base v1.0.0 and update v1.0.2 / 131072): imports and
+  reaches its puzzle select at 60 fps on a fresh save, base alone and base with the update (Vulkan, Linux). The first game of
+  the 2025 SDK (20.5.17); four things were new:
+  - **hactool** (`third_party/hactool/nca.c`) refused the update's patch section: its subsection table is followed by
+    0x4200 more bytes, and its total size counts the data up to the relocation table only. Both checks accept that now (the
+    IVFC hashes of the patched RomFS verify).
+  - **Symbols:** only `DT_GNU_HASH` (see above), so nothing was found until `nso.py` and `loader.c` read it.
+  - **The sdk's own exceptions:** landing pads in every module, not just `main` (a catch in the sdk's clock code).
+  - **Time:** the SDK's `CalculateSystemClockCurrentTimespec` reads a ContinuousAdjustmentTimePoint at `+0xD0` of the time
+    service's shared memory and wants its clock source id to match the contexts': without it `clock_gettime(CLOCK_REALTIME)`
+    failed and `std::chrono::system_clock::now()` threw out of the game (terminate). All zero but the id is no adjustment.
+  Nothing played.
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
@@ -240,7 +252,8 @@ The per-build parts of a game used to be hand-found: the addresses of the calls 
 relocations of the newer toolchain. They are the generator's own work now (`tools/gen.py`, `nso.py`, `lsda.py`), and
 manifests carry no code addresses:
 - **Landing pads.** `lsda.py` reads the compiler's own exception tables (`.eh_frame_hdr`, the LSDA call-site records). For
-  the game's `main` the generator wraps every call the tables say can unwind into a pad of its own function
+  every module the generator wraps every call the tables say can unwind into a pad of its own function (the sdk's own
+  catches matter in the 2025 SDK: PICROSS S CAPCOM CLASSICS edition)
   (`rt_call_with_landing` / `rt_invoke_with_landing`, the guest unwinder's jump back becomes a `longjmp` to that frame)
   and gives every pad a label. Shield Hero: 3,751 functions with pads, 44,425 wrapped calls; S: 2,119 and 21,704.
   Every path that throws is covered, not just the ones that were hit while testing.
@@ -248,6 +261,9 @@ manifests carry no code addresses:
   `rt_resume_landing`.
 - **RELR** (`DT_RELR`, the compact relative relocations of a game's 2024 modules) is read by `nso.py`, and applied by
   `runtime/loader.c`.
+- **Symbols from `DT_GNU_HASH`.** The 2025 toolchain's modules have no `DT_HASH`, which the symbol count came from: they
+  loaded with no symbols at all (no `nn::init::Start`, no imports). `nso.py` and `runtime/loader.c` count them from the
+  GNU hash table (the symbols past `symoffset`, to the end of the last bucket's chain) when there is no `DT_HASH`.
 - **A rebuild from the start screen** (`runtime/gamebuild.c`, which calls `gen.py`) is therefore right for every game; it
   used to skip the per-game patches.
 - **Versions.** Since nothing is tied to an executable, the base game alone imports for every game, and any update does.
@@ -256,8 +272,8 @@ manifests carry no code addresses:
   350 now), and the first PICROSS S (2017) has no `nn::init::Start`: its rtld runs the startup steps itself, so
   `runtime/main.c` (`rtld_old_start`) runs the same sequence from the sdk's and the game's own symbols (its SDK has no
   `InitializeVirtualAddressMemory` either, now optional). It reaches its tutorial puzzle. Measured: for 12 of 14 games the base package's main executable differs from the update's build.
-- **Cost of the generator change:** the library ID changed once (every installed game's code was rebuilt, 3 to 5 minutes
-  each); a library with another ID is shown as "Game code not built yet" and rebuilt by importing the game again (its own
+- **Cost of the generator change:** the library ID has changed twice (a third of an hour to rebuild a few games, an hour and a half
+  for all eighteen; 3 to 13 minutes each); a library with another ID is shown as "Game code not built yet" and rebuilt by importing the game again (its own
   packages). There is no one-click rebuild on the start screen.
 
 ## PICROSS S+
