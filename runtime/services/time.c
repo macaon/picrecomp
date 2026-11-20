@@ -33,6 +33,11 @@ static void time_shmem_map(KSharedMem *s) {
     // 0xC8 automatic correction enabled
     *(uint32_t *)(m + 0xC8) = 0;
     m[0xCC] = 0;
+    // 0xD0: LockFreeAtomicType<ContinuousAdjustmentTimePoint> (a newer SDK's CalculateSystemClockCurrentTimespec reads it:
+    // PICROSS S CAPCOM CLASSICS edition, whose std::chrono::system_clock::now() threw without it). All zero is no
+    // adjustment (scale 0); what it checks is that the clock source id at +0x30 is the system clock context's.
+    *(uint32_t *)(m + 0xD0) = 0;
+    memcpy(m + 0xD0 + 0x30, clock_uuid, 16);
 }
 
 static void system_clock(Service *s, IpcReq *req, IpcResp *resp) {
