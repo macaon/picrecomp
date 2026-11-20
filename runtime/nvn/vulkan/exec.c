@@ -80,6 +80,8 @@ static void wait_account(uint64_t ns) {
 
 static void cq_resolve_done(uint64_t done);
 
+static void vk_ring_flush(void);
+static void vk_readback_invalidate(void);
 void vk_wait_seq(uint64_t seq) {
     if (!seq) { wait_why = NULL; return; }
     VkSemaphoreWaitInfo wi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1, .pSemaphores = &g_vk.timeline,
@@ -90,7 +92,10 @@ void vk_wait_seq(uint64_t seq) {
     cum_wait += SDL_GetTicksNS() - t0;
     wait_account(SDL_GetTicksNS() - t0);
     if (r == VK_TIMEOUT) LOG("[vk] GPU did not finish submission %llu within 10 s (device lost?)\n", (unsigned long long)seq);
-    else if (r == VK_SUCCESS) cq_resolve_done(seq);  // (the game reads its timing counters after waiting)
+    else if (r == VK_SUCCESS) {
+        cq_resolve_done(seq);  // (the game reads its timing counters after waiting)
+        vk_readback_invalidate();  // (and the readback buffer, which the CPU reads next)
+    }
     else {
         extern void vk_devlost_dump(void);
         vk_devlost_dump();
@@ -389,6 +394,7 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
     {
         PROF_T0();
         dl_note("submit %llu", (unsigned long long)submit_seq + 1);
+        vk_ring_flush();  // (the CPU's writes into the transient ring reach the GPU: needed on non-coherent memory)
         VkResult sr = vkQueueSubmit2(g_vk.queue, 1, &si, VK_NULL_HANDLE);
         if (sr == VK_ERROR_DEVICE_LOST) vk_devlost_dump();
         VK_CHECK(sr);
@@ -516,25 +522,42 @@ VkSpan vk_transient(uint64_t size, uint64_t align) {
     return (VkSpan){chunks[pick].buf, 0, chunks[pick].ptr};
 }
 
+// The ring is written by the CPU and read by the GPU: a flush makes the writes visible when the memory is not host-coherent
+// (VMA returns at once for coherent memory, as on most desktop GPUs). Only the chunks written for this submission.
+static void vk_ring_flush(void) {
+    uint64_t pending = vk_pending_seq();
+    for (int i = 0; i < nchunks; i++)
+        if (chunks[i].used && chunks[i].seq == pending) vmaFlushAllocation(g_vk.vma, chunks[i].mem, 0, chunks[i].used);
+}
+
 // GPU -> CPU copies: the ring is write-combined (often device-local over the BAR), where CPU reads crawl (a
 // 1280x720 screenshot took 7 s). Readbacks use one host-cached buffer instead. Every user waits for the GPU and
 // reads the data before the next readback (render thread), so a single grow-only buffer suffices.
+static VkBuffer rb_buf;
+static VmaAllocation rb_mem;
+static uint8_t *rb_ptr;
+static uint64_t rb_cap, rb_used;  // rb_used: what the last readback asked for (to be invalidated once the GPU is done)
+
+// After the GPU has finished: the CPU must not read stale lines of memory that is not host-coherent
+static void vk_readback_invalidate(void) {
+    if (!rb_used) return;
+    vmaInvalidateAllocation(g_vk.vma, rb_mem, 0, rb_used);
+    rb_used = 0;
+}
+
 VkSpan vk_readback(uint64_t size) {
-    static VkBuffer buf;
-    static VmaAllocation mem;
-    static uint8_t *ptr;
-    static uint64_t cap;
-    if (size > cap) {
-        if (buf) { vk_wait_seq(submit_seq); vmaDestroyBuffer(g_vk.vma, buf, mem); }
-        cap = (size + (16 << 20) - 1) & ~((16ull << 20) - 1);
-        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = cap, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    if (size > rb_cap) {
+        if (rb_buf) { vk_wait_seq(submit_seq); vmaDestroyBuffer(g_vk.vma, rb_buf, rb_mem); }
+        rb_cap = (size + (16 << 20) - 1) & ~((16ull << 20) - 1);
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = rb_cap, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
                                       .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
         VmaAllocationInfo info;
-        VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &buf, &mem, &info));
-        ptr = info.pMappedData;
+        VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &rb_buf, &rb_mem, &info));
+        rb_ptr = info.pMappedData;
     }
-    return (VkSpan){buf, 0, ptr};
+    rb_used = size;
+    return (VkSpan){rb_buf, 0, rb_ptr};
 }
 
 VkSpan vk_transient_copy(const void *data, uint64_t size, uint64_t align) {
