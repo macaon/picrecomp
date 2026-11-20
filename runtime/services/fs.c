@@ -438,6 +438,16 @@ static uint32_t errno_result(void) {
 
 static uint32_t file_flush(int fd) { return host_fsync(fd) < 0 ? errno_result() : 0; }
 
+// The guest closes an IFile / IDirectory by dropping its last reference: the host descriptor goes with it (a long session
+// that opens a file per load would otherwise run out of them, and then loads and saves fail)
+static void file_close(Service *s) {
+    HostFile *f = s->state;
+    if (!f) return;
+    close(f->fd);
+    free(f);
+    s->state = NULL;
+}
+
 static void file(Service *s, IpcReq *req, IpcResp *resp) {
     HostFile *f = s->state;
     switch (req->cmd) {
@@ -474,6 +484,14 @@ static void file(Service *s, IpcReq *req, IpcResp *resp) {
     }
     default: LOG("[fs] IFile cmd %u (ok)\n", req->cmd);
     }
+}
+
+static void directory_close(Service *s) {
+    HostDir *d = s->state;
+    if (!d) return;
+    closedir(d->d);
+    free(d);
+    s->state = NULL;
 }
 
 static void directory(Service *s, IpcReq *req, IpcResp *resp) {
@@ -575,7 +593,9 @@ static void filesystem(Service *s, IpcReq *req, IpcResp *resp) {
         HostFile *f = calloc(1, sizeof *f);
         f->fd = fd;
         strlcpy(f->path, p, sizeof f->path);
-        ipc_return_object(resp, service_new("IFile", file, f));
+        Service *svc = service_new("IFile", file, f);
+        svc->on_close = file_close;
+        ipc_return_object(resp, svc);
         break;
     }
     case 9: {  // OpenDirectory(mode)
@@ -585,7 +605,9 @@ static void filesystem(Service *s, IpcReq *req, IpcResp *resp) {
         hd->d = d;
         hd->mode = (int)IN(uint32_t, 0);
         snprintf(hd->path, sizeof hd->path, "%s", p);
-        ipc_return_object(resp, service_new("IDirectory", directory, hd));
+        Service *svc = service_new("IDirectory", directory, hd);
+        svc->on_close = directory_close;
+        ipc_return_object(resp, svc);
         break;
     }
     case 10: break;  // Commit
