@@ -382,6 +382,9 @@ static uint32_t block_current(int64_t timeout_ns) {
             break;
         }
         if (!kwait(timeout_ns, &ts)) {
+            // The wait ran out, but a waker may have got the kernel lock first and handed this thread its mutex (or its
+            // signal) in the meantime: that result stands, a timeout on top of it would leave the SDK without a mutex it owns
+            if (t->wait_kind == WAIT_NONE) break;
             t->wait_kind = WAIT_NONE;
             t->wait_result = R_TIMEOUT;
             break;
