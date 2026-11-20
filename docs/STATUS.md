@@ -64,14 +64,38 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
 - PICROSS S SNK CLASSICS & NEOGEO edition (`0100122023706000`, released 2025-11-27; base v1.0.0 and update v1.0.2 / 131072): same SDK as
   Capcom's, nothing new needed: imports (base alone, and with the update) and reaches its puzzle select at 60 fps on a fresh
   save (Vulkan, Linux). The manifest name uses a plain `&`, not the fullwidth one of the package's file name. Nothing played.
-- PICROSS X : PICBITS VS UZBOROSS (`0100f08018840000`, v1.0, base only, released 2022-12-19; seven add-on skin packages in the folder
-  with it, listed as `addons` like S+'s): a different game from the S series (Japanese only: its NACP says so; the
-  language list follows). Imports and runs past the title screen to its first tutorial page at 60 fps, with the add-on
-  message ("additional content confirmed") shown at start (Vulkan, Linux). One shader did not translate: a bindless TEX
-  whose handle (MOV + LOP.OR from the driver's c2 tables) is built once at the start of the program and sampled after
-  branches; the search for the handle stopped at the block boundary, and a DEPBAR on the way would have ended it. It goes
-  on across blocks now (any instruction that writes the register still ends it) and a DEPBAR, which has no destination,
-  is passed; `check_handle_across_blocks` in `tools/test_translate.c` fails on the old translator. Nothing else played.
+- PICROSS X : PICBITS VS UZBOROSS (`0100f08018840000`, released 2022-12-19; base v1.0 and update v131072 / 1.1.0; the same base
+  executable in the Japanese and the USA packages): a different game from the S series. The first package tried was the
+  Japanese one, whose NACP lists Japanese only (its icon is `icon_Japanese.dat`: the importer picks the first icon there is when
+  there is no English one); the USA package has the 7 languages of the store listing and is the one installed now (the 7 add-on
+  skin packages are not imported). Imports and runs past the title screen, the first-run tips and into the main menu at 60 fps
+  (Vulkan, Linux). One shader did not translate: a bindless TEX whose handle (MOV + LOP.OR from the driver's c2 tables) is built
+  once at the start and sampled after branches; the search for the handle stopped at the block boundary, and a DEPBAR on the way
+  would have ended it. It goes on across blocks now and passes a DEPBAR (no destination); `check_handle_across_blocks` in
+  `tools/test_translate.c` fails on the old translator. The account name shown beside the character is "PicRecomp" (it was
+  "Link", left from the project this one came from).
+  **Open: the jumping character in the main menu's top-left circle is missing** (it is there on Eden). Known so far:
+  - The circle's ground shadow (an orange ellipse that squashes) and its landing ripples animate, so the animation runs; the
+    character itself is never drawn: skipping each of the 18 draws of the 1920x1080 scene pass in turn removes something else
+    (panels, menu art, labels...) but none is the character, and there are no skipped draws, no translate failures and no
+    render target other than 1920x1080 / 1280x720 (checked over frames 1250-1530; nothing draws into a target of 512 or less).
+  - The cursor (a paw) is the game's stick pointer: it shows once the left stick moves, follows the stick and ignores the d-pad
+    (as on Eden); that part works.
+  - One 128x128 RGBA8 texture is sampled by a draw in the menu and is entirely opaque black (0,0,0,255); it is never rendered
+    into (the content comes from a CPU upload, `PICRECOMP_LOG_UPLOADS` shows many 128x128 uploads of 65536 bytes). Not yet
+    shown to be the character's.
+  - The profile-image calls are not the cause: the game never calls `IProfile::GetImageSize` / `LoadImage`.
+  - From the ROM (Unity, IL2CPP; tools: `romfs.bin` parsed for its file table, UnityPy 1.25.4 on `Data/StreamingAssets/
+    AssetBundles/chara` and `avatar`, strings of `global-metadata.dat`): the character is assembled from parts (metadata:
+    `MainMenu_CharaFrame`, `customizeBodyId` / `customizeEyeId` / `customizeHeadAcceId` / `customizeWearId`); the `chara` bundle
+    has the `UI_Chara` prefab (children `Skin_Body`, `Skin_Eye`, `Skin_HeadAcce`, `Skin_Wear`, `Skin_Ear_*`, `SRT_Jump`...), 285
+    sprites (`MainGame_Chara_*`), animator controllers (`Picture_Chara`...) and the shaders `Sprites/Default` (the ordinary UI
+    one) and `JupiterSystem/JSAdditionShader`; the `avatar` bundle has `Custom_Chara_*` UI sprites. `chara.manifest` is read at
+    start but `PICRECOMP_LOG_FILES` never lists the `chara` bundle itself (the list may be incomplete).
+  - Debugging aids that exist: `PICRECOMP_DEBUG_FRAME=<frame>` (every draw and pass image of that frame),
+    `PICRECOMP_DEBUG_DATA=1` (first vertex floats and cbufs per draw), `PICRECOMP_LOG_UPLOADS`, `PICRECOMP_LOG_FILES`, gdb (the
+    generated functions are `f_<guest address>`, the Cpu* is `$rdi`, x registers are `((unsigned long*)$rdi)[n]`). Test input:
+    `PICRECOMP_HOST_INPUT` times are frames; `lstick` moves the stick.
 
 - The start screen's game cards: five to a row, two rows (ten) to a page, the "+" counting as a card; more games make
   pages. The "+" is always there (more games than the importer knows are coming), as the last slot. The cards sort
