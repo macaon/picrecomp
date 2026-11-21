@@ -113,7 +113,7 @@ static CmdRec *rec(Cpu *c, NvnCmdBuf *cb, uint32_t op, uint32_t extra) {
     uint32_t size = (uint32_t)((sizeof(CmdRec) + extra + 7) & ~7u);
     for (int tries = 0; !cb->host || cb->used + size + JUMP_RESERVE > cb->hcap; tries++) {
         if (!cb->callback || tries == 2) FATAL("nvn: out of command memory (need %u)\n", size);
-        LOG("[nvn] cmdbuf %llx out of command memory: chunk %llx size %#llx used %#llx, op %u needs %u (callback %llx)\n",
+        if (tries > 0) LOG("[nvn] cmdbuf %llx out of command memory (the callback gave none): chunk %llx size %#llx used %#llx, op %u needs %u (callback %llx)\n",
             (unsigned long long)cb->guest, (unsigned long long)cb->mem, (unsigned long long)cb->size,
             (unsigned long long)cb->used, op, size, (unsigned long long)cb->callback);
         uint64_t saved[8];
