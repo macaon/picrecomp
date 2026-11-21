@@ -814,6 +814,7 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
     if (!c->glsl || reg == RZ) return false;
     unsigned offsets[2];
     unsigned found = 0;
+    bool pred_written = false;
     for (unsigned distance = 8; distance < pc; distance += 8) {
         unsigned at = pc - distance;
         if ((at & 31) == 0) continue;  // scheduling word
@@ -836,7 +837,7 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
         // The predicate of a predicated TEX must be the same where the handle's instructions ran: nothing in between may
         // write one (PICROSS S GENESIS & Master System edition's has IPAs and arithmetic between its handle and the TEX)
         if (predicate != PT && writes_predicate(prev))
-            return false;
+            pred_written = true;  // (only matters if the handle's own instructions are predicated: checked where they are found)
         if (bits(prev, 0, 8) != reg) continue;
         if (predicate != PT && pred == (predicate ^ 8)) continue;
         if (!found && opcode == 0x5c98000000000000ull && bits(prev, 39, 4) == 0xf && (pred == PT || pred == predicate)) {
@@ -847,6 +848,7 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
             continue;
         }
         if ((pred != PT && pred != predicate) || bits(prev, 34, 5) != 2) return false;
+        if (pred != PT && pred_written) return false;
         if (!found) {
             if (opcode != 0x4c40000000000000ull || bits(prev, 39, 4) != 4) return false;
             reg = (unsigned)bits(prev, 8, 8);
