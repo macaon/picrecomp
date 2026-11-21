@@ -419,6 +419,24 @@ HLE_FUNC("_ZN2nn3hid19GetTouchScreenStateILm16EEEvPNS0_16TouchScreenStateIXT_EEE
     *(uint64_t *)s = ++sampling;
 }
 
+// Keyboard, mouse and six-axis: the SDK's own read the HID shared memory's rings, which the host does not fill - junk there is a key
+// held down (Piczle Cross's menu walked down to its last item by itself). Nothing pressed, nothing moving.
+// nn::hid::KeyboardState {int64 sampling, u32 modifiers, u32 attributes, u8 keys[32]}, MouseState {int64 sampling, i32 x, y, dx, dy,
+// wheel, u32 buttons, u32 attributes}.
+HLE_FUNC("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", hid_keyboard_state) {
+    static int64_t sampling;
+    uint8_t *k = (uint8_t *)(uintptr_t)c->x[0];
+    memset(k, 0, 0x30);
+    *(int64_t *)k = ++sampling;
+}
+HLE_FUNC("_ZN2nn3hid13GetMouseStateEPNS0_10MouseStateE", hid_mouse_state) {
+    static int64_t sampling;
+    uint8_t *m = (uint8_t *)(uintptr_t)c->x[0];
+    memset(m, 0, 0x28);
+    *(int64_t *)m = ++sampling;
+}
+HLE_FUNC("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", hid_sixaxis_states) { c->x[0] = 0; }
+
 // FullKey for player 1 only (we report docked mode, where Handheld is unavailable)
 HLE_FUNC("_ZN2nn3hid15GetNpadStyleSetERKj", hid_style_set) {
     uint32_t id = *(uint32_t *)(uintptr_t)c->x[0];
