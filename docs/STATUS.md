@@ -540,9 +540,19 @@ Seen: a blurred circular iris-out at the end of the logo movies (in both builds:
 Also: depth-only programs draw (empty fragment shader); the handle search skips control flow; TLD4(.B) and VMNMX exist.
 Not tested: Vulkan validation on (the validation layer itself crashed once after the depth-only change), the other games, Windows.
 Also still: A (scripted `key:Z`) does not start the game - not looked at.
-Next step: input - A (scripted `pad:a`, `sdlpad:a`, `sdlkey:Return`) does not start the game from the title (GetNpadState is polled from 0x700113ae68); then the menus and the game itself. The TEMP hooks (`PICRECOMP_TEMP_DI`, `PICRECOMP_TEMP_KEEP_SRS`) must become real values and all 20 games be regression-tested before
-committing (the 0x2000 end-of-stream result and the metadata slot also touch every game with movies); installed games' libraries are stale
-(library ID changed) until rebuilt.
+**Playable (2026-11-21, Vulkan on Linux, hidden window):** title -> menu -> puzzle list -> a puzzle with clue numbers, filled cells, X marks and
+the cursor; How to play (the TV scene with its characters), Settings, Almanac, Credits (night sky, scrolling text). What it took after the
+title screen: scripted input uses SDL names - **A is `key:K`** (B `J`, D-pad = arrow keys: `key:Down`; the defaults of runtime/hle/bindings.c;
+`pad:` takes SDL gamepad names: `east` for A), the keyboard / mouse / six-axis states are empty HLE (junk from the unfilled HID shared memory
+held a key down: the menu walked to its last item by itself), and the big one: **`ReportCounter` type 1 (SAMPLES_PASSED, occlusion queries)
+answered 0** - UE4 culled every dynamic primitive (characters, the puzzle's cells, numbers and cursor were drawn into the shadow maps
+only). It now reports a visible result (0x7FFFFFFF); no real query. Also: compute shaders get the buffer-texture variants; the handle
+search accepts a predicate written between the handle and its TEX when the handle's own instructions are not predicated.
+Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
+which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
+other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
+data file system ~60 times), audio, longer play (finishing a puzzle, the farm), `Journal`, the experiment hooks `PICRECOMP_TEMP_DI` /
+`PICRECOMP_TEMP_KEEP_SRS` still to become real values.
 
 ## What to test and watch for
 
