@@ -45,6 +45,7 @@ typedef struct {
                             // after flip_y: keys without it hash as before - shader caches stay valid.)
     uint32_t vs_out_mask;   // fragment: varyings the vertex shader provides
     uint8_t glsl;           // emit Vulkan GLSL (see the contract above) instead of MSL
+    uint32_t buf_mask;      // GLSL: texture slots (bit i) that hold a buffer texture: a TLD on a 1D slot is then a usamplerBuffer fetch
 } ShaderKey;
 
 typedef struct {
@@ -53,6 +54,7 @@ typedef struct {
     bool shadow, is_array, is_image, bindless;
     uint32_t bindless_cbuf, bindless_offset;
     uint32_t separate_sampler_offset;
+    uint8_t img_kind;        // is_image: 1 SUST store (imageBuffer, any format), 2 SUATOM (r32ui uimageBuffer); type TEXTYPE_BUFFER
 } ShaderTexture;
 
 typedef struct {
@@ -66,11 +68,13 @@ typedef struct {
     uint32_t attr_mask;     // vertex: input attributes; fragment: input varyings
     uint32_t out_mask;      // vertex: output varyings; fragment: render targets written
     bool writes_depth, uses_discard, writes_point_size;
+    uint32_t tld1d_mask;    // GLSL: texture slots only a TLD on a 1D target used (the ones that may be buffer textures: ShaderKey.buf_mask)
     bool uses_gmem;         // global memory access: bind the guest heap at GMEM_BUFFER_INDEX
     bool uses_gmem_map;     // (GLSL compute only) gmem loads look their address up in GMap (uniform, binding
                             // GMAP_BUFFER_INDEX) and read GFast (storage, GFAST_BUFFER_INDEX) - a device-local copy of the
                             // dispatch's storage buffers - when found, stores too (copied back after the dispatch).
                             // runtime/nvn/vulkan/exec.c
+    bool uses_gfar;         // (GLSL) global memory accesses fall back to the GFAR table
     bool uses_gmem_store;   // writes global memory (STG)
     bool uses_tint;        // fragment: reads the per-draw tint (buffer 19, float4[2]) applied to color target 0
     bool uses_rscale;       // reads the resolution-scale table (fragment/compute buffer 18): float4 [0] = render
@@ -85,6 +89,12 @@ typedef struct {
 // (GLSL compute, Vulkan) the fast copy of a dispatch's storage buffers: its address table and its data
 #define GMAP_BUFFER_INDEX 20
 #define GFAST_BUFFER_INDEX 21
+// (GLSL) global memory outside the guest heap (the engine's own mappings: Piczle Cross's storage buffers) goes through buffer device
+// addresses: a table of the bound storage buffers (guest address, size, device address; binding GFAR_BUFFER_INDEX, uvec4 [2i], [2i + 1],
+// the count in [32].x - exec.c gfar_table)
+#define GFAR_BUFFER_INDEX 22
+#define GFAR_MAX 16
+extern int maxwell_gfar_ok;  // the device has buffer device addresses (set before translating)
 #define GMAP_MAX 16  // ranges in the table (GMap { uvec4 gmap[GMAP_MAX + 1]; }: [i] = addr lo, addr hi, size, word offset;
                      // [GMAP_MAX].x = count)
 extern uint64_t maxwell_gmem_base, maxwell_gmem_size;

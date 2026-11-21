@@ -23,6 +23,7 @@
 #include "shader.h"
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
+int maxwell_gfar_ok;
 // Iteration limit of a branching shader's dispatch loop (a mistranslated branch can't hang the GPU forever).
 // PICRECOMP_SHADER_GUARD overrides it (backends read it): a small one shows which shaders loop.
 uint32_t maxwell_loop_guard = 100000;
@@ -801,6 +802,13 @@ static bool writes_predicate(uint64_t w) {
     return false;
 }
 
+// Control flow has no destination register (its low byte is a target or zero): not a writer of a register a handle search is after.
+static bool is_control_flow(uint64_t w) {
+    unsigned t = (unsigned)(w >> 52);
+    return t == 0xe24 || t == 0xe29 || t == 0xe2a || t == 0xe2b || t == 0xe30 || t == 0xe33 || t == 0xe34 || t == 0xe35 ||
+           (w & 0xfff8000000000000ull) == 0xf0f8000000000000ull;
+}
+
 // Resolve a static NVN driver c2 pair within the current basic block.
 static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned predicate, unsigned *tex, unsigned *sampler) {
     if (!c->glsl || reg == RZ) return false;
@@ -815,6 +823,7 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
         // samples after branches): the search goes on, and any instruction on the way that writes the register still ends
         // it. A DEPBAR (a scoreboard wait) has no destination.
         if ((prev & 0xfff8000000000000ull) == 0xf0f0000000000000ull) continue;
+        if (is_control_flow(prev)) continue;  // (an SSY / SYNC between the handle and its use: Piczle Cross's fragment shaders)
         unsigned pred = (unsigned)bits(prev, 16, 4);
         uint64_t opcode = prev & 0xfff8000000000000ull;
         if ((prev & 0xfff8000000000000ull) == 0xdeb8000000000000ull) {
@@ -957,6 +966,268 @@ static void emit_tex(Ctx *c, uint64_t w, uint32_t pc, bool bindless) {
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
 
+// TLD / TLD.B: a texel fetch with integer coordinates (Unreal Engine's shaders). Layout (yuzu / Eden, checked against
+// PICROSS: Piczle Cross's words): dest 0, coordinates 8, meta 20 (bindless: the handle first, then lod, offset), target 28
+// (3 bits: 1D, 1D array, 2D, 2D array, 3D), mask 31, aoffi 35, c[2] offset 36 (TLD), multisample 50, clamp 54, lod 55.
+// For an array target the layer is the low 16 bits of the first coordinate register, the coordinates follow it.
+static void emit_tld(Ctx *c, uint64_t w, uint32_t pc, bool bindless) {
+    int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
+    int target = (int)bits(w, 28, 3);
+    uint32_t mask = (uint32_t)bits(w, 31, 4), index = (uint32_t)bits(w, 36, 13);
+    bool aoffi = bits(w, 35, 1), lod = bits(w, 55, 1);
+    if (!c->glsl || bits(w, 50, 1) || bits(w, 54, 1) || target > 4) { fail(c, "tld form %#llx", (unsigned long long)w); return; }
+    unsigned texture_offset = 0, sampler_offset = 0;
+    if (bindless) {
+        if (!separate_texture_pair(c, pc, b, (unsigned)bits(w, 16, 4), &texture_offset, &sampler_offset)) {
+            fail(c, "unresolved bindless tld at %#x", pc);
+            return;
+        }
+        b++;  // (the handle takes the first register of the meta operand)
+        index = 4096 + (texture_offset - 0x168) / 8 * 32 + (sampler_offset - 0x568) / 8;
+        if (index >= 8192 || sampler_offset >= 0x568 + 32 * 8) { fail(c, "separate texture pair outside available slots"); return; }
+    }
+    static const int types[] = {TEXTYPE_1D, TEXTYPE_1D_ARRAY, TEXTYPE_2D, TEXTYPE_2D_ARRAY, TEXTYPE_3D};
+    bool array = target == 1 || target == 3;
+    // A TLD does not tell a 1D texture from a buffer texture (Piczle Cross's light grid): the program is a variant per set of buffer slots
+    int next_slot = index < 8192 && c->tex_slot[index] ? c->tex_slot[index] - 1 : c->info->ntex;
+    bool buf = target == 0 && c->key && next_slot < 32 && ((c->key->buf_mask >> next_slot) & 1);
+    int slot = tex_slot(c, index, buf ? TEXTYPE_BUFFER : types[target], false, array);
+    if (target == 0) c->info->tld1d_mask |= 1u << slot;
+    if (bindless) {
+        ShaderTexture *t = &c->info->tex[slot];
+        t->bindless = true;
+        t->bindless_cbuf = 2;
+        t->bindless_offset = texture_offset;
+        t->separate_sampler_offset = sampler_offset;
+    }
+    char r0[16], r1[16], r2[16], rl[16], ro[16], layer[64], lodv[32] = "0", off[96] = "", call[1024];
+    int first = array ? a + 1 : a;  // (the register of the first coordinate)
+    const char *X = reg(c, first, r0), *Y = reg(c, first + 1, r1), *Z = reg(c, first + 2, r2);
+    int mr = b;
+    if (lod) { snprintf(lodv, sizeof lodv, "int(%s)", reg(c, mr++, rl)); }
+    if (aoffi) { snprintf(off, sizeof off, "%s", reg(c, mr++, ro)); }
+    if (array) { char ra[16]; snprintf(layer, sizeof layer, "int(%s & 0xffffu)", reg(c, a, ra)); }
+    switch (target) {
+    case 0:
+        if (buf) sprintf(call, "uintBitsToFloat(texelFetch(t%d, int(%s)%s))", slot, X, "");  // (the registers get the bits)
+        else if (aoffi) sprintf(call, "texelFetch(t%d, int(%s) + (int(%s << 28) >> 28), %s)", slot, X, off, lodv);
+        else sprintf(call, "texelFetch(t%d, int(%s), %s)", slot, X, lodv);
+        break;
+    case 1:
+        if (aoffi) sprintf(call, "texelFetch(t%d, ivec2(int(%s) + (int(%s << 28) >> 28), %s), %s)", slot, X, off, layer, lodv);
+        else sprintf(call, "texelFetch(t%d, ivec2(int(%s), %s), %s)", slot, X, layer, lodv);
+        break;
+    case 2:
+        if (aoffi) sprintf(call, "texelFetch(t%d, ivec2(%s), %s)", slot,
+                           RSC2(c, slot, "uint2(int2(%s, %s) + int2(int(%s << 28) >> 28, int(%s << 24) >> 28))", X, Y, off, off), lodv);
+        else sprintf(call, "texelFetch(t%d, ivec2(%s), %s)", slot, RSC2(c, slot, "uint2(%s, %s)", X, Y), lodv);
+        break;
+    case 3:
+        if (aoffi) sprintf(call, "texelFetch(t%d, ivec3(ivec2(%s), %s), %s)", slot,
+                           RSC2(c, slot, "uint2(int2(%s, %s) + int2(int(%s << 28) >> 28, int(%s << 24) >> 28))", X, Y, off, off), layer, lodv);
+        else sprintf(call, "texelFetch(t%d, ivec3(ivec2(%s), %s), %s)", slot, RSC2(c, slot, "uint2(%s, %s)", X, Y), layer, lodv);
+        break;
+    default:  // 3D
+        if (aoffi) { fail(c, "tld 3d offset"); return; }
+        sprintf(call, "texelFetch(t%d, ivec3(int(%s), int(%s), int(%s)), %s)", slot, X, Y, Z, lodv);
+    }
+    write_tex_result(c, slot, call, mask, d, RZ, false, false);
+}
+
+// TLD4 / TLD4.B: a four-texel gather of one component (layout: yuzu / Eden's texture_gather; the words are Piczle Cross's): dest 0,
+// coordinates 8, meta 20 (bindless: the handle first, then the offset, then the depth reference), target 28 (2D, 2D array, cube here),
+// mask 31, depth compare 50; bound: c[2] offset 36, offset mode 54, component 56; bindless: offset mode 36, component 38 (0 none, 1 AOFFI).
+static void emit_tld4(Ctx *c, uint64_t w, uint32_t pc, bool bindless) {
+    int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
+    int type = (int)bits(w, 28, 3);
+    uint32_t mask = (uint32_t)bits(w, 31, 4), index = bindless ? 0 : (uint32_t)bits(w, 36, 13);
+    bool dc = bits(w, 50, 1);
+    int offmode = (int)bits(w, bindless ? 36 : 54, 2), comp = (int)bits(w, bindless ? 38 : 56, 2);
+    if (!c->glsl || offmode > 1 || (type != 2 && type != 3 && type != 6)) { fail(c, "tld4 form %#llx", (unsigned long long)w); return; }
+    unsigned texture_offset = 0, sampler_offset = 0;
+    if (bindless) {
+        if (!separate_texture_pair(c, pc, b, (unsigned)bits(w, 16, 4), &texture_offset, &sampler_offset)) {
+            fail(c, "unresolved bindless tld4 at %#x", pc);
+            return;
+        }
+        b++;
+        index = 4096 + (texture_offset - 0x168) / 8 * 32 + (sampler_offset - 0x568) / 8;
+        if (index >= 8192 || sampler_offset >= 0x568 + 32 * 8) { fail(c, "separate texture pair outside available slots"); return; }
+    }
+    bool array = type == 3;
+    int slot = tex_slot(c, index, type == 2 ? TEXTYPE_2D : array ? TEXTYPE_2D_ARRAY : TEXTYPE_CUBE, dc, array);
+    if (bindless) {
+        ShaderTexture *t = &c->info->tex[slot];
+        t->bindless = true;
+        t->bindless_cbuf = 2;
+        t->bindless_offset = texture_offset;
+        t->separate_sampler_offset = sampler_offset;
+    }
+    char r0[16], r1[16], r2[16], rl[16], ro[16], rd[16], coord[160], off[96] = "", dref[48] = "", call[640];
+    int first = array ? a + 1 : a;
+    if (type == 2) snprintf(coord, sizeof coord, "vec2(as_type<float>(%s), as_type<float>(%s))", reg(c, first, r0), reg(c, first + 1, r1));
+    else if (array) snprintf(coord, sizeof coord, "vec3(as_type<float>(%s), as_type<float>(%s), float(%s & 0xffffu))", reg(c, first, r0), reg(c, first + 1, r1), reg(c, a, rl));
+    else snprintf(coord, sizeof coord, "vec3(as_type<float>(%s), as_type<float>(%s), as_type<float>(%s))", reg(c, first, r0), reg(c, first + 1, r1), reg(c, first + 2, r2));
+    int mr = b;
+    if (offmode == 1) {
+        if (type == 6) { fail(c, "tld4 cube offset"); return; }
+        const char *o = reg(c, mr++, ro);
+        snprintf(off, sizeof off, "ivec2(int(%s << 26) >> 26, int(%s << 18) >> 26)", o, o);
+    }
+    if (dc) snprintf(dref, sizeof dref, "as_type<float>(%s)", reg(c, mr++, rd));
+    if (dc) {
+        if (offmode) snprintf(call, sizeof call, "textureGatherOffset(t%d, %s, %s, %s)", slot, coord, dref, off);
+        else snprintf(call, sizeof call, "textureGather(t%d, %s, %s)", slot, coord, dref);
+    } else {
+        if (offmode) snprintf(call, sizeof call, "textureGatherOffset(t%d, %s, %s, %d)", slot, coord, off, comp);
+        else snprintf(call, sizeof call, "textureGather(t%d, %s, %d)", slot, coord, comp);
+    }
+    write_tex_result(c, slot, call, mask, d, RZ, false, false);
+}
+
+// VMNMX (video min/max; layout: yuzu's video_minimum_maximum, the words are Piczle Cross's index clamps: R9 = min(max(R8, R15), R5)):
+// Rd 0, Ra 8, Rb 20 (bit 50: else imm16 at 20), B select 28 (3 bits), Rc 39, A select 36 (3 bits), A signed 48, B signed 49,
+// second operation 51 (5 MIN, 6 MAX), its sign 54, mx 56 (1: max first). Select 0-3 a byte, 4 / 5 a half, 6 / 7 the word.
+static const char *vmnmx_operand(const char *x, int sel, bool sgn, char *buf) {
+    if (sel < 4) sprintf(buf, sgn ? "(int(%s << %d) >> 24)" : "int((%s >> %d) & 0xFFu)", x, sgn ? 24 - 8 * sel : 8 * sel);
+    else if (sel < 6) sprintf(buf, sgn ? "(int(%s << %d) >> 16)" : "int((%s >> %d) & 0xFFFFu)", x, sgn ? 16 - 16 * (sel - 4) : 16 * (sel - 4));
+    else sprintf(buf, "int(%s)", x);
+    return buf;
+}
+static void emit_vmnmx(Ctx *c, uint64_t w) {
+    int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), rc = (int)bits(w, 39, 8);
+    int op2 = (int)bits(w, 51, 3);
+    if (!c->glsl || (op2 != 5 && op2 != 6) || bits(w, 47, 1) || bits(w, 55, 1)) { fail(c, "vmnmx form %#llx", (unsigned long long)w); return; }
+    char ra[16], rb[16], rcb[16], oa[80], ob[80], bx[40];
+    const char *A = reg(c, a, ra);
+    bool asg = bits(w, 48, 1), bsg = bits(w, 49, 1), dsg = bits(w, 54, 1), mx = bits(w, 56, 1);
+    const char *B;
+    int bsel;
+    if (bits(w, 50, 1)) { B = reg(c, (int)bits(w, 20, 8), rb); bsel = (int)bits(w, 28, 3); }
+    else {  // a 16-bit immediate
+        uint32_t v = (uint32_t)bits(w, 20, 16);
+        snprintf(bx, sizeof bx, "%uu", bsg && (v & 0x8000) ? v | 0xFFFF0000u : v);
+        B = bx;
+        bsel = 6;
+    }
+    const char *Rc = reg(c, rc, rcb);
+    vmnmx_operand(A, (int)bits(w, 36, 3), asg, oa);
+    vmnmx_operand(B, bsel, bsg, ob);
+    char t[400];
+    if (bsg) snprintf(t, sizeof t, "%s(%s, %s)", mx ? "max" : "min", oa, ob);
+    else snprintf(t, sizeof t, "int(%s(uint(%s), uint(%s)))", mx ? "max" : "min", oa, ob);
+    char u[600];
+    if (dsg) snprintf(u, sizeof u, "uint(%s(%s, int(%s)))", op2 == 5 ? "min" : "max", t, Rc);
+    else snprintf(u, sizeof u, "%s(uint(%s), %s)", op2 == 5 ? "min" : "max", t, Rc);
+    set_reg(c, d, u);
+}
+
+// ------------------------------------------------------------------ surfaces (buffer images)
+// NVN's driver c[2] holds the bound image handles (slot k at 0x120 + 8k); the shader copies one into a register with a MOV
+// before using it. Only that form is resolved (PICROSS: Piczle Cross's RWBuffer clears and counters).
+static bool image_handle_slot(Ctx *c, uint32_t pc, unsigned reg, unsigned *k) {
+    if (reg == RZ) return false;
+    for (unsigned at = pc; at >= 8;) {
+        at -= 8;
+        if ((at & 31) == 0) continue;  // scheduling word
+        uint64_t prev;
+        memcpy(&prev, c->code + at, sizeof prev);
+        if ((prev & 0xffe0000000000000ull) == 0xeb20000000000000ull) continue;  // SUST: no destination
+        if (is_control_flow(prev)) continue;
+        uint64_t top = prev & 0xfff0000000000000ull;  // ISETP / FSETP / PSETP: bits 0-7 are predicate fields, not a register
+        if (top == 0x5b60000000000000ull || top == 0x4b60000000000000ull || (prev & 0xfef0000000000000ull) == 0x3660000000000000ull ||
+            top == 0x5bb0000000000000ull || top == 0x4bb0000000000000ull || (prev & 0xfef0000000000000ull) == 0x36b0000000000000ull ||
+            (prev & 0xfff8000000000000ull) == 0x5090000000000000ull) continue;
+        if (bits(prev, 0, 8) != reg) continue;
+        if ((prev & 0xfff8000000000000ull) != 0x4c98000000000000ull || bits(prev, 34, 5) != 2) return false;
+        unsigned off = (unsigned)bits(prev, 20, 14) * 4;
+        if (off < 0x120 || off >= 0x160 || off % 8) return false;
+        *k = (off - 0x120) / 8;
+        return true;
+    }
+    return false;
+}
+
+static int image_slot(Ctx *c, uint32_t pc, unsigned hreg, int kind) {
+    unsigned k;
+    if (!image_handle_slot(c, pc, hreg, &k)) { fail(c, "unresolved image handle at %#x", pc); return -1; }
+    int slot = tex_slot(c, 4000 + k, TEXTYPE_BUFFER, false, false);
+    ShaderTexture *t = &c->info->tex[slot];
+    if (t->img_kind && t->img_kind != kind) { fail(c, "image %u used as a store and as an atomic", k); return -1; }
+    t->img_kind = (uint8_t)kind;
+    t->bindless = t->is_image = true;
+    t->bindless_cbuf = 2;
+    t->bindless_offset = 0x120 + 8 * k;
+    return slot;
+}
+
+// SUST.P (untyped, the format is the descriptor's) to a 1D buffer image, all four components (layout: yuzu / Eden's
+// surface_load_store; checked against Piczle Cross: data 0, coordinate 8, swizzle 20, type 33, bindless register 39,
+// is_bound 51, typed 52). The registers' bits go to memory as they are (uimageBuffer, 32-bit components: exec.c texel_view_for).
+static void emit_sust(Ctx *c, uint64_t w, uint32_t pc) {
+    if (!c->glsl || bits(w, 33, 3) != 1 || bits(w, 52, 1) || bits(w, 51, 1) || bits(w, 49, 2) || bits(w, 20, 4) != 0xf) {
+        fail(c, "sust form %#llx", (unsigned long long)w);
+        return;
+    }
+    int slot = image_slot(c, pc, (unsigned)bits(w, 39, 8), 1);
+    if (slot < 0) return;
+    int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
+    char x[4][16], i[16];
+    sp(&c->body, "    imageStore(t%d, int(%s), uvec4(%s, %s, %s, %s));\n",
+       slot, reg(c, a, i), reg(c, d, x[0]), reg(c, d == RZ ? RZ : d + 1, x[1]), reg(c, d == RZ ? RZ : d + 2, x[2]),
+       reg(c, d == RZ ? RZ : d + 3, x[3]));
+}
+
+// SUATOM on a 1D buffer image, 32-bit unsigned (bits: dest 0, coordinate 8, operand 20, op 29 (4), type 33, bindless
+// register 39, clamp 49, size 51 (0 U32, 6 SD32), bindless 54). INC / DEC wrap differently from GLSL's: not translated.
+static void emit_suatom(Ctx *c, uint64_t w, uint32_t pc) {
+    static const char *const fn[] = {"Add", "Min", "Max", NULL, NULL, "And", "Or", "Xor", "Exchange"};
+    unsigned op = (unsigned)bits(w, 29, 4), size = (unsigned)bits(w, 51, 3);
+    if (!c->glsl || bits(w, 33, 3) != 1 || !bits(w, 54, 1) || bits(w, 49, 2) || (size != 0 && size != 6) || op > 8 || !fn[op]) {
+        fail(c, "suatom form %#llx", (unsigned long long)w);
+        return;
+    }
+    int slot = image_slot(c, pc, (unsigned)bits(w, 39, 8), 2);
+    if (slot < 0) return;
+    int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
+    char i[16], v[16], call[160];
+    snprintf(call, sizeof call, "imageAtomic%s(t%d, int(%s), %s)", fn[op], slot, reg(c, a, i), reg(c, b, v));
+    if (d == RZ) sp(&c->body, "    %s;\n", call);
+    else set_reg(c, d, call);
+}
+
+// Global memory outside the guest heap window (GLSL): the access goes through the GFAR table (buffer device addresses). `fb` is the
+// full 64-bit address expression. A word / sub-word read returns 0 and a write is dropped when the address is in no table entry.
+static const char *far_word(Ctx *c, int k, const char *fb) {
+    static char buf[2][96];
+    static int n;
+    char *b = buf[n++ & 1];
+    if (!c->glsl || !maxwell_gfar_ok) return strcpy(b, "0u");
+    c->info->uses_gfar = true;
+    snprintf(b, 96, "gfar_ld(%s + %uul)", fb, (unsigned)k * 4);
+    return b;
+}
+static const char *far_small(Ctx *c, int size, int k, const char *fb) {
+    static char buf[2][200];
+    static int n;
+    (void)k;
+    char *b = buf[n++ & 1];
+    if (!c->glsl || !maxwell_gfar_ok) return strcpy(b, "0u");
+    c->info->uses_gfar = true;
+    static const char *const f[] = {"((gfar_ld(%s) >> (uint(%s & 3ul) * 8u)) & 0xFFu)", "uint(sx8(gfar_ld(%s) >> (uint(%s & 3ul) * 8u)))",
+                                    "((gfar_ld(%s) >> (uint(%s & 2ul) * 8u)) & 0xFFFFu)", "uint(sx16(gfar_ld(%s) >> (uint(%s & 2ul) * 8u)))"};
+    snprintf(b, 200, f[size], fb, fb);
+    return b;
+}
+static void far_store_word(Ctx *c, int k, const char *v, const char *fb) {
+    if (c->glsl && maxwell_gfar_ok) { c->info->uses_gfar = true; sp(&c->body, " else gfar_st(%s + %uul, %s);\n", fb, (unsigned)k * 4, v); }
+    else sp(&c->body, "\n");
+}
+static void far_store_small(Ctx *c, int size, const char *v, const char *fb) {
+    if (c->glsl && maxwell_gfar_ok) { c->info->uses_gfar = true; sp(&c->body, " else gfar_stb(%s, %s, 0x%xu);\n", fb, v, size < 2 ? 0xFFu : 0xFFFFu); }
+    else sp(&c->body, "\n");
+}
+
 // ------------------------------------------------------------------ instruction translation
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
@@ -1057,6 +1328,20 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         emit_texs(c, w, true);
     } else if (OPM(0xc038000000000000ull, 0xfc38000000000000ull)) {  // TEX
         emit_tex(c, w, pc, false);
+    } else if (OPM(0xdc00000000000000ull, 0xff00000000000000ull)) {  // TLD
+        emit_tld(c, w, pc, false);
+    } else if (OPM(0xdd00000000000000ull, 0xff00000000000000ull)) {  // TLD.B (bindless)
+        emit_tld(c, w, pc, true);
+    } else if (OPM(0xeb20000000000000ull, 0xffe0000000000000ull)) {  // SUST
+        emit_sust(c, w, pc);
+    } else if (OPM(0xea00000000000000ull, 0xff80000000000000ull)) {  // SUATOM
+        emit_suatom(c, w, pc);
+    } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {  // VMNMX
+        emit_vmnmx(c, w);
+    } else if (OPM(0xc800000000000000ull, 0xfc00000000000000ull)) {  // TLD4
+        emit_tld4(c, w, pc, false);
+    } else if (OPM(0xdec0000000000000ull, 0xffc0000000000000ull)) {  // TLD4.B (bindless)
+        emit_tld4(c, w, pc, true);
     } else if (OPM(0xdeb8000000000000ull, 0xfff8000000000000ull)) {  // TEX.B (bindless)
         emit_tex(c, w, pc, true);
     } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull)) {  // TXQ
@@ -1549,6 +1834,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         else sprintf(addr, "(ulong(%s) + ulong(%lld))", R(a), (long long)off);
         sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul;\n", addr,
            (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+        char fb[48];
+        snprintf(fb, sizeof fb, "(ga + 0x%llxul)", (unsigned long long)maxwell_gmem_base);
         static const char *const ld_small[] = {"uint(gmem[ga])", "uint(int(char(gmem[ga])))",
                                                "uint(*(device ushort *)(gmem + ga))", "uint(int(*(device short *)(gmem + ga)))"};
         int nw = size == 5 ? 2 : size >= 6 ? 4 : 1;
@@ -1570,14 +1857,14 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                         snprintf(fast, sizeof fast, gl_small[size], "gfast_.w[fw]");
                         snprintf(slow, sizeof slow, gl_small[size], "gmem_.w[uint(ga >> 2)]");
                         c->reg_used[d] = 1;
-                        sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? %s : ok ? %s : 0u;\n", d, fast, slow);
+                        sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? %s : ok ? %s : %s;\n", d, fast, slow, far_small(c, size, 0, fb));
                     }
                 } else {
                     for (int k = 0; k < nw; k++)
                         if (d != RZ && d + k < RZ) {
                             c->reg_used[d + k] = 1;
-                            sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? gfast_.w[fw + %du] : ok ? gmem_.w[uint(ga >> 2) + %du] : 0u;\n",
-                               d + k, k, k);
+                            sp(&c->body, "      r%d = fw != 0xFFFFFFFFu ? gfast_.w[fw + %du] : ok ? gmem_.w[uint(ga >> 2) + %du] : %s;\n",
+                               d + k, k, k, far_word(c, k, fb));
                         }
                 }
             } else {
@@ -1589,10 +1876,12 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                     sp(&c->body, "      if (ok) { uint sh = uint(ga & %s) * 8u; uint v = (%s & 0x%xu) << sh;\n", bm, R(d), m);
                     sp(&c->body, "        if (fw != 0xFFFFFFFFu) { atomicAnd(gfast_.w[fw], ~(0x%xu << sh)); atomicOr(gfast_.w[fw], v); }\n", m);
                     sp(&c->body, "        else { atomicAnd(gmem_.w[uint(ga >> 2)], ~(0x%xu << sh)); atomicOr(gmem_.w[uint(ga >> 2)], v); } }\n", m);
+                    far_store_small(c, size, R(d), fb);
                 } else {
                     for (int k = 0; k < nw; k++)
-                        sp(&c->body, "      if (fw != 0xFFFFFFFFu) gfast_.w[fw + %du] = %s; else if (ok) gmem_.w[uint(ga >> 2) + %du] = %s;\n", k,
+                        { sp(&c->body, "      if (fw != 0xFFFFFFFFu) gfast_.w[fw + %du] = %s; else if (ok) gmem_.w[uint(ga >> 2) + %du] = %s;", k,
                            R(d == RZ ? RZ : d + k), k, R(d == RZ ? RZ : d + k));
+                          far_store_word(c, k, R(d == RZ ? RZ : d + k), fb); }
                 }
             }
         } else if (c->glsl) {  // gmem_.w[]: 32-bit words; sub-word accesses within the containing word
@@ -1603,23 +1892,26 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                 "uint(sx16(gmem_.w[uint(ga >> 2)] >> (uint(ga & 2ul) * 8u)))"};
             if (!store) {
                 if (size < 4) {
-                    if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      if (ok) r%d = %s; else r%d = 0u;\n", d, gl_small[size], d); }
+                    if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      if (ok) r%d = %s; else r%d = %s;\n", d, gl_small[size], d, far_small(c, size, 0, fb)); }
                 } else {
                     for (int k = 0; k < nw; k++)
                         if (d != RZ && d + k < RZ) {
                             c->reg_used[d + k] = 1;
-                            sp(&c->body, "      if (ok) r%d = gmem_.w[uint(ga >> 2) + %du]; else r%d = 0u;\n", d + k, k, d + k);
+                            sp(&c->body, "      if (ok) r%d = gmem_.w[uint(ga >> 2) + %du]; else r%d = %s;\n", d + k, k, d + k, far_word(c, k, fb));
                         }
                 }
             } else {
                 c->uses_gmem_store = true;
                 if (size < 4)
-                    sp(&c->body, "      if (ok) { uint wi = uint(ga >> 2); uint sh = uint(ga & %s) * 8u; atomicAnd(gmem_.w[wi], ~(0x%xu << sh)); "
-                       "atomicOr(gmem_.w[wi], (%s & 0x%xu) << sh); }\n", size < 2 ? "3ul" : "2ul", size < 2 ? 0xFFu : 0xFFFFu, R(d),
+                {   sp(&c->body, "      if (ok) { uint wi = uint(ga >> 2); uint sh = uint(ga & %s) * 8u; atomicAnd(gmem_.w[wi], ~(0x%xu << sh)); "
+                       "atomicOr(gmem_.w[wi], (%s & 0x%xu) << sh); }", size < 2 ? "3ul" : "2ul", size < 2 ? 0xFFu : 0xFFFFu, R(d),
                        size < 2 ? 0xFFu : 0xFFFFu);
+                    far_store_small(c, size, R(d), fb); }
                 else
-                    for (int k = 0; k < nw; k++)
-                        sp(&c->body, "      if (ok) gmem_.w[uint(ga >> 2) + %du] = %s;\n", k, R(d == RZ ? RZ : d + k));
+                    for (int k = 0; k < nw; k++) {
+                        sp(&c->body, "      if (ok) gmem_.w[uint(ga >> 2) + %du] = %s;", k, R(d == RZ ? RZ : d + k));
+                        far_store_word(c, k, R(d == RZ ? RZ : d + k), fb);
+                    }
             }
         } else if (!store) {
             if (size < 4) {
@@ -1765,6 +2057,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         else sprintf(addr, "(ulong(%s) + ulong(%lld))", R(a), (long long)off);
         sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul;\n", addr,
            (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+        bool far = c->glsl && maxwell_gfar_ok;
+        if (far) c->info->uses_gfar = true;
+        char farw[160];
+        snprintf(farw, sizeof farw, "ulong fa_ = gfar_find((ga + 0x%llxul) & ~3ul); if (fa_ != 0ul) ", (unsigned long long)maxwell_gmem_base);
         if (c->glsl && cas) {
             const char *word = "gmem_.w[uint(ga >> 2)]";
             if (c->stage == STAGE_COMPUTE) {
@@ -1775,15 +2071,23 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             } else {
                 sp(&c->body, "      ");
             }
-            sp(&c->body, "if (ok) { uint v_ = %s, o_ = %s; for (;;) { uint p_ = atomicCompSwap(%s, o_, %s); if (p_ == o_) break; o_ = p_; } }\n",
+            sp(&c->body, "if (ok) { uint v_ = %s, o_ = %s; for (;;) { uint p_ = atomicCompSwap(%s, o_, %s); if (p_ == o_) break; o_ = p_; } }",
                R(vr), word, word, gl_cas[op]);
+            if (far)
+                sp(&c->body, " else { %s{ uint v_ = %s, o_ = GFarRef(fa_).w[0]; for (;;) { uint p_ = atomicCompSwap(GFarRef(fa_).w[0], o_, %s); "
+                   "if (p_ == o_) break; o_ = p_; } } }", farw, R(vr), gl_cas[op]);
+            sp(&c->body, "\n");
         } else if (c->glsl && c->stage == STAGE_COMPUTE) {  // (the dispatch's storage buffers have a device-local copy: see LDG / STG)
             c->info->uses_gmem_map = true;
             sp(&c->body, "      uint fw = ok ? gfind(uint(ga)) : 0xFFFFFFFFu;\n");
-            sp(&c->body, "      if (fw != 0xFFFFFFFFu) %s(gfast_.w[fw], %s); else if (ok) %s(gmem_.w[uint(ga >> 2)], %s);\n", gl_op[op],
+            sp(&c->body, "      if (fw != 0xFFFFFFFFu) %s(gfast_.w[fw], %s); else if (ok) %s(gmem_.w[uint(ga >> 2)], %s);", gl_op[op],
                R(vr), gl_op[op], R(vr));
+            if (far) sp(&c->body, " else { %s%s(GFarRef(fa_).w[0], %s); }", farw, gl_op[op], R(vr));
+            sp(&c->body, "\n");
         } else if (c->glsl) {
-            sp(&c->body, "      if (ok) %s(gmem_.w[uint(ga >> 2)], %s);\n", gl_op[op], R(vr));
+            sp(&c->body, "      if (ok) %s(gmem_.w[uint(ga >> 2)], %s);", gl_op[op], R(vr));
+            if (far) sp(&c->body, " else { %s%s(GFarRef(fa_).w[0], %s); }", farw, gl_op[op], R(vr));
+            sp(&c->body, "\n");
         } else if (cas) {  // MSL: signed min/max on the word as an atomic_int
             sp(&c->body, "      if (ok) %s((device atomic_int *)(gmem + ga), int(%s), memory_order_relaxed);\n", ms_op[op], R(vr));
         } else {
@@ -1963,6 +2267,7 @@ static const char glsl_prelude[] =
     "#extension GL_KHR_shader_subgroup_vote : require\n"
     "#extension GL_KHR_shader_subgroup_ballot : require\n"
     "#extension GL_EXT_texture_shadow_lod : require\n"
+    "#extension GL_EXT_buffer_reference : enable\n"
     "#define cbr(cb, off) cb[min((off) >> 4, uint(cb.length() - 1))][((off) >> 2) & 3u]\n"
     "uint as_u(float x) { return floatBitsToUint(x); }\n"
     "uint as_u(uint x) { return x; }\n"
@@ -2039,6 +2344,16 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     if (info->uses_gmem)
         sp(&s, "layout(std430, set = %d, binding = %d) %sbuffer GMem { uint w[]; } gmem_;\n", set, GMEM_BUFFER_INDEX,
            c->uses_gmem_store ? "" : "readonly ");
+    if (info->uses_gfar) {  // global memory outside the heap window: buffer device addresses (exec.c gfar_table)
+        sp(&s, "layout(buffer_reference, std430, buffer_reference_align = 4) buffer GFarRef { uint w[]; };\n");
+        sp(&s, "layout(std140, set = %d, binding = %d) uniform GFarTab { uvec4 gfar[%d]; };\n", set, GFAR_BUFFER_INDEX, 2 * GFAR_MAX + 1);
+        sp(&s, "uint64_t gfar_find(uint64_t a) { uint n = gfar[%d].x; for (uint i = 0u; i < n; i++) { uint64_t b = packUint2x32(gfar[2u * i].xy); "
+               "uint64_t o = a - b; if (a >= b && o < uint64_t(gfar[2u * i].z)) return packUint2x32(gfar[2u * i + 1u].xy) + o; } return 0ul; }\n", 2 * GFAR_MAX);
+        sp(&s, "uint gfar_ld(uint64_t a) { uint64_t d = gfar_find(a & ~3ul); return d != 0ul ? GFarRef(d).w[0] : 0u; }\n");
+        sp(&s, "void gfar_st(uint64_t a, uint v) { uint64_t d = gfar_find(a & ~3ul); if (d != 0ul) GFarRef(d).w[0] = v; }\n");
+        sp(&s, "void gfar_stb(uint64_t a, uint v, uint m) { uint64_t d = gfar_find(a & ~3ul); if (d != 0ul) { uint sh = uint(a & 3ul) * 8u; "
+               "atomicAnd(GFarRef(d).w[0], ~(m << sh)); atomicOr(GFarRef(d).w[0], (v & m) << sh); } }\n");
+    }
     if (info->uses_gmem_map) {  // (compute) the dispatch's storage buffers, device-local: gmap[i] = heap offset, size, word
         sp(&s, "layout(std140, set = %d, binding = %d) uniform GMap { uvec4 gmap[%d]; };\n", set, GMAP_BUFFER_INDEX, GMAP_MAX + 1);
         sp(&s, "layout(std430, set = %d, binding = %d) %sbuffer GFast { uint w[]; } gfast_;\n", set, GFAST_BUFFER_INDEX,
@@ -2058,6 +2373,16 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     }
     for (int i = 0; i < info->ntex; i++) {
         ShaderTexture *t = &info->tex[i];
+        if (t->type == TEXTYPE_BUFFER && !t->is_image) {  // a buffer texture sampled with TLD (integer bits)
+            sp(&s, "layout(set = %d, binding = %d) uniform usamplerBuffer t%d;\n", set, 32 + i, i);
+            sp(&s, "ivec3 tsize%d(int l) { return ivec3(textureSize(t%d), 1, 1); }\n", i, i);
+            continue;
+        }
+        if (t->is_image) {  // (buffer image: no tsize)
+            if (t->img_kind == 2) sp(&s, "layout(set = %d, binding = %d, r32ui) uniform uimageBuffer t%d;\n", set, 32 + i, i);
+            else sp(&s, "layout(set = %d, binding = %d) uniform writeonly uimageBuffer t%d;\n", set, 32 + i, i);
+            continue;
+        }
         sp(&s, "layout(set = %d, binding = %d) uniform %s t%d;\n", set, 32 + i, glsl_sampler_type(t), i);
         // size of level l as (width, height, depth or layers)
         switch (t->type) {

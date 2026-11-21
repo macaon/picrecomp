@@ -316,8 +316,90 @@ static int check_handle_across_blocks(void) {
     return fails;
 }
 
+// TLD.B, a bindless texel fetch with integer coordinates (PICROSS: Piczle Cross, an Unreal Engine game): the handle is built
+// in R12 from the driver's c2 tables as for TEX.B; the instruction is the one the game's fragment shader has (2D, coordinates
+// R22 / R23, the alpha component, no lod, no offset)
+static int check_tld_bindless(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078805a7000cull,  // MOV R12, c[2][..]   (the texture half of the handle)
+        0x4c47020815a70c0cull,  // LOP.OR R12, R12, c[2][..]   (the sampler half)
+        0xdd3a000420c71602ull,  // TLD.B R2.w, R22, R12 (pc 0x18)
+        0x001fc000e24007f0ull, 0xe30000000007000full, 0xe2400fffff87000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x80 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    memcpy(buf + 0x80, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: bindless TLD test: %s\n", a->error); fails++; }
+    else if (!strstr(a->msl, "texelFetch")) { printf("FAIL: bindless TLD test: no texel fetch in the output\n"); fails++; }
+    maxwell_free(a);
+    return fails;
+}
+
+// SUST.P and SUATOM.ADD on 1D buffer images (PICROSS: Piczle Cross's compute shaders: UE4's RWBuffer clears and counters): the
+// handles are copied from the driver's c2 image table (slot k at 0x120 + 8k) with a MOV first
+static int check_buffer_images(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078804870001ull,  // MOV R1, c[2][0x120]   (image slot 0)
+        0x4c98078804c70007ull,  // MOV R7, c[2][0x130]   (image slot 2)
+        0xeb20008200f70004ull,  // SUST.P.1D_BUFFER.RGBA [R0], R4..R7, handle R1
+        0x001fc000e24007f0ull,
+        0xea70038200200502ull,  // SUATOM.ADD.SD32.1D_BUFFER R2, [R5], R2, handle R7
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x100 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    *(uint32_t *)buf = 0x12345679u;
+    memcpy(buf + 0x100, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, sizeof buf, STAGE_COMPUTE, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: buffer image test: %s\n", a->error); fails++; }
+    else if (!strstr(a->msl, "imageStore") || !strstr(a->msl, "imageAtomicAdd") || a->ntex != 2 || !a->tex[0].is_image ||
+             a->tex[0].img_kind != 1 || a->tex[1].img_kind != 2 || a->tex[0].bindless_offset != 0x120 || a->tex[1].bindless_offset != 0x130) {
+        printf("FAIL: buffer image test: wrong output (%d textures)\n", a->ntex);
+        fails++;
+    }
+    maxwell_free(a);
+    return fails;
+}
+
+// TLD4.B (a bindless four-texel gather, 2D, all components, an offset register) and VMNMX (the signed clamp UE4 emits for
+// dynamic indices) - the words are Piczle Cross's
+static int check_gather_and_vmnmx(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078805a70004ull,  // MOV R4, c[2][..]   (the texture half of the handle)
+        0x4c47020815a70404ull,  // LOP.OR R4, R4, c[2][..]   (the sampler half)
+        0xdefa0017a0471204ull,  // TLD4.B R4..R7, R18, R4 (AOFFI: the offset in R5)
+        0x001fc000e24007f0ull,
+        0x3b6f02e060f70809ull,  // VMNMX R9, R8, R15, R5: min(max(R8, R15), R5)
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x80 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    memcpy(buf + 0x80, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: gather / vmnmx test: %s\n", a->error); fails++; }
+    else if (!strstr(a->msl, "textureGatherOffset") || !strstr(a->msl, "min(max(")) {
+        printf("FAIL: gather / vmnmx test: no gather or clamp in the output\n");
+        fails++;
+    }
+    maxwell_free(a);
+    return fails;
+}
+
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);
