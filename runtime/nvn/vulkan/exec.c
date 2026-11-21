@@ -1257,6 +1257,7 @@ static void translate_program(void *arg) {
             p->fi = calloc(1, sizeof *p->fi);
             p->fi->stage = STAGE_FRAGMENT;
             p->fi->msl = strdup("#version 460\nvoid main() {}\n");
+            { static int nlog; if (nlog++ < 12) LOG("[shader] depth-only program: vs %llx outputs %#x, %u cbufs, %d textures\n", (unsigned long long)p->code[0], p->vi->out_mask, p->vi->cbuf_mask, p->vi->ntex); }
         }
     }
     pthread_mutex_unlock(&translate_lock);
@@ -1617,8 +1618,13 @@ static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
 static uint32_t buffer_slots(int stage, const ShaderInfo *si) {
     uint32_t m = 0;
     for (int i = 0; i < si->ntex && i < 31; i++) {
-        if (!((si->tld1d_mask >> i) & 1)) continue;
         NvnTexture *t = shader_texture_object(stage, (ShaderTexture *)&si->tex[i]);
+        if (!((si->tld1d_mask >> i) & 1)) {
+            static int nlog;
+            if (t && t->target == 10 && !si->tex[i].is_image && nlog++ < 12)
+                LOG("[vk] a buffer texture in slot %d of a stage-%d shader that something other than a 1D TLD uses (type %d)\n", i, stage, si->tex[i].type);
+            continue;
+        }
         if (t && t->target == 10) m |= 1u << i;
     }
     return m;
@@ -2673,6 +2679,9 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
         if (b->binding == GFAR_BUFFER_INDEX) {  // global memory outside the heap window
             uint32_t ft[(2 * GFAR_MAX + 1) * 4];
             gfar_table(stage, ft);
+            { static int nlog; if (nlog < 20 && (stage == 0 || stage == 1)) { nlog++; LOG("[vk] gfar table of stage %d: %u entries (sbufs:", stage, ft[8 * GFAR_MAX]);
+              for (int q = 0; q < 4; q++) LOG(" %llx+%llx", (unsigned long long)st.sbuf[stage][q].addr, (unsigned long long)st.sbuf[stage][q].size);
+              LOG(")\n"); } }
             bi[n] = ubo_span(vk_transient_copy(ft, sizeof ft, 256), sizeof ft);
         } else if (b->binding == GMAP_BUFFER_INDEX) {  // (compute) this dispatch's fast-copy table: gfast_prepare
             bi[n] = ubo_span(vk_transient_copy(gmap_tab, sizeof gmap_tab, 256), sizeof gmap_tab);
@@ -2715,21 +2724,22 @@ static void build_compute(void *arg) {
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }
 
-static struct CsEnt { uint64_t addr; CsProg *cp; } g_cs_tab[256];  // compute programs by code address
+static struct CsEnt { uint64_t addr; uint32_t mask; CsProg *cp; } g_cs_tab[256];  // compute programs by code address and buffer-texture slots (ShaderKey.buf_mask)
 
-static CsProg *compute_program(NvnProgram *np) {
+static CsProg *compute_program(NvnProgram *np, uint32_t mask) {
     NvnShaderStage *ss = &np->stages[5];
     if (!ss->code_addr) return NULL;
     struct CsEnt *tab = g_cs_tab;
     int n = g_cs_n;
-    for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr) return tab[i].cp;
+    for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr && tab[i].mask == mask) return tab[i].cp;
     CsProg *cp = calloc(1, sizeof *cp);
-    if (n < 256) { tab[n].addr = ss->code_addr; tab[n].cp = cp; g_cs_n = n + 1; }
+    if (n < 256) { tab[n].addr = ss->code_addr; tab[n].mask = mask; tab[n].cp = cp; g_cs_n = n + 1; }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
     maxwell_gfar_ok = g_vk.bda;
     ShaderKey k = {0};
     k.glsl = 1;
+    k.buf_mask = mask;
     pthread_mutex_lock(&translate_lock);
     cp->si = maxwell_translate((const uint8_t *)(uintptr_t)ss->code_addr, ss->const_offset ? ss->const_offset : 0x10000, STAGE_COMPUTE, &k);
     pthread_mutex_unlock(&translate_lock);
@@ -2759,7 +2769,11 @@ static CsProg *compute_program(NvnProgram *np) {
 static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     snap_reason = "compute"; snapshots_invalidate(NULL);
     if (!st.program || !gx || !gy || !gz) return;
-    CsProg *cp = compute_program(st.program);
+    CsProg *cp = compute_program(st.program, 0);
+    if (cp && atomic_load(&cp->p.state) == 1) {  // buffer textures in 1D slots: the variant that fetches them as buffers
+        uint32_t bm = buffer_slots(5, cp->si);
+        if (bm) cp = compute_program(st.program, bm);
+    }
     if (!cp || atomic_load(&cp->p.state) != 1) { SKIP(SKIP_COMPUTE_PROG); return; }
     {   // PICRECOMP_SKIP_CS=<code address hex> (debug): skip that compute shader's dispatches, to see what it does
         static uint64_t skip = ~0ull;
