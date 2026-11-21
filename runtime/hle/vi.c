@@ -49,6 +49,17 @@ HLE_FUNC("_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE", vi_create_layer) 
 }
 
 HLE_FUNC("_ZN2nn2vi12DestroyLayerEPNS0_5LayerE", vi_destroy_layer) { (void)c; }
+
+// GetLatestFrameNumber: the SDK's own reads a surface object inside the layer, which the host's layer is not (a block of
+// zeros): PICROSS X's / Piczle Cross's engine asks it once a frame for its pacing. The number of frames presented so far.
+HLE_FUNC("_ZN2nn2vi20GetLatestFrameNumberEPmPKNS0_5LayerE", vi_get_latest_frame_number) {
+    extern uint64_t renderer_present_count(void);
+    if (c->x[0]) *(uint64_t *)(uintptr_t)c->x[0] = renderer_present_count();
+    c->x[0] = 0;
+}
+
+// ListFrameHistory: the same (the SDK's reads the surface object): no frames in the history, the engine does without
+HLE_FUNC("_ZN2nn2vi16ListFrameHistoryEPNS0_9FrameInfoEiPKNS0_5LayerE", vi_list_frame_history) { c->x[0] = 0; }
 HLE_FUNC("_ZN2nn2vi12SetLayerCropEPNS0_5LayerEiiii", vi_set_layer_crop) { c->x[0] = 0; }
 
 // SetLayerScalingMode: asked by KEMONO FRIENDS PICROSS (an older SDK) after it creates its layer; the window shows the game

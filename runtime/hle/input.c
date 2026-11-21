@@ -409,6 +409,16 @@ HLE_FUNC("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj", hid_state_left)
 HLE_FUNC("_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj", hid_state_handheld) { fill_state(c); }
 HLE_FUNC("_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj", hid_state_right) { fill_state(c); }
 
+// GetTouchScreenState<16>: the SDK's own reads the HID shared memory's touch ring, which the host does not fill; an Unreal
+// Engine game (Piczle Cross, NpadController plugin) then aborts on the ring's garbage ("a touch ID that is bigger than
+// allowed"). The touch screen reports no touches: {sampling number, count = 0, 16 touch states of 0x28 bytes}.
+HLE_FUNC("_ZN2nn3hid19GetTouchScreenStateILm16EEEvPNS0_16TouchScreenStateIXT_EEE", hid_touch_state_16) {
+    static uint64_t sampling;
+    uint8_t *s = (uint8_t *)(uintptr_t)c->x[0];
+    memset(s, 0, 16 + 16 * 0x28);
+    *(uint64_t *)s = ++sampling;
+}
+
 // FullKey for player 1 only (we report docked mode, where Handheld is unavailable)
 HLE_FUNC("_ZN2nn3hid15GetNpadStyleSetERKj", hid_style_set) {
     uint32_t id = *(uint32_t *)(uintptr_t)c->x[0];
