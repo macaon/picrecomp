@@ -356,6 +356,20 @@ const char *romfs_file_at(uint64_t off) {
     return NULL;
 }
 
+// A RomFS file's place in the image by its path ("rom:/" in front is dropped): what a movie extractor opens (an Unreal Engine
+// game keeps its movies as plain files in the RomFS, which has no folder on the host)
+bool romfs_lookup(const char *path, uint64_t *off, uint64_t *size) {
+    if (!path) return false;
+    if (strstr(path, ":/")) path = strstr(path, ":/") + 2;
+    while (*path == '/') path++;
+    for (int i = 0; i < rom_nfiles; i++)
+        if (!strcmp(rom_files[i].path, path)) { *off = rom_files[i].off; *size = rom_files[i].size; return true; }
+    return false;
+}
+ssize_t romfs_image_read(void *dst, uint64_t size, uint64_t off) {
+    return romfs_fd < 0 ? -1 : romfs_read(romfs_fd, dst, size, off);
+}
+
 // ------------------------------------------------------------------ IStorage (raw RomFS image)
 typedef struct { int fd; uint64_t size; } Storage;
 

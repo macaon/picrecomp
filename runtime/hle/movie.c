@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <string.h>
 
 #include "../hle.h"
@@ -25,6 +26,9 @@
 #include "movie_source.h"
 
 #define MOVIE_EOS 4u
+// GetSampleTrack's result at the end of a file: Piczle Cross's extractor thread (0x7003c02de4) sends its decoders the end-of-stream
+// input on it, and on any other failure just polls again
+#define MOVIE_END_OF_STREAM 0x2000u
 
 // ------------------------------------------------------------------ MediaData (8-byte handle)
 typedef struct { char *key; char *sval; int64_t ival; bool is_str; } MdEntry;
@@ -190,6 +194,7 @@ typedef struct {
     MovieSource source;
     Cpu *io_cpu;  // the current, serialized extractor call's guest thread
     uint64_t reader, reader_handle;
+    uint64_t rom_off;  // a file read from the RomFS image: where it starts there
     uint8_t *reader_scratch;
     int map[16], ntracks;  // exposed track -> stream
     uint64_t selected;  // bitmask of streams
@@ -223,6 +228,16 @@ static int64_t ex_reader_read(void *opaque, int64_t off, uint8_t *dst, int size)
     if (n < 0 || n > size) return AVERROR(EIO);
     memcpy(dst, e->reader_scratch + 16, (size_t)n);
     return n;
+}
+
+bool romfs_lookup(const char *path, uint64_t *off, uint64_t *size);
+ssize_t romfs_image_read(void *dst, uint64_t size, uint64_t off);
+static int64_t ex_romfs_read(void *opaque, int64_t off, uint8_t *dst, int size) {
+    Extractor *e = opaque;
+    if (off < 0 || off >= e->source.size) return AVERROR_EOF;
+    if (off + size > e->source.size) size = (int)(e->source.size - off);
+    ssize_t n = romfs_image_read(dst, (uint64_t)size, e->rom_off + (uint64_t)off);
+    return n < 0 ? AVERROR(EIO) : n;
 }
 
 static void ex_close(Extractor *e, bool close_reader) {
@@ -310,7 +325,20 @@ static void ex_set_data_source(Cpu *c) {
         e->fmt->pb = e->io;
         e->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
         input = NULL;
-    } else LOG("[movie] open %s -> %s\n", path ? path : "(null)", host);
+    } else {
+        uint64_t rom_size;
+        struct stat st;
+        if (stat(host, &st) && romfs_lookup(path, &e->rom_off, &rom_size)) {  // (no host file: it is one in the RomFS image)
+            LOG("[movie] open %s from the RomFS image (%llu bytes)\n", path, (unsigned long long)rom_size);
+            e->source = (MovieSource){.opaque = e, .size = (int64_t)rom_size, .read_at = ex_romfs_read};
+            e->io = movie_source_io(&e->source);
+            e->fmt = avformat_alloc_context();
+            if (!e->io || !e->fmt) { ex_close(e, true); c->x[0] = 1; return; }
+            e->fmt->pb = e->io;
+            e->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+            input = NULL;
+        } else LOG("[movie] open %s -> %s\n", path ? path : "(null)", host);
+    }
     if (avformat_open_input(&e->fmt, input, NULL, NULL) < 0 || avformat_find_stream_info(e->fmt, NULL) < 0) {
         LOG("[movie] cannot open %s\n", host);
         ex_close(e, true);
@@ -370,7 +398,7 @@ static void ex_select_track(Cpu *c) {
 static void ex_get_sample_track(Cpu *c) {
     Extractor *e = self_state(c);
     ex_fill(e);
-    if (!e->have_pkt) { c->x[0] = 1; return; }
+    if (!e->have_pkt) { c->x[0] = e->eof ? MOVIE_END_OF_STREAM : 1; return; }
     uint64_t t = 0;
     for (int i = 0; i < e->ntracks; i++) if (e->map[i] == e->pkt->stream_index) t = (uint64_t)i;
     *(uint64_t *)(uintptr_t)c->x[1] = t;
@@ -403,6 +431,33 @@ static void ex_get_sample_time(Cpu *c) {
     AVStream *s = e->fmt->streams[e->pkt->stream_index];
     int64_t ts = e->pkt->pts != AV_NOPTS_VALUE ? e->pkt->pts : e->pkt->dts;
     *(int64_t *)(uintptr_t)c->x[1] = av_rescale_q(ts, s->time_base, (AVRational){1, 1000000});
+    c->x[0] = 0;
+}
+
+// slot 13: GetSampleMetaData(MediaData *) of the current sample. Unreal Engine's player (Piczle Cross, 0x7003c02b28) keeps
+// "durationUs" per sample - its FetchVideo hands out no sample whose duration is below 1 - and, for video, the frame's size
+// and crop rectangle (inclusive edges, as Android's MediaCodec has them)
+static void ex_sample_metadata(Cpu *c) {
+    Extractor *e = self_state(c);
+    if (!c->x[1]) { c->x[0] = 1; return; }
+    MediaData *m = md(c->x[1]);  // (the guest object is an 8-byte handle)
+    md_clear(m);
+    ex_fill(e);
+    if (e->have_pkt) {
+        AVStream *s = e->fmt->streams[e->pkt->stream_index];
+        int64_t dur = e->pkt->duration > 0 ? av_rescale_q(e->pkt->duration, s->time_base, (AVRational){1, 1000000}) : 0;
+        if (dur <= 0 && s->avg_frame_rate.num > 0) dur = 1000000LL * s->avg_frame_rate.den / s->avg_frame_rate.num;
+        if (dur <= 0) dur = 33333;
+        md_set_int(m, "durationUs", dur);
+        if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            md_set_int(m, "width", s->codecpar->width);
+            md_set_int(m, "height", s->codecpar->height);
+            md_set_int(m, "cropLeft", 0);
+            md_set_int(m, "cropTop", 0);
+            md_set_int(m, "cropRight", s->codecpar->width - 1);
+            md_set_int(m, "cropBottom", s->codecpar->height - 1);
+        }
+    }
     c->x[0] = 0;
 }
 
@@ -444,11 +499,13 @@ static void ex_dtor(Cpu *c) {
     c->x[0] = 0;
 }
 
-static void movie_log_slot(Cpu *c) {
+static void movie_log_slot_n(Cpu *c, int slot) {
     static int n;
-    if (n++ < 20) LOG("[movie] unimplemented virtual (lr=%llx)\n", c->x[30]);
+    if (n++ < 20) LOG("[movie] unimplemented virtual slot %d (lr=%llx)\n", slot, c->x[30]);
     c->x[0] = 0;
 }
+#define MOVIE_SLOT(n) static void movie_slot_##n(Cpu *c) { movie_log_slot_n(c, n); }
+MOVIE_SLOT(3) MOVIE_SLOT(7)
 
 #define EX_LOCKED(fn) \
     static void fn##_l(Cpu *c) { \
@@ -469,6 +526,9 @@ EX_LOCKED(ex_advance)
 EX_LOCKED(ex_get_sample_time)
 EX_LOCKED(ex_cached_duration)
 EX_LOCKED(ex_set_data_source)
+EX_LOCKED(ex_sample_metadata)
+// vtable slot 2: SetDataSource(const char *path), what an Unreal Engine game calls (Unity's goes through the exported wrapper)
+static void ex_source_path_l(Cpu *c) { c->x[2] = c->x[1]; c->x[1] = 0; ex_set_data_source_l(c); }
 
 // Some Unity versions call the exported wrappers directly instead of dispatching through the public vtable.
 // Those SDK wrappers expect native private objects at +8 and must not run against the host-side replacements.
@@ -483,9 +543,9 @@ HLE_FUNC("_ZN5movie9ExtractorD1Ev", movie_ex_dtor) { ex_dtor_l(c); }
 HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", movie_extractor_ctor) {
     uint64_t vt = g_ex_vt;
     if (!vt) {
-        HostFn f[16] = {ex_dtor_l, ex_dtor_l, movie_log_slot, movie_log_slot, ex_get_track_count_l,
-                        ex_get_track_config_l, ex_select_track_l, movie_log_slot, ex_seek_l, ex_get_sample_track_l,
-                        ex_read_l, ex_advance_l, ex_get_sample_time_l, movie_log_slot, ex_cached_duration_l,
+        HostFn f[16] = {ex_dtor_l, ex_dtor_l, ex_source_path_l, movie_slot_3, ex_get_track_count_l,
+                        ex_get_track_config_l, ex_select_track_l, movie_slot_7, ex_seek_l, ex_get_sample_track_l,
+                        ex_read_l, ex_advance_l, ex_get_sample_time_l, ex_sample_metadata_l, ex_cached_duration_l,
                         ex_set_data_source_l};
         vt = g_ex_vt = make_vtable(f, 16, "Extractor");
     }
@@ -512,7 +572,8 @@ typedef struct {
     AVFrame *frame;
     AVPacket *pkt;
     bool video;
-    uint64_t events[4];  // input available, output available, format changed, error
+    uint64_t events;  // the game's DecoderEvents (kept as a pointer, as the SDK does): input available, output available,
+                      // format changed, error: each an EventType pointer, read when signalled (Unreal registers first, fills in later)
     uint8_t *in_mem[NIN];
     uint32_t in_cap;
     bool in_busy[NIN];
@@ -559,9 +620,11 @@ static void buf_put(uint8_t *m, uint32_t size) {
 
 // Signal one of the game's decoder events unless the decoder was stopped. Under the lock so a Stop on another
 // thread can't slip between the check and the signal.
+static uint64_t dec_event(Decoder *d, int i) { return d->events ? ((uint64_t *)(uintptr_t)d->events)[i] : 0; }
+
 static void dec_signal(Cpu *c, Decoder *d, int i) {
     pthread_mutex_lock(&d->lock);
-    if (!d->stopped) signal_guest_event(c, d->events[i]);
+    if (!d->stopped) signal_guest_event(c, dec_event(d, i));
     pthread_mutex_unlock(&d->lock);
 }
 
@@ -598,7 +661,7 @@ static void dec_configure(Cpu *c) {
 
 static void dec_register_events(Cpu *c) {
     Decoder *d = self_state(c);
-    memcpy(d->events, (void *)(uintptr_t)c->x[1], sizeof d->events);
+    d->events = c->x[1];
     c->x[0] = 0;
 }
 
@@ -648,7 +711,7 @@ static void dec_stop(Cpu *c) {
         uint64_t saved[8];
         memcpy(saved, c->x, sizeof saved);
         for (int i = 0; i < 4; i++)
-            if (d->events[i]) { c->x[0] = d->events[i]; guest_call(c, clear_event); }
+            if (dec_event(d, i)) { c->x[0] = dec_event(d, i); guest_call(c, clear_event); }
         memcpy(c->x, saved, sizeof saved);
     }
     pthread_mutex_unlock(&d->lock);
@@ -659,7 +722,9 @@ static uint64_t n_acq_in, n_send, n_acq_out, n_get_out, n_rel_out, n_frames;
 static void movie_stats(void) {
     static uint64_t last;
     uint64_t now = n_acq_in + n_send + n_acq_out + n_rel_out;
-    if (now / 200 != last / 200)
+    static int step;
+    if (!step) step = getenv("PICRECOMP_LOG_MOVIE") ? 10 : 200;
+    if (now / step != last / step)
         LOG("[movie] acq_in %llu send %llu frames %llu acq_out %llu get_out %llu rel_out %llu\n", n_acq_in, n_send,
             n_frames, n_acq_out, n_get_out, n_rel_out);
     last = now;
@@ -828,6 +893,10 @@ static void dec_get_output_buffer(Cpu *c) {
         uint8_t *dst[1] = {d->rgba};
         int dst_stride[1] = {w * 4};
         sws_scale(d->sws, src, src_stride, 0, h, dst, dst_stride);
+        if (getenv("PICRECOMP_LOG_MOVIE")) {  // (debug) when each frame reaches the game's texture
+            extern uint64_t renderer_present_count(void);
+            LOG("[movie] frame %d (%dx%d) into texture %p at present %llu\n", i, w, h, (void *)t, (unsigned long long)renderer_present_count());
+        }
         renderer_upload_rgba(t, d->rgba, (uint32_t)w, (uint32_t)h, (uint32_t)w * 4);
         c->x[0] = 0;
         return;
