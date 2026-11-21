@@ -560,6 +560,10 @@ Measured later: per-frame brightness of the house region has exactly two states 
 differing image is pass 2 (the 853x480 scene colour). Hashing the full constant buffers per draw gave no slot that splits the states (draw counts vary per
 frame, so slots were compared by order only up to the first layout change). The brighter state looks like the intended one. Next idea: hash the
 constant buffers keyed by (shader hash, slot) instead of draw order, and the contents of GPU-written textures sampled by the base pass.
+Also ruled out, each over 60 frames: `PICRECOMP_FENCE_FLUSH=1`, every pass in its own submission (`PICRECOMP_VK_DEVLOST_TRACE=2`), depth-copy aliasing off
+(`PICRECOMP_VK_COPY_OPT=0`). The bright state is the rare one in most runs (single bright frames among ~87s). The flicker vanishes (stuck dark) while
+`PICRECOMP_DEBUG_FRAMES` saves every pass, so what that readback does (a flush plus a texture read back) hides it; per-(shader, slot) constant-buffer
+hashes over 16 such frames showed nothing, but that run had no flicker to correlate with. Next: reproduce with the hashing on in a normal run (no pass dump).
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
 which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
 other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
