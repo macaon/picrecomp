@@ -472,6 +472,78 @@ Shield Hero's. What was new:
   The runtime called it before the game's constructors only; it is before the SDK's now (`rtld_init_sdk`), once.
 Not done: the puzzles; its languages (English and Japanese only: the language list already follows the game's flags).
 
+## Piczle Cross: Story of Seasons (work in progress, 2026-11-20)
+
+Unreal Engine 4 (not a Jupiter title), base 01003F201C5BA000 + update v131072 (manifest in `titles/`). Imports
+(about 5 min of generation) and boots; runs at 60 fps with no fatal error, but the screen stays black.
+
+Fixed on the way (uncommitted at the time of writing): sparse .eh_frame made the jump-table replay quadratic
+(`gen.py` bounded once-per-table replay, `_after_last_write`); Makefile `ls -S` over the 128 KB argument limit;
+VAM / alias-region sizing (64 GB alias, engine reserves ~62 GB); GetInfo 20; NVN device ids 61/64 (max texture
+size); texture refcount after nvnTextureFinalize; vi frame-history and HID touch HLE; TLD / TLD.B; the movie
+library reads from the RomFS image, Decoder keeps the DecoderEvents pointer, Extractor slots 2 and 13.
+
+Storage texel buffers (2026-11-20, Vulkan on Linux, validation layer clean): the three compute shaders that failed were not
+image shaders but SUST.P / SUATOM on 1D *buffer* textures (UE4's RWBuffer clears and counters). Now translated
+(`emit_sust`, `emit_suatom`: untyped SUST of four 32-bit components, SUATOM ADD/MIN/MAX/AND/OR/XOR/EXCH on 32-bit unsigned;
+handle resolved from the driver c[2] image table, slot k at 0x120 + 8k; test: `check_buffer_images`). Backend: the
+reflection reports STORAGE_TEXEL_BUFFER, `texel_view_for` makes a buffer view over the texture's memory (heap import, or
+`texel_import` for the engine's own mappings), buffer textures no longer allocate a width-sized image, the data goes in as
+raw bits through a `uimageBuffer` (32-bit components only: narrower formats log "stored as raw bits"). All compute
+programs now run (1080 dispatches / 120 frames, 0 skipped). Still not done: INC/DEC atomics, signed MIN/MAX, typed SUST,
+SULD, buffer textures *sampled* (samplerBuffer, `[tex] type mismatch ... target 10`).
+
+The screen is still black. Found on the way: the movie player's extractor thread (0x7003c02de4) wants
+GetSampleTrack = 0x2000 at the end of a file (to send its decoders the end-of-stream input) - it polled 1 forever; the
+decoder-output surfaces are 0x0 (`flags 2`) and now take the frame's size. Only 36 frames are ever decoded (presents 7-36), then
+the game holds all 6 output buffers and stops - and no draw ever samples a video texture (`PICRECOMP_COPY_TRACE=<frame>`:
+every frame is 5 draws: the scene composite, tonemap, Slate boxes). So the engine never gets to showing the movie: what it is
+waiting for is unknown (guess: something the title's boot waits on, not the decoder). The game's log function was not found
+(`~/temp/gdb_msg.txt` breaks on a stale address).
+UE4 log route (step 1): a dead end - the shipping build has no log category strings (only `LogLoad`), so the guest log function can't be
+found that way. Decompiling the player instead (Ghidra, `~/temp/ghidra`, project `p_pz`; functions by guest address, `nm picgame.so | grep f_<addr>`
+gives function starts): the output thread is 0x7003c03fc4 (AcquireOutputBuffer = slot 12), GetOutputBuffer is called from 0x7003c056f8, which builds the
+Buffer with the game's NVN texture and queues the sample; 0x7003c039d8 releases queued samples in order, only while
+`fn(sample + 0x10, 0) != 2` (fn = the import at 0x70060bc0b8 = nvnSyncWait, timeout 0: confirmed with a trace - 22 calls from 0x7003c03a44, ours returns 0 = signaled, so every
+release passes; the sync is NOT what stalls). What stalls: the engine's fetch function 0x700112f1a4 (the only caller of the GetOutputBuffer wrapper
+besides 0x70011745c4) starts with `if (10 < *(int *)(this + 0x90)) return;` - its list of decoded frames waiting to be shown (vector at +0x88, 0x10 per
+entry) is capped at 11, which is exactly the 11 frames per movie we see (presents 7-17 and 26-36). Nothing ever drains that list, so the
+engine stops fetching, the 6 output buffers stay acquired and the decoder backs off. **Solved (2026-11-20): Piczle shows its logo movies and the title screen** ("Press A to start", v.1.021; Vulkan on Linux, hidden window).
+The cause was in our extractor, slot 13 (GetSampleMetaData): it was a stub that *wrote into the guest's 8-byte MediaData handle as if it were
+the host struct* (a memory corruption, and the reason of the crashes in 0x7003c02de4) and gave no data. UE4's player (0x7003c02b28) reads
+"durationUs" per sample (and for video "width", "height", "cropLeft/Top/Right/Bottom") from it; its sample queue's FetchVideo refuses a sample
+whose duration is below 1, so the engine never played the media (11 frames queued, none popped). Now `ex_sample_metadata` fills them (crop
+edges inclusive), through `md()` like the other MediaData slots. How it was found: gdb write-watch on the sample queue's count (`$cpu[0]` is x0 =
+`this` at a generated function's entry; vtable slots read from guest memory), Ghidra on the player (0x7003c02b28 / 0x7003c03fc4 / 0x7003c056f8 /
+0x700112f1a4 / vtable 0x70_05a32658 slot 7 = FetchVideo). `PICRECOMP_LOG_MOVIE=1` logs each frame with the present it reached the game's texture.
+Shader gaps (2026-11-21): TLD4 / TLD4.B (`emit_tld4`: gather, 2D / 2D array / cube, AOFFI, depth compare) and VMNMX (`emit_vmnmx`: the signed clamp
+`min(max(Ra, Rb), Rc)` UE4 uses for dynamic indices; yuzu's field layout; MRG / ACC secondary ops, SAT and CC are not translated) now translate, test
+`check_gather_and_vmnmx`; the vertex shader that failed compiles. Remaining: the "indirection texture" was a misreading. The handle search (`separate_texture_pair`) stopped at an SSY / SYNC / BRA between the
+handle's MOV / LOP and the TLD.B (control flow has a zero low byte, which looked like a write to R0): fixed (`is_control_flow`), and the three
+fragment shaders translate. What really skipped ~66 draws a frame: programs with a vertex shader and no fragment shader (stage mask 0x21 =
+vertex + compute: UE4's depth / shadow passes) were refused by `get_program`; they now get an empty fragment shader (0 skipped, ~106 draws a
+frame; the title looks the same, so those passes are not what is missing from it). `shaderImageGatherExtended` is enabled (textureGatherOffset).
+Seen: a blurred circular iris-out at the end of the logo movies (in both builds: the game's own transition).
+**The title screen is complete (2026-11-21):** sky, clouds and sea reflections behind the logo, "Press A to start" (Vulkan on Linux). Two things did it:
+1. *Buffer textures sampled with TLD.* A TLD does not tell a 1D texture from a buffer texture, so a program is a variant per set of buffer slots:
+   `ShaderInfo.tld1d_mask` (slots only a 1D TLD used), `ShaderKey.buf_mask` (hashed into the program key), `draw_` resolves the bound textures after
+   the first translation (`buffer_slots`) and asks for the variant (log line "buffer textures in 1D slots"). The variant declares a `usamplerBuffer`
+   (the registers get the bits), the descriptor is UNIFORM_TEXEL_BUFFER over the texture's memory (`texel_view_for` / `texel_import`, formats through
+   `uint_view_format`). A ring slot of `texel_import` reused while recorded commands still pointed at it lost the device: dropped imports now wait in
+   a graveyard until their submission completes.
+2. *Global memory outside the guest heap.* The tonemap shader loads the exposure (`LDG` at the address of storage buffer 0) and every storage buffer the
+   engine binds lives in its own VAM mappings, outside the 3.25 GB heap window the shader's `gmem_` covers: the load returned 0 and the picture was black.
+   Now each bound storage buffer outside the window is imported with a device address (`far_import`, VK_KHR_buffer_device_address, enabled when the
+   device has it: `g_vk.bda`), `gfar_table` hands the shader a table of them (binding 22, `GFAR_BUFFER_INDEX`), and LDG / STG / RED fall back to
+   `gfar_ld` / `gfar_st` / `gfar_stb` / atomics through `GFarRef` (translate.c `far_word` ...). Not done: other atomics (ATOM with a result), pointers that
+   do not come from a bound storage buffer.
+Also: depth-only programs draw (empty fragment shader); the handle search skips control flow; TLD4(.B) and VMNMX exist.
+Not tested: Vulkan validation on (the validation layer itself crashed once after the depth-only change), the other games, Windows.
+Also still: A (scripted `key:Z`) does not start the game - not looked at.
+Next step: input - A (scripted `pad:a`, `sdlpad:a`, `sdlkey:Return`) does not start the game from the title (GetNpadState is polled from 0x700113ae68); then the menus and the game itself. The TEMP hooks (`PICRECOMP_TEMP_DI`, `PICRECOMP_TEMP_KEEP_SRS`) must become real values and all 20 games be regression-tested before
+committing (the 0x2000 end-of-stream result and the metadata slot also touch every game with movies); installed games' libraries are stale
+(library ID changed) until rebuilt.
+
 ## What to test and watch for
 
 - Saves: run S (play.sh) once, look for `[fs] save data of earlier versions copied` in the log and for your progress. The
