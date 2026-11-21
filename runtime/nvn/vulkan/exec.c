@@ -4047,7 +4047,9 @@ static void exec_list(uint64_t handle, int depth) {
             extern uint64_t vk_frame_counter(void);
             if (mode == 1 && vk_frame_counter() != frame_seen) { frame_seen = vk_frame_counter(); frame_ts = ns_to_gpu_ticks(plat_now_ns()); }
             if (!out) break;
-            out[0] = 0;
+            // SAMPLES_PASSED (occlusion queries): an engine culls what the query says was hidden. Piczle Cross's characters and
+            // puzzle cubes were drawn into the shadow maps only: every query answered 0. No real query yet: everything is visible.
+            out[0] = type == 1 ? 0x7FFFFFFFull : 0;
             out[1] = mode == 1 ? frame_ts : mode == 3 ? SDL_GetTicksNS() : ns_to_gpu_ticks(plat_now_ns());  // (3 legacy: ns, the old bug)
             static uint64_t *prev_out;  // (frame pacing: the pair's start)
             if (mode == 0 || mode == 2) out[1] = pace_end_counter(prev_out, out, out[1]);
