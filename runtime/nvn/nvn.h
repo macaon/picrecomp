@@ -30,6 +30,7 @@ typedef struct NvnTexture {
     NvnPool *pool;
     uint64_t pool_guest, pool_offset;
     void *backend;  // renderer-side texture
+    int refs;       // the guest's handle, and one for each texture pool slot it is registered in (objects.c)
     uint64_t debug_id;
     char label[64];
 } NvnTexture;

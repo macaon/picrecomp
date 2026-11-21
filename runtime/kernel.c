@@ -203,7 +203,7 @@ static void query_memory(uint64_t addr, uint64_t out) {
         prev_end = r->addr + r->size;
     }
     info[0] = prev_end;
-    info[1] = (1ull << 39) - prev_end;
+    info[1] = (prev_end < GUEST_HI ? GUEST_HI : (1ull << 39)) - prev_end;  // EXPERIMENT
     memcpy((void *)out, info, 0x28);
 }
 
@@ -834,7 +834,12 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         case 16: v = g_system_resource_size; break;
         case 17: v = 0; break;
         case 18: v = g_program_id; break;  // program id (main.npdm's ACI0, set by boot)
-        case 20: v = 0; break;
+        case 20: {  // UserExceptionContextAddress: a page the SDK writes into (SetDyingMessageRegion: Piczle Cross)
+            static uint64_t page;
+            if (!page) page = (uint64_t)hle_alloc(0x1000);
+            v = page;
+            break;
+        }
         // (Switchbrew SVC GetInfo: types newer SDKs may ask for)
         case 23: v = 1; break;            // IsApplication
         case 24: v = 0x100; break;        // FreeThreadCount (plenty: threads are host threads)

@@ -33,6 +33,13 @@ static uint32_t device_integer(uint32_t which) {
         [58] = 1, [59] = 1, [60] = 1, [61] = 1, [62] = 1, [63] = 1, [64] = 1,
         [94] = 32,  // separate texture bindings per stage
     };
+    if (getenv("PICRECOMP_TEMP_DI")) {  // EXPERIMENT: PICRECOMP_TEMP_DI=<id>,<id>,...: those ids answer 16384
+        for (const char *p = getenv("PICRECOMP_TEMP_DI"); p && *p;) {
+            unsigned id = (unsigned)strtoul(p, (char **)&p, 10);
+            if (id == which) return 16384;
+            if (*p == ',') p++; else break;
+        }
+    }
     return which < sizeof v / sizeof *v ? v[which] : 0;
 }
 
@@ -359,6 +366,7 @@ NVN(nvnTextureBuilderGetStorageAlignment) { RET(is_linear(A(0)) ? 32 : 512); }
 
 static NvnTexture *texture_from_builder(uint64_t b) {
     NvnTexture *t = calloc(1, sizeof *t);
+    t->refs = 1;
     t->target = G(uint32_t, b, 0xC);
     t->flags = G(uint32_t, b, 8);
     t->width = G(uint32_t, b, 0x10);
@@ -388,9 +396,14 @@ NVN(nvnTextureInitialize) {
     SET_HOST(A(0), t);
     RET(1);
 }
+// A texture pool slot keeps working after the texture object is finalized (its descriptor is a copy of what the texture was):
+// Unreal Engine registers a texture, finalizes the object and draws with the slot. So the guest's handle and every pool
+// slot hold a reference, and the host object goes with the last one.
+static void texture_release(NvnTexture *t) {
+    if (t && --t->refs == 0) { backend_texture_destroyed(t); free(t); }
+}
 NVN(nvnTextureFinalize) {
-    NvnTexture *t = HOST(NvnTexture, A(0));
-    if (t) { backend_texture_destroyed(t); free(t); }
+    texture_release(HOST(NvnTexture, A(0)));
     SET_HOST(A(0), 0);
 }
 NVN(nvnTextureSetDebugLabel) {
@@ -579,7 +592,10 @@ static void register_texture(Cpu *c) {
     int id = (int)A(1);
     if (id < 0 || id >= d->count) return;
     NvnTexEntry *e = &((NvnTexEntry *)d->entries)[id];
-    e->tex = HOST(NvnTexture, A(2));
+    NvnTexture *t = HOST(NvnTexture, A(2));
+    if (t) t->refs++;
+    texture_release(e->tex);  // (what the slot held before)
+    e->tex = t;
     e->has_view = A(3) != 0;
     if (e->has_view) memcpy(&e->view, AP(3), sizeof e->view);
 }
