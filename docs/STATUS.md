@@ -555,6 +555,11 @@ re-upload timing (`PICRECOMP_TEX_FULLHASH`), a missing texture (no dummy fallbac
 floats of every constant buffer (nothing correlates), statistics of every compute-written buffer image and storage buffer (nothing correlates), buffer-texture snapshots,
 shadow comparison off (`PICRECOMP_NO_SHADOW`), feedback snapshots off. Not ruled out: GPU-rendered intermediate textures (shadow maps, scene captures), the rest of the
 constant buffers, sampler state, a data race inside a shader. It does not happen while every dispatch is flushed *and* hashed (one 40-frame capture), but flushing alone does not stop it.
+Measured later: per-frame brightness of the house region has exactly two states (~87 dark/green, ~138 bright/blue-tinted ambient), in random runs
+(1-8 frames), not periodic and not tied to frame mod 3 (so not a 3-slot ring); sky is identical in both and pass 0/1 (depth) are identical, the first
+differing image is pass 2 (the 853x480 scene colour). Hashing the full constant buffers per draw gave no slot that splits the states (draw counts vary per
+frame, so slots were compared by order only up to the first layout change). The brighter state looks like the intended one. Next idea: hash the
+constant buffers keyed by (shader hash, slot) instead of draw order, and the contents of GPU-written textures sampled by the base pass.
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
 which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
 other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
