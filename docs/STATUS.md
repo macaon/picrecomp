@@ -548,6 +548,13 @@ held a key down: the menu walked to its last item by itself), and the big one: *
 answered 0** - UE4 culled every dynamic primitive (characters, the puzzle's cells, numbers and cursor were drawn into the shadow maps
 only). It now reports a visible result (0x7FFFFFFF); no real query. Also: compute shaders get the buffer-texture variants; the handle
 search accepts a predicate written between the handle and its TEX when the handle's own instructions are not predicated.
+**Known problem - the main menu flickers** (seen by the user on a real window; reproducible with scripted shots): the buildings of the title scene flip, frame to frame and
+unpredictably, between their right colours and a dark greenish look (three levels of brightness: ~87, ~118, ~138 on a 0-255 mean of the left houses). Sky, water and UI do not
+change; the difference is already in the 853x480 scene pass. Ruled out, each measured: synchronous submit (`PICRECOMP_SYNC_SUBMIT`), flushing after every dispatch, texture
+re-upload timing (`PICRECOMP_TEX_FULLHASH`), a missing texture (no dummy fallbacks), the guest-memory content of every bound 2D texture (identical in all frames), the first 16
+floats of every constant buffer (nothing correlates), statistics of every compute-written buffer image and storage buffer (nothing correlates), buffer-texture snapshots,
+shadow comparison off (`PICRECOMP_NO_SHADOW`), feedback snapshots off. Not ruled out: GPU-rendered intermediate textures (shadow maps, scene captures), the rest of the
+constant buffers, sampler state, a data race inside a shader. It does not happen while every dispatch is flushed *and* hashed (one 40-frame capture), but flushing alone does not stop it.
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
 which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
 other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
