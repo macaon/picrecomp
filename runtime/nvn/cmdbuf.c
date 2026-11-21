@@ -18,6 +18,13 @@ NVN(nvnCommandBufferInitialize) {
     RET(1);
 }
 NVN(nvnCommandBufferFinalize) { free(cb_of(A(0))); SET_HOST(A(0), 0); }
+// Commands that do nothing here: each is logged the first time the game uses it (what a draw may be missing).
+static void noop_trace(const char *name) {
+    static const char *seen[64];
+    static int n;
+    for (int i = 0; i < n; i++) if (seen[i] == name) return;
+    if (n < 64) { seen[n++] = name; LOG("[nvn] %s is not implemented (used by the game)\n", name); }
+}
 NVN(nvnCommandBufferSetDebugLabel) { (void)c; }
 
 static CmdRec *raw_rec(uint64_t at, uint32_t op, uint32_t size) {
@@ -233,9 +240,9 @@ NVN(nvnCommandBufferBindSeparateSampler) {
     r->x[2] = 1;
     memcpy(r->extra, &s.x[3], 8);
 }
-NVN(nvnCommandBufferBindTransformFeedbackBuffers) { (void)c; }
-NVN(nvnCommandBufferBindTransformFeedbackBuffer) { (void)c; }
-NVN(nvnCommandBufferBindCoverageModulationTable) { (void)c; }
+NVN(nvnCommandBufferBindTransformFeedbackBuffers) { (void)c; noop_trace("nvnCommandBufferBindTransformFeedbackBuffers"); }
+NVN(nvnCommandBufferBindTransformFeedbackBuffer) { (void)c; noop_trace("nvnCommandBufferBindTransformFeedbackBuffer"); }
+NVN(nvnCommandBufferBindCoverageModulationTable) { (void)c; noop_trace("nvnCommandBufferBindCoverageModulationTable"); }
 
 NVN(nvnCommandBufferSetTexturePool) {
     Snap s = snap(c);
@@ -311,25 +318,25 @@ PLAIN(nvnCommandBufferSetLineWidth, CMD_SET_LINE_WIDTH)
 PLAIN(nvnCommandBufferSetPointSize, CMD_SET_POINT_SIZE)
 PLAIN(nvnCommandBufferSetSampleMask, CMD_SET_SAMPLE_MASK)
 PLAIN(nvnCommandBufferSetRenderEnable, CMD_SET_RENDER_ENABLE)
-NVN(nvnCommandBufferSetRenderEnableConditional) { (void)c; }
-NVN(nvnCommandBufferSetDepthClamp) { (void)c; }
-NVN(nvnCommandBufferSetRasterizerDiscard) { (void)c; }
-NVN(nvnCommandBufferSetConservativeRasterEnable) { (void)c; }
-NVN(nvnCommandBufferSetConservativeRasterDilate) { (void)c; }
-NVN(nvnCommandBufferSetSubpixelPrecisionBias) { (void)c; }
-NVN(nvnCommandBufferSetViewportSwizzles) { (void)c; }
-NVN(nvnCommandBufferSetStencilCullCriteria) { (void)c; }
-NVN(nvnCommandBufferSetColorReductionEnable) { (void)c; }
-NVN(nvnCommandBufferSetColorReductionThresholds) { (void)c; }
-NVN(nvnCommandBufferSetTiledCacheAction) { (void)c; }
-NVN(nvnCommandBufferSetTiledCacheTileSize) { (void)c; }
+NVN(nvnCommandBufferSetRenderEnableConditional) { (void)c; noop_trace("nvnCommandBufferSetRenderEnableConditional"); }
+NVN(nvnCommandBufferSetDepthClamp) { (void)c; noop_trace("nvnCommandBufferSetDepthClamp"); }
+NVN(nvnCommandBufferSetRasterizerDiscard) { (void)c; noop_trace("nvnCommandBufferSetRasterizerDiscard"); }
+NVN(nvnCommandBufferSetConservativeRasterEnable) { (void)c; noop_trace("nvnCommandBufferSetConservativeRasterEnable"); }
+NVN(nvnCommandBufferSetConservativeRasterDilate) { (void)c; noop_trace("nvnCommandBufferSetConservativeRasterDilate"); }
+NVN(nvnCommandBufferSetSubpixelPrecisionBias) { (void)c; noop_trace("nvnCommandBufferSetSubpixelPrecisionBias"); }
+NVN(nvnCommandBufferSetViewportSwizzles) { (void)c; noop_trace("nvnCommandBufferSetViewportSwizzles"); }
+NVN(nvnCommandBufferSetStencilCullCriteria) { (void)c; noop_trace("nvnCommandBufferSetStencilCullCriteria"); }
+NVN(nvnCommandBufferSetColorReductionEnable) { (void)c; noop_trace("nvnCommandBufferSetColorReductionEnable"); }
+NVN(nvnCommandBufferSetColorReductionThresholds) { (void)c; noop_trace("nvnCommandBufferSetColorReductionThresholds"); }
+NVN(nvnCommandBufferSetTiledCacheAction) { (void)c; noop_trace("nvnCommandBufferSetTiledCacheAction"); }
+NVN(nvnCommandBufferSetTiledCacheTileSize) { (void)c; noop_trace("nvnCommandBufferSetTiledCacheTileSize"); }
 NVN(nvnCommandBufferSetShaderScratchMemory) { (void)c; }
-NVN(nvnCommandBufferSetPatchSize) { (void)c; }
-NVN(nvnCommandBufferSetInnerTessellationLevels) { (void)c; }
-NVN(nvnCommandBufferSetOuterTessellationLevels) { (void)c; }
-NVN(nvnCommandBufferSetProgramSubroutines) { (void)c; }
-NVN(nvnCommandBufferSaveZCullData) { (void)c; }
-NVN(nvnCommandBufferRestoreZCullData) { (void)c; }
+NVN(nvnCommandBufferSetPatchSize) { (void)c; noop_trace("nvnCommandBufferSetPatchSize"); }
+NVN(nvnCommandBufferSetInnerTessellationLevels) { (void)c; noop_trace("nvnCommandBufferSetInnerTessellationLevels"); }
+NVN(nvnCommandBufferSetOuterTessellationLevels) { (void)c; noop_trace("nvnCommandBufferSetOuterTessellationLevels"); }
+NVN(nvnCommandBufferSetProgramSubroutines) { (void)c; noop_trace("nvnCommandBufferSetProgramSubroutines"); }
+NVN(nvnCommandBufferSaveZCullData) { (void)c; noop_trace("nvnCommandBufferSaveZCullData"); }
+NVN(nvnCommandBufferRestoreZCullData) { (void)c; noop_trace("nvnCommandBufferRestoreZCullData"); }
 
 static uint64_t copy_row_stride, copy_image_stride;
 RT_ON_RESET(cmdbuf_reset) { copy_row_stride = copy_image_stride = 0; }
@@ -384,7 +391,7 @@ NVN(nvnCommandBufferDiscardColor) {
     r->x[2] = 0xF;  // all channels
     r->x[5] = 0;    // float clear
 }
-NVN(nvnCommandBufferDiscardDepthStencil) { (void)c; }
+NVN(nvnCommandBufferDiscardDepthStencil) { (void)c; noop_trace("nvnCommandBufferDiscardDepthStencil"); }
 
 // ---- draws (all integer arguments fit in x1..x7)
 NVN(nvnCommandBufferDrawArrays) { Snap s = snap(c); CmdRec *r = record(c, CMD_DRAW_ARRAYS, 0, &s); r->x[3] = 0; r->x[4] = 1; }
@@ -422,10 +429,10 @@ NVN(nvnCommandBufferDrawElementsBaseVertex) {
 NVN(nvnCommandBufferDrawElementsInstanced) { trace_draw(c, c->x[3]); Snap s = snap(c); record(c, CMD_DRAW_ELEMENTS, 0, &s); }
 PLAIN(nvnCommandBufferDrawArraysIndirect, CMD_DRAW_ARRAYS_INDIRECT)
 PLAIN(nvnCommandBufferDrawElementsIndirect, CMD_DRAW_ELEMENTS_INDIRECT)
-NVN(nvnCommandBufferMultiDrawArraysIndirectCount) { (void)c; }
-NVN(nvnCommandBufferMultiDrawElementsIndirectCount) { (void)c; }
-NVN(nvnCommandBufferDrawTransformFeedback) { (void)c; }
-NVN(nvnCommandBufferDrawTexture) { (void)c; }
+NVN(nvnCommandBufferMultiDrawArraysIndirectCount) { (void)c; noop_trace("nvnCommandBufferMultiDrawArraysIndirectCount"); }
+NVN(nvnCommandBufferMultiDrawElementsIndirectCount) { (void)c; noop_trace("nvnCommandBufferMultiDrawElementsIndirectCount"); }
+NVN(nvnCommandBufferDrawTransformFeedback) { (void)c; noop_trace("nvnCommandBufferDrawTransformFeedback"); }
+NVN(nvnCommandBufferDrawTexture) { (void)c; noop_trace("nvnCommandBufferDrawTexture"); }
 PLAIN(nvnCommandBufferDispatchCompute, CMD_DISPATCH)
 PLAIN(nvnCommandBufferDispatchComputeIndirect, CMD_DISPATCH_INDIRECT)
 NVN(nvnCommandBufferBeginTransformFeedback) { (void)c; }

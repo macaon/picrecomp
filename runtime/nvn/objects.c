@@ -654,6 +654,10 @@ static void set_shaders(Cpu *c, int stride) {
         default: stage = 5; break; // compute (no SPH)
         }
         if (*(uint32_t *)(uintptr_t)code != 0x12345678) stage = 5;
+        if (stage == 5 && (*(uint32_t *)(uintptr_t)code != 0x12345679u || n > 1)) {  // a graphics-looking shader taken for compute
+            static int nlog;
+            if (nlog++ < 10) LOG("[shader] data=%llx has tag %08x, sph %08x: taken for a compute shader\n", (unsigned long long)code, *(uint32_t *)(uintptr_t)code, sph0);
+        }
         if (getenv("PICROSS_SHADER_TRACE")) { static unsigned seen; if (seen++ < 24) LOG("[shader] data=%llx control=%p tag=%08x sph=%08x stage=%u\n", (unsigned long long)code, (void *)control, *(uint32_t *)(uintptr_t)code, sph0, stage); }
         p->stages[stage].stage = stage;
         p->stages[stage].code_addr = code;
