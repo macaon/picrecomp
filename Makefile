@@ -57,7 +57,9 @@ GOBJ     := $(GAME)/obj
 endif
 GOBJ     ?= $(B)/obj
 # (biggest first: the long compiles start early and the last ones are quick, instead of one big file ending the build alone)
-GEN_SRC  := $(shell ls -S $(foreach m,$(GAME_MODULES),$(wildcard $(GEN)/$(firstword $(subst :, ,$(m)))/*.c)) 2>/dev/null)
+# (the shell expands the globs itself, in the folder: a command line naming every file is one argument over 128 KB for a game
+# with about 2,000 files, which fails with "Argument list too long": Piczle Cross)
+GEN_SRC  := $(addprefix $(GEN)/,$(shell cd $(GEN) 2>/dev/null && ls -S $(foreach m,$(GAME_MODULES),$(firstword $(subst :, ,$(m)))/*.c) 2>/dev/null))
 GEN_OBJ  := $(patsubst %.c,$(GOBJ)/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(GOBJ)/tools/gamelib_entry.o
 RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) \
             $(wildcard runtime/nvn/*.c) $(wildcard runtime/nvn/maxwell/*.c) runtime/platform/$(PLATFORM).c

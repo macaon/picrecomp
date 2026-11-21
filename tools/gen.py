@@ -229,6 +229,46 @@ class Module:
         for r in regs:
             mu.reg_write(A.UC_ARM64_REG_X0 + r if r < 29 else A.UC_ARM64_REG_X29, i)
 
+    def _after_last_write(self, start, br_pc, reg):
+        """Where the index of a table is set for the emulation: after the instructions at the start of start..br that
+        overwrite the compared register without reading it. The block may recompute it from another register (an
+        `and x8, x20, #0xff` first thing: Piczle Cross), and an index set before that is overwritten: every index then
+        reaches the same single target. From the first instruction that reads it, the register is the index."""
+        md = getattr(self, '_cs', None)
+        if md is None:
+            import capstone
+            md = self._cs = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
+            md.detail = True
+
+        def has(ins, regs):
+            return any((ins.reg_name(r) or '')[1:] == str(reg) and (ins.reg_name(r) or '')[:1] in 'xw' for r in regs)
+        at = start
+        for a in range(start, br_pc, 4):
+            for ins in md.disasm(struct.pack('<I', self.word(a)), a, 1):
+                read, written = ins.regs_access()
+                if has(ins, read):
+                    return at
+                if has(ins, written):
+                    at = a + 4
+        return at
+
+    def _materialized(self, mu, start):
+        """The registers a jump table's emulation starts from: every register a known constant, then the address
+        materialization (ADRP/ADR/ADD-imm) replayed up to `start`, so table bases computed before loops or branches are
+        known. The same for every index of the table: done once, the context restored for each index. Table bases are
+        made near the function's start, so the replay reaches back 256 KB at most: a binary with unwind info for few of
+        its functions (Piczle Cross) has "functions" of megabytes here, and replaying all of it took minutes a table."""
+        for r in range(29):
+            mu.reg_write(A.UC_ARM64_REG_X0 + r, SCRATCH_MEM + 0x80000)
+        mu.reg_write(A.UC_ARM64_REG_SP, SCRATCH_MEM + 0x80000)
+        a2 = max(self._vlo, start - 0x40000)
+        while a2 < start:
+            w2 = self.word(a2)
+            if (w2 & 0x1F000000) == 0x10000000 or (w2 & 0xFF800000) == 0x91000000:
+                mu.emu_start(a2, 0, count=1)
+            a2 += 4
+        return mu.context_save()
+
     def _emulate_table(self, br_pc, entry, end, start, idx, count, set_at):
         """Run start..br for each index value (set at address set_at), collect targets."""
         mu = self.emu()
@@ -245,16 +285,9 @@ class Module:
 
         targets = []
         try:
+            ctx = self._materialized(mu, start)
             for i in range(count):
-                for r in range(29):
-                    mu.reg_write(A.UC_ARM64_REG_X0 + r, SCRATCH_MEM + 0x80000)
-                mu.reg_write(A.UC_ARM64_REG_SP, SCRATCH_MEM + 0x80000)
-                a2 = self._vlo
-                while a2 < start:
-                    w2 = self.word(a2)
-                    if (w2 & 0x1F000000) == 0x10000000 or (w2 & 0xFF800000) == 0x91000000:
-                        mu.emu_start(a2, 0, count=1)
-                    a2 += 4
+                mu.context_restore(ctx)
                 if set_at != start and not step_to(start, set_at):
                     return None
                 self._set_index(mu, [idx], i)
@@ -289,7 +322,8 @@ class Module:
             count = limit + 1 if bits(w, 0, 4) == 9 else limit
             if count <= 0 or count > 4096:
                 continue
-            return self._emulate_table(br_pc, entry, end, s, bits(cw, 5, 5), count, s)
+            idx = bits(cw, 5, 5)
+            return self._emulate_table(br_pc, entry, end, s, idx, count, self._after_last_write(s, br_pc, idx))
         return None
 
     def _jump_table_fallthrough(self, br_pc, entry, end):
@@ -350,18 +384,9 @@ class Module:
             return False
 
         try:
+            ctx = self._materialized(mu, start)
             for i in range(count):
-                for r in range(29):
-                    mu.reg_write(A.UC_ARM64_REG_X0 + r, SCRATCH_MEM + 0x80000)
-                mu.reg_write(A.UC_ARM64_REG_SP, SCRATCH_MEM + 0x80000)
-                # replay address materialization (ADRP/ADR/ADD-imm) from the function entry, so table
-                # bases computed before loops or branches are known
-                a2 = self._vlo
-                while a2 < start:
-                    w2 = self.word(a2)
-                    if (w2 & 0x1F000000) == 0x10000000 or (w2 & 0xFF800000) == 0x91000000:
-                        mu.emu_start(a2, 0, count=1)
-                    a2 += 4
+                mu.context_restore(ctx)
                 if not step_to(start, cmp):
                     return None
                 self._set_index(mu, idx_regs, i)
