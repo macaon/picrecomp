@@ -266,6 +266,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         if (tw < 1) tw = 1;
         if (th < 1) th = 1;
     }
+    if (t->target == 10) tw = th = 1;  // (a buffer texture lives in its memory - exec.c texel_view_for; the image is a stand-in)
     VkImageType type = VK_IMAGE_TYPE_2D;
     uint32_t layers = 1, depth = 1;
     switch (t->target) {
@@ -612,7 +613,19 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     TexBackend *b = tex_backend(t);
-    if (b->pending_rgba) upload_pending(b);
+    if (b->pending_rgba) {
+        // Piczle Cross's decoder output surfaces are created 0x0 (the player sizes them by what it decodes into them): the
+        // image takes the frame's size (it was one texel, and the movie was a single pixel)
+        pthread_mutex_lock(&pending_lock);
+        uint32_t pw = b->pending_w, ph = b->pending_h;
+        pthread_mutex_unlock(&pending_lock);
+        if ((t->flags & 2) && (!t->width || !t->height) && pw && ph) {
+            t->width = pw; t->height = ph;
+            destroy_image(b);
+            create_image(t, b);
+        }
+        upload_pending(b);
+    }
     if (for_render) b->gpu_owned = true;
     else if (!b->gpu_owned) {
         extern uint64_t prof_up_ns;
@@ -756,6 +769,10 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
                          t->height, t->depth, t->target, t->format, b->layers);
     return vk_dummy_view(want_textype);
 }
+
+// A buffer texture's texel format, and its bytes per texel (storage texel buffer views: exec.c stage_set)
+VkFormat vk_texel_format(const NvnTexture *t) { return fmt_of(t->format).vf; }
+uint32_t vk_texel_bytes(const NvnTexture *t) { return t->layout.fmt ? t->layout.fmt->bpb : 0; }
 
 // 1x1 black textures for unbound slots, per type
 VkImageView vk_dummy_view(int textype) {

@@ -38,7 +38,7 @@ typedef struct {
     VkPipelineCache pcache;
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
-    bool custom_border, divisor, host_import;
+    bool custom_border, divisor, host_import, bda;
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
@@ -104,6 +104,8 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
 VkImageView vk_image_view(TexBackend *b, VkImageViewType type, VkFormat fmt, uint32_t lv0, uint32_t nlv, uint32_t ly0,
                           uint32_t nly, VkComponentMapping sw, VkImageAspectFlags aspect);
 VkImageView vk_dummy_view(int textype);
+VkFormat vk_texel_format(const NvnTexture *t);
+uint32_t vk_texel_bytes(const NvnTexture *t);
 VkSampler vk_sampler(NvnSamplerDesc *d);
 VkSampler vk_default_sampler(bool linear);
 void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect);

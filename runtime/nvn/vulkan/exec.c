@@ -449,9 +449,10 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout layout) {
             if (s->npools == 16) FATAL("descriptor pools exhausted\n");
             VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 32768}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096},
                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32768},
-                                            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1024}};
+                                            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1024},
+                                            {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1024}, {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 4096}};
             VkDescriptorPoolCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 8192,
-                                             .poolSizeCount = 5, .pPoolSizes = sizes};
+                                             .poolSizeCount = 7, .pPoolSizes = sizes};
             VK_CHECK(vkCreateDescriptorPool(g_vk.dev, &ci, NULL, &s->pools[s->npools++]));
         }
         VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -478,7 +479,8 @@ static int new_chunk(uint64_t size) {
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
                              .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                      VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT};
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO,
                                   .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
     if (getenv("PICRECOMP_VK_RING_SYSMEM")) ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;  // (test: a GPU without resizable BAR)
@@ -1245,11 +1247,17 @@ static void translate_program(void *arg) {
     { static int g = -1; if (g < 0) { const char *e = getenv("PICRECOMP_SHADER_GUARD"); g = e ? atoi(e) : 0; if (g > 0) maxwell_loop_guard = (uint32_t)g; } }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
+    maxwell_gfar_ok = g_vk.bda;
     pthread_mutex_lock(&translate_lock);
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
     if (p->vi->msl) {
         p->fkey.vs_out_mask = p->vi->out_mask;
-        p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
+        if (p->code[1]) p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
+        else {  // a depth-only program (Piczle Cross's shadow / depth passes): nothing to shade, nothing written
+            p->fi = calloc(1, sizeof *p->fi);
+            p->fi->stage = STAGE_FRAGMENT;
+            p->fi->msl = strdup("#version 460\nvoid main() {}\n");
+        }
     }
     pthread_mutex_unlock(&translate_lock);
     if (!p->vi->msl) {
@@ -1264,7 +1272,7 @@ static void translate_program(void *arg) {
     }
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
-    save_glsl(p->fi->msl, p->code[1], "fs");
+    if (p->code[1]) save_glsl(p->fi->msl, p->code[1], "fs");
     run_job(compile_program, p);
 }
 
@@ -1272,12 +1280,13 @@ static void translate_program(void *arg) {
 static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 
 static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
-    if (!(np->stage_mask & 1) || !(np->stage_mask & 2)) return NULL;
+    if (!(np->stage_mask & 1)) return NULL;  // (no fragment shader: a depth-only draw, translate_program gives it an empty one)
     uint64_t h = 0xcbf29ce484222325ull;
     for (int i = 0; i < 2; i++) { uint64_t a = np->stages[i].code_addr; for (int k = 0; k < 8; k++) { h ^= (a >> (k * 8)) & 0xFF; h *= 0x100000001B3ull; } }
     const uint8_t *vb = (const uint8_t *)vkey;
     for (size_t i = 0; i < sizeof *vkey; i++) { h ^= vb[i]; h *= 0x100000001B3ull; }
     for (int i = 0; i < 8; i++) { h ^= fkey->rt_kind[i]; h *= 0x100000001B3ull; }
+    h ^= fkey->buf_mask; h *= 0x100000001B3ull;
     if (!h) h = 1;
     uint32_t slot = (uint32_t)(h ^ (h >> 31)) & (PROG_TAB - 1);
     while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
@@ -1586,6 +1595,7 @@ static Snap snaps[16];
 static int nsnaps;
 
 static uint64_t shader_texture_handle(int stage, const ShaderTexture *tex) {
+    if (tex->is_image) return st.img[stage][(tex->bindless_offset - 0x120) / 8 & 7];
     if (tex->bindless) {
         unsigned texture = (tex->bindless_offset - 0x168) / 8;
         unsigned sampler = (tex->separate_sampler_offset - 0x568) / 8;
@@ -1601,6 +1611,17 @@ static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
     uint32_t tic = h & 0xFFFFF;
     if (!h || !st.tpool || tic >= (uint32_t)st.tpool->count) return NULL;
     return ((NvnTexEntry *)st.tpool->entries)[tic].tex;
+}
+
+// The slots of this shader's texture list that only a 1D-target TLD fetched and that hold a buffer texture (target 10) now.
+static uint32_t buffer_slots(int stage, const ShaderInfo *si) {
+    uint32_t m = 0;
+    for (int i = 0; i < si->ntex && i < 31; i++) {
+        if (!((si->tld1d_mask >> i) & 1)) continue;
+        NvnTexture *t = shader_texture_object(stage, (ShaderTexture *)&si->tex[i]);
+        if (t && t->target == 10) m |= 1u << i;
+    }
+    return m;
 }
 
 static bool is_attachment(NvnTexture *t) {
@@ -1976,7 +1997,8 @@ static bool gmem_import(uint64_t size) {
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT};
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
     vkBindBufferMemory(g_vk.dev, buf, mem, 0);
@@ -2402,12 +2424,212 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
 // Writes the descriptor set of one stage. gx..gz: compute group counts (driver constants).
 // pre_ii: texture descriptors already resolved by the caller (draw: fragment textures, needed earlier for the
 // viewport decision), or NULL.
+// A storage texel buffer view (SUST / SUATOM on a buffer texture): one per (buffer, offset, range, format), kept for good
+// (a handful: a game binds the same few buffers every frame).
+static VkBufferView texel_view(VkBuffer buf, VkDeviceSize off, VkDeviceSize range, VkFormat f) {
+    static struct { VkBuffer b; VkDeviceSize off, range; VkFormat f; VkBufferView v; } tab[128];
+    static int n;
+    for (int i = 0; i < n; i++)
+        if (tab[i].b == buf && tab[i].off == off && tab[i].range == range && tab[i].f == f) return tab[i].v;
+    VkBufferViewCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO, .buffer = buf, .format = f, .offset = off,
+                                 .range = range};
+    VkBufferView v;
+    VK_CHECK(vkCreateBufferView(g_vk.dev, &ci, NULL, &v));
+    if (n < 128) { tab[n].b = buf; tab[n].off = off; tab[n].range = range; tab[n].f = f; tab[n].v = v; n++; }
+    return v;
+}
+
+// Buffer texture memory outside the heap import: the page-aligned range imported as its own buffer, with its view. A ring
+// of 64; the oldest goes to a graveyard that is emptied as submissions complete (a ring slot reused while its view is
+// still in a pending command buffer lost the device). ponytail: a game with more than 64 such buffers live in a frame
+// would thrash the ring - make it bigger.
+static VkBufferView texel_import(uint64_t addr, VkDeviceSize range, VkFormat f) {
+    static struct { uint64_t addr; VkDeviceSize range; VkFormat f; VkBuffer b; VkDeviceMemory m; VkBufferView v; } tab[64];
+    static int next;
+    for (int i = 0; i < 64; i++)
+        if (tab[i].v && tab[i].addr == addr && tab[i].range == range && tab[i].f == f) return tab[i].v;
+    PFN_vkGetMemoryHostPointerPropertiesEXT props =
+        (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
+    uint64_t base = addr & ~0xFFFull, size = (addr - base + range + 0xFFF) & ~0xFFFull;
+    VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    if (!props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)base, &mp) != VK_SUCCESS ||
+        !mp.memoryTypeBits)
+        return VK_NULL_HANDLE;
+    VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
+                                            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                            .pHostPointer = (void *)(uintptr_t)base};
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = size,
+                               .memoryTypeIndex = (uint32_t)__builtin_ctz(mp.memoryTypeBits)};
+    VkDeviceMemory mem;
+    if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) return VK_NULL_HANDLE;
+    VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+                                           .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
+                             .usage = VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT};
+    VkBuffer buf;
+    if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return VK_NULL_HANDLE; }
+    vkBindBufferMemory(g_vk.dev, buf, mem, 0);
+    VkBufferViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO, .buffer = buf, .format = f,
+                                 .offset = addr - base, .range = range};
+    VkBufferView v;
+    if (vkCreateBufferView(g_vk.dev, &vi, NULL, &v) != VK_SUCCESS) {
+        vkDestroyBuffer(g_vk.dev, buf, NULL);
+        vkFreeMemory(g_vk.dev, mem, NULL);
+        return VK_NULL_HANDLE;
+    }
+    int k = next++ & 63;
+    // what is dropped may be in commands recorded but not yet submitted: it is destroyed once the submission that will hold them is done
+    static struct { VkBufferView v; VkBuffer b; VkDeviceMemory m; uint64_t seq; } *dead;
+    static int ndead, capdead;
+    uint64_t done = vk_completed_seq();
+    int j = 0;
+    for (int i = 0; i < ndead; i++) {
+        if (dead[i].seq > done) { dead[j++] = dead[i]; continue; }
+        vkDestroyBufferView(g_vk.dev, dead[i].v, NULL);
+        vkDestroyBuffer(g_vk.dev, dead[i].b, NULL);
+        vkFreeMemory(g_vk.dev, dead[i].m, NULL);
+    }
+    ndead = j;
+    if (tab[k].v) {
+        if (ndead == capdead) { capdead = capdead ? capdead * 2 : 64; dead = realloc(dead, capdead * sizeof *dead); }
+        dead[ndead].v = tab[k].v; dead[ndead].b = tab[k].b; dead[ndead].m = tab[k].m; dead[ndead].seq = vk_pending_seq();
+        ndead++;
+    }
+    tab[k].addr = addr; tab[k].range = range; tab[k].f = f; tab[k].b = buf; tab[k].m = mem; tab[k].v = v;
+    return v;
+}
+
+// A buffer texture is read and written as raw register bits: its view is the same layout as unsigned integers, as the shader's
+// uimageBuffer / usamplerBuffer want (UE4's ClearUAV sends float or uint bits to float or uint buffers; a TLD's registers get the bits).
+// Components narrower than 32 bits keep their size (R16_UINT as is); a float or normalised one is read as its bits, not converted.
+static VkFormat uint_view_format(VkFormat f, uint32_t nvn_format) {
+    switch (f) {
+    case VK_FORMAT_R32_SFLOAT: case VK_FORMAT_R32_SINT: return VK_FORMAT_R32_UINT;
+    case VK_FORMAT_R32G32_SFLOAT: case VK_FORMAT_R32G32_SINT: return VK_FORMAT_R32G32_UINT;
+    case VK_FORMAT_R32G32B32A32_SFLOAT: case VK_FORMAT_R32G32B32A32_SINT: return VK_FORMAT_R32G32B32A32_UINT;
+    case VK_FORMAT_R16_SFLOAT: case VK_FORMAT_R16_UNORM: case VK_FORMAT_R16_SNORM: case VK_FORMAT_R16_SINT: return VK_FORMAT_R16_UINT;
+    case VK_FORMAT_R16G16_SFLOAT: case VK_FORMAT_R16G16_UNORM: case VK_FORMAT_R16G16_SNORM: case VK_FORMAT_R16G16_SINT: return VK_FORMAT_R16G16_UINT;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: case VK_FORMAT_R16G16B16A16_UNORM: case VK_FORMAT_R16G16B16A16_SNORM: case VK_FORMAT_R16G16B16A16_SINT:
+        return VK_FORMAT_R16G16B16A16_UINT;
+    case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_SNORM: case VK_FORMAT_R8_SINT: return VK_FORMAT_R8_UINT;
+    case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R8G8_SNORM: case VK_FORMAT_R8G8_SINT: return VK_FORMAT_R8G8_UINT;
+    case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SNORM: case VK_FORMAT_R8G8B8A8_SINT: return VK_FORMAT_R8G8B8A8_UINT;
+    case VK_FORMAT_R32_UINT: case VK_FORMAT_R32G32_UINT: case VK_FORMAT_R32G32B32A32_UINT: case VK_FORMAT_R16_UINT:
+    case VK_FORMAT_R16G16_UINT: case VK_FORMAT_R16G16B16A16_UINT: case VK_FORMAT_R8_UINT: case VK_FORMAT_R8G8_UINT:
+    case VK_FORMAT_R8G8B8A8_UINT:
+        return f;
+    default: { static int nlog; if (nlog++ < 10) LOG("[vk] buffer texture format %d (nvn %#x): no unsigned view of it\n", f, nvn_format); return f; }
+    }
+}
+
+// The view for image slot `ti`: the buffer texture's memory in the guest heap (the shader writes it in place; the
+// vertex cache learns of it). An atomic is always R32_UINT. Unbound or outside the heap: a zeroed scratch span.
+static VkBufferView texel_view_for(int stage, ShaderInfo *si, int ti) {
+    NvnTexture *t = ti < si->ntex ? shader_texture_object(stage, &si->tex[ti]) : NULL;
+    bool atomic = ti < si->ntex && si->tex[ti].img_kind == 2;
+    VkFormat f = atomic || !t ? VK_FORMAT_R32_UINT : vk_texel_format(t);
+    f = uint_view_format(f, t ? t->format : 0);
+    uint32_t bpb = t ? vk_texel_bytes(t) : 0;
+    gmem_info();  // (the heap import, made on first use)
+    if (t && bpb && gmem_buf && t->addr >= HEAP_BASE && t->addr - HEAP_BASE < gmem_size) {
+        VkDeviceSize off = t->addr - HEAP_BASE, range = (VkDeviceSize)t->width * bpb;
+        if (off + range > gmem_size) range = (gmem_size - off) & ~(VkDeviceSize)(bpb - 1);
+        if (atomic) range &= ~3ull;
+        if (range) {
+            vc_mark_gpu(off, off + range);
+            return texel_view(gmem_buf, off, range, f);
+        }
+    }
+    if (t && bpb && g_vk.host_import && t->addr) {  // elsewhere in guest memory (the engine's own mappings): imported on its own
+        VkDeviceSize range = (VkDeviceSize)t->width * bpb;
+        if (atomic) range &= ~3ull;
+        VkBufferView v = range ? texel_import(t->addr, range, f) : VK_NULL_HANDLE;
+        if (v) return v;
+    }
+    static int nlog;
+    if (nlog++ < 10) LOG("[vk] image slot %d: no usable buffer texture (%p, addr %llx, bpb %u; heap %llx + %llx): a zeroed span\n", ti, (void *)t,
+                         t ? (unsigned long long)t->addr : 0ull, bpb, (unsigned long long)HEAP_BASE, (unsigned long long)gmem_size);
+    static uint32_t zero[64];
+    VkSpan s = vk_transient_copy(zero, sizeof zero, 256);
+    return texel_view(s.buf, s.off, sizeof zero, VK_FORMAT_R32_UINT);
+}
+
+// Global memory outside the guest heap window (the engine's own mappings): each bound storage buffer there is imported on its own
+// with a device address, and the shader (GFarRef / gfar_find in translate.c) looks its pointers up in a table of them. A ring of 32;
+// the dropped one goes to a graveyard emptied as submissions complete (as texel_import's).
+static bool far_import(uint64_t addr, uint64_t size, uint64_t *dev) {
+    static struct { uint64_t addr, size, dev; VkBuffer b; VkDeviceMemory m; } tab[32];
+    static struct { VkBuffer b; VkDeviceMemory m; uint64_t seq; } *dead;
+    static int next, ndead, capdead;
+    for (int i = 0; i < 32; i++)
+        if (tab[i].b && addr >= tab[i].addr && addr + size <= tab[i].addr + tab[i].size) { *dev = tab[i].dev + (addr - tab[i].addr); return true; }
+    PFN_vkGetMemoryHostPointerPropertiesEXT props =
+        (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
+    uint64_t base = addr & ~0xFFFull, span = (addr - base + size + 0xFFF) & ~0xFFFull;
+    VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    if (!props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)base, &mp) != VK_SUCCESS ||
+        !mp.memoryTypeBits)
+        return false;
+    VkMemoryAllocateFlagsInfo fl = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+    VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT, .pNext = &fl,
+                                            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                            .pHostPointer = (void *)(uintptr_t)base};
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = span,
+                               .memoryTypeIndex = (uint32_t)__builtin_ctz(mp.memoryTypeBits)};
+    VkDeviceMemory mem;
+    if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) return false;
+    VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+                                           .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = span,
+                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT};
+    VkBuffer buf;
+    if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
+    vkBindBufferMemory(g_vk.dev, buf, mem, 0);
+    VkBufferDeviceAddressInfo di = {.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .buffer = buf};
+    uint64_t d0 = vkGetBufferDeviceAddress(g_vk.dev, &di);
+    uint64_t done = vk_completed_seq();
+    int j = 0;
+    for (int i = 0; i < ndead; i++) {
+        if (dead[i].seq > done) { dead[j++] = dead[i]; continue; }
+        vkDestroyBuffer(g_vk.dev, dead[i].b, NULL);
+        vkFreeMemory(g_vk.dev, dead[i].m, NULL);
+    }
+    ndead = j;
+    int k = next++ & 31;
+    if (tab[k].b) {
+        if (ndead == capdead) { capdead = capdead ? capdead * 2 : 32; dead = realloc(dead, capdead * sizeof *dead); }
+        dead[ndead].b = tab[k].b; dead[ndead].m = tab[k].m; dead[ndead].seq = vk_pending_seq();
+        ndead++;
+    }
+    tab[k].addr = base; tab[k].size = span; tab[k].dev = d0; tab[k].b = buf; tab[k].m = mem;
+    *dev = d0 + (addr - base);
+    return true;
+}
+
+// The GFAR table of a stage's storage buffers that lie outside the heap window (uvec4 [2i] = guest address, size; [2i + 1] = device address).
+static void gfar_table(int stage, uint32_t tab[(2 * GFAR_MAX + 1) * 4]) {
+    memset(tab, 0, (2 * GFAR_MAX + 1) * 4 * sizeof *tab);
+    uint32_t n = 0;
+    for (int i = 0; i < 16 && n < GFAR_MAX; i++) {
+        uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size, dev;
+        if (!a || !sz || (a >= HEAP_BASE && a < HEAP_BASE + HEAP_MAX)) continue;
+        bool dup = false;
+        for (uint32_t k = 0; k < n; k++) if (tab[8 * k] == (uint32_t)a && tab[8 * k + 1] == (uint32_t)(a >> 32)) dup = true;
+        if (dup || !far_import(a, sz, &dev)) continue;
+        tab[8 * n + 0] = (uint32_t)a; tab[8 * n + 1] = (uint32_t)(a >> 32); tab[8 * n + 2] = (uint32_t)sz;
+        tab[8 * n + 4] = (uint32_t)dev; tab[8 * n + 5] = (uint32_t)(dev >> 32);
+        n++;
+    }
+    tab[8 * GFAR_MAX] = n;
+}
+
 static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t set, int stage, ShaderInfo *si, const float *rscale_row0,
                                  const float tint[8], uint32_t gx, uint32_t gy, uint32_t gz, const VkDescriptorImageInfo *pre_ii) {
     VkDescriptorSet ds = vk_alloc_set(layout);
     VkWriteDescriptorSet w[MAX_BIND];
     VkDescriptorBufferInfo bi[MAX_BIND];
     VkDescriptorImageInfo ii[MAX_BIND];
+    VkBufferView tv[MAX_BIND];
     int n = 0;
     int sg = stage == 1 ? 1 : 0;
     float rs[66][4] = {{1, 1, 0, 0}};  // ([65]: a mirrored composite's width in LAS Recomp; unused, 0)
@@ -2428,6 +2650,9 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
                 tex_wh[sg][ti][0] = wh[0]; tex_wh[sg][ti][1] = wh[1];
             }
             w[n].pImageInfo = &ii[n];
+        } else if ((b->type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER || b->type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER) && b->binding >= 32) {
+            tv[n] = texel_view_for(stage, si, (int)b->binding - 32);
+            w[n].pTexelBufferView = &tv[n];
         } else if (b->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && b->binding < 17) {
             bi[n] = cbuf_info(stage, si, (int)b->binding, gx, gy, gz);
             w[n].pBufferInfo = &bi[n];
@@ -2442,10 +2667,14 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
     for (int i = 0; i < p->nbinds; i++) {
         VkBindingInfo *b = &p->binds[i];
         if (b->set != set || b->type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
-            (b->binding != 18 && b->binding != 19 && b->binding != GMAP_BUFFER_INDEX)) continue;
+            (b->binding != 18 && b->binding != 19 && b->binding != GMAP_BUFFER_INDEX && b->binding != GFAR_BUFFER_INDEX)) continue;
         w[n] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = b->binding,
                                       .descriptorCount = 1, .descriptorType = b->type};
-        if (b->binding == GMAP_BUFFER_INDEX) {  // (compute) this dispatch's fast-copy table: gfast_prepare
+        if (b->binding == GFAR_BUFFER_INDEX) {  // global memory outside the heap window
+            uint32_t ft[(2 * GFAR_MAX + 1) * 4];
+            gfar_table(stage, ft);
+            bi[n] = ubo_span(vk_transient_copy(ft, sizeof ft, 256), sizeof ft);
+        } else if (b->binding == GMAP_BUFFER_INDEX) {  // (compute) this dispatch's fast-copy table: gfast_prepare
             bi[n] = ubo_span(vk_transient_copy(gmap_tab, sizeof gmap_tab, 256), sizeof gmap_tab);
         } else if (b->binding == 18) {
             for (int t = 0; t < si->ntex && t < 64; t++) { rs[1 + t][0] = tex_sc[sg][t][0]; rs[1 + t][1] = tex_sc[sg][t][1]; }
@@ -2498,6 +2727,7 @@ static CsProg *compute_program(NvnProgram *np) {
     if (n < 256) { tab[n].addr = ss->code_addr; tab[n].cp = cp; g_cs_n = n + 1; }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
+    maxwell_gfar_ok = g_vk.bda;
     ShaderKey k = {0};
     k.glsl = 1;
     pthread_mutex_lock(&translate_lock);
@@ -2624,6 +2854,15 @@ static void draw_(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
     Prog *pr = get_program(st.program, &vkey, &fkey);
+    if (pr && atomic_load(&pr->state) == 1) {  // buffer textures bound to 1D slots: the variant of the program that fetches them as buffers
+        uint32_t vm = buffer_slots(0, pr->vi), fm = buffer_slots(1, pr->fi);
+        if (vm != vkey.buf_mask || fm != fkey.buf_mask) {
+            { static int nlog; if (nlog++ < 10) LOG("[vk] buffer textures in 1D slots: vertex %#x, fragment %#x (vs %llx fs %llx)\n", vm, fm, (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr); }
+            vkey.buf_mask = vm;
+            fkey.buf_mask = fm;
+            pr = get_program(st.program, &vkey, &fkey);
+        }
+    }
     if (!pr || atomic_load(&pr->state) != 1) { SKIP(pr && atomic_load(&pr->state) == 0 ? SKIP_PROG_PENDING : SKIP_PROG_FAILED); return; }
     {   // fragment-shader hash: skip lists (PICRECOMP_SKIP_FSHASH), debug logging
         static uint64_t last_fs, last_hash;
