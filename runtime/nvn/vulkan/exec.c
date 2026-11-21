@@ -1933,6 +1933,12 @@ static VkDescriptorBufferInfo ubo_span(VkSpan s, uint64_t size) {
 }
 
 // Constant buffer k of a stage (renderer.m bind_cbufs), copied into transient memory.
+static bool gpu_written_overlaps(uint64_t addr, uint64_t size);
+static bool far_import_buf(uint64_t addr, uint64_t size, uint64_t *dev, VkBuffer *buf, VkDeviceSize *off);
+static void gpu_written_note(uint64_t addr, uint64_t size);
+static bool far_import_buf(uint64_t addr, uint64_t size, uint64_t *dev, VkBuffer *buf, VkDeviceSize *off);
+static VkBuffer gmem_buf;
+static uint64_t gmem_size;
 static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32_t gx, uint32_t gy, uint32_t gz) {
     static const uint8_t zeros[0x10000];
     if (k == 0) {
@@ -1974,6 +1980,15 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     // snapshot: later CPU writes must not leak in. Shared by the draws of one submission binding the same range:
     // within a command list nothing writes guest memory (no inline UpdateUniformBuffer: that writes through below
     // and drops the shared copies).
+    if (gpu_written_overlaps(r.addr, size) && !(r.addr & 255)) {  // data a compute shader wrote: read in place (see gpu_written_note)
+        static int nlog;
+        VkBuffer b;
+        VkDeviceSize off;
+        uint64_t dev;
+        if (nlog++ < 6) LOG("[vk] constant buffer %d of stage %d (%llx + %llx) is written by the GPU: bound in place\n", k, stage, (unsigned long long)r.addr, (unsigned long long)size);
+        if (gmem_buf && r.addr >= HEAP_BASE && r.addr + size <= HEAP_BASE + gmem_size) return (VkDescriptorBufferInfo){gmem_buf, r.addr - HEAP_BASE, size};
+        if (g_vk.host_import && far_import_buf(r.addr, size, &dev, &b, &off) && !(off & 255)) return (VkDescriptorBufferInfo){b, off, size};
+    }
     return ubo_span(guest_copy(r.addr, size), size);
 }
 
@@ -2004,7 +2019,7 @@ static bool gmem_import(uint64_t size) {
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT};
+                                      VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT};
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
     vkBindBufferMemory(g_vk.dev, buf, mem, 0);
@@ -2346,6 +2361,16 @@ void vc_flush(void) {
 static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
     static int copy = -1;
     if (copy < 0) copy = getenv("PICRECOMP_VK_COPY_VERTICES") != NULL;
+    if (!copy && g_vk.host_import && (addr < HEAP_BASE || addr >= HEAP_BASE + HEAP_MAX) && gpu_written_overlaps(addr, size)) {
+        // outside the heap window (the engine's own mappings) and written by a compute shader (skinning, instance culling): read in
+        // place, not from the copy made when the draw was recorded (the GPU has not run the dispatch yet)
+        uint64_t dev;
+        static int nlog;
+        if (far_import_buf(addr, size, &dev, buf, off)) {
+            if (nlog++ < 6) LOG("[vk] vertex / index data %llx + %llx is written by the GPU: read in place\n", (unsigned long long)addr, (unsigned long long)size);
+            return true;
+        }
+    }
     if (copy || addr < HEAP_BASE) return false;
     if (addr + size > HEAP_BASE + gmem_size && kernel_heap_size() != gmem_tried) { gmem_tried = kernel_heap_size(); gmem_info(); }
     if (!gmem_buf || addr + size > HEAP_BASE + gmem_size) return false;
@@ -2536,6 +2561,7 @@ static VkBufferView texel_view_for(int stage, ShaderInfo *si, int ti) {
     VkFormat f = atomic || !t ? VK_FORMAT_R32_UINT : vk_texel_format(t);
     f = uint_view_format(f, t ? t->format : 0);
     uint32_t bpb = t ? vk_texel_bytes(t) : 0;
+    if (t && bpb && ti < si->ntex && (atomic || si->tex[ti].is_image)) gpu_written_note(t->addr, (uint64_t)t->width * bpb);
     gmem_info();  // (the heap import, made on first use)
     if (t && bpb && gmem_buf && t->addr >= HEAP_BASE && t->addr - HEAP_BASE < gmem_size) {
         VkDeviceSize off = t->addr - HEAP_BASE, range = (VkDeviceSize)t->width * bpb;
@@ -2563,12 +2589,34 @@ static VkBufferView texel_view_for(int stage, ShaderInfo *si, int ti) {
 // Global memory outside the guest heap window (the engine's own mappings): each bound storage buffer there is imported on its own
 // with a device address, and the shader (GFarRef / gfar_find in translate.c) looks its pointers up in a table of them. A ring of 32;
 // the dropped one goes to a graveyard emptied as submissions complete (as texel_import's).
-static bool far_import(uint64_t addr, uint64_t size, uint64_t *dev) {
+// Guest memory the GPU writes (compute stores, buffer images): a constant buffer in it must be read live, not from the copy made when
+// the draw was recorded (that copy is the previous frame's data, or half of it: the GPU has not run the dispatch yet).
+static struct { uint64_t lo, hi; } g_gpu_written[256];
+static int g_ngpu_written;
+static void gpu_written_note(uint64_t addr, uint64_t size) {
+    if (!addr || !size) return;
+    for (int i = 0; i < g_ngpu_written; i++)
+        if (addr >= g_gpu_written[i].lo && addr + size <= g_gpu_written[i].hi) return;
+    if (g_ngpu_written < 256) g_gpu_written[g_ngpu_written++] = (typeof(g_gpu_written[0])){addr, addr + size};
+}
+static bool gpu_written_overlaps(uint64_t addr, uint64_t size) {
+    for (int i = 0; i < g_ngpu_written; i++)
+        if (addr < g_gpu_written[i].hi && addr + size > g_gpu_written[i].lo) return true;
+    return false;
+}
+
+static bool far_import_buf(uint64_t addr, uint64_t size, uint64_t *dev, VkBuffer *buf, VkDeviceSize *off);
+static bool far_import(uint64_t addr, uint64_t size, uint64_t *dev) { return far_import_buf(addr, size, dev, NULL, NULL); }
+static bool far_import_buf(uint64_t addr, uint64_t size, uint64_t *dev, VkBuffer *obuf, VkDeviceSize *ooff) {
     static struct { uint64_t addr, size, dev; VkBuffer b; VkDeviceMemory m; } tab[32];
     static struct { VkBuffer b; VkDeviceMemory m; uint64_t seq; } *dead;
     static int next, ndead, capdead;
     for (int i = 0; i < 32; i++)
-        if (tab[i].b && addr >= tab[i].addr && addr + size <= tab[i].addr + tab[i].size) { *dev = tab[i].dev + (addr - tab[i].addr); return true; }
+        if (tab[i].b && addr >= tab[i].addr && addr + size <= tab[i].addr + tab[i].size) {
+            *dev = tab[i].dev + (addr - tab[i].addr);
+            if (obuf) { *obuf = tab[i].b; *ooff = addr - tab[i].addr; }
+            return true;
+        }
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     uint64_t base = addr & ~0xFFFull, span = (addr - base + size + 0xFFF) & ~0xFFFull;
@@ -2587,7 +2635,8 @@ static bool far_import(uint64_t addr, uint64_t size, uint64_t *dev) {
     VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = span,
-                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT};
+                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT};
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
     vkBindBufferMemory(g_vk.dev, buf, mem, 0);
@@ -2609,6 +2658,7 @@ static bool far_import(uint64_t addr, uint64_t size, uint64_t *dev) {
     }
     tab[k].addr = base; tab[k].size = span; tab[k].dev = d0; tab[k].b = buf; tab[k].m = mem;
     *dev = d0 + (addr - base);
+    if (obuf) { *obuf = buf; *ooff = addr - base; }
     return true;
 }
 
@@ -2815,7 +2865,10 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     vkCmdDispatch(cb, gx, gy, gz);
     vk_full_barrier(cb);  // (what it wrote - buffer textures, storage buffers in host memory - is read by the next draw or dispatch)
     if (cp->si->uses_gmem_map && cp->si->uses_gmem_store) gfast_finish(cb);
-    if (cp->si->uses_gmem_store) vc_mark_sbufs(5);
+    if (cp->si->uses_gmem_store) {
+        vc_mark_sbufs(5);
+        for (int i = 0; i < 16; i++) gpu_written_note(st.sbuf[5][i].addr, st.sbuf[5][i].size);
+    }
     stat_dispatches++;
 }
 
