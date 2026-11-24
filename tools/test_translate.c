@@ -491,6 +491,42 @@ static int check_handle_across_fsetp_and_iadd(void) {
     return fails;
 }
 
+// SUST.P to a 2D and a 3D image (Piczle Cross: Rune Factory, Piczle Puzzle & Watch Collection: the game's SUST words): float
+// formats store the registers as float bits (image2D), the integer variant (ShaderKey.buf_mask bit) as integers (uimage3D)
+static int check_image_stores(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078804c70006ull,  // MOV R6, c[2][0x130]   (image slot 2)
+        0x4c9807880487000bull,  // MOV R11, c[2][0x120]   (image slot 0: the 3D store's handle)
+        0x50b0000000070f00ull,  // NOP
+        0x001fc000e24007f0ull,
+        0xeb20030600f70400ull,  // SUST.P.2D.RGBA [R4, R5], R0..R3, handle R6
+        0xeb20058a00f70400ull,  // SUST.P.3D.RGBA [R4, R5, R6], R0..R3, handle R11
+        0xe30000000007000full, 0xe2400fffff87000full};
+    int fails = 0;
+    for (int variant = 0; variant < 2; variant++) {
+        static uint8_t buf[0x100 + sizeof words + 64];
+        memset(buf, 0, sizeof buf);
+        *(uint32_t *)buf = 0x12345679u;
+        memcpy(buf + 0x100, words, sizeof words);
+        ShaderKey key;
+        memset(&key, 0, sizeof key);
+        key.glsl = 1;
+        key.buf_mask = variant ? ~0u : 0;
+        ShaderInfo *a = maxwell_translate(buf, sizeof buf, STAGE_COMPUTE, &key);
+        if (!a->msl) { printf("FAIL: image store test: %s\n", a->error); fails++; maxwell_free(a); continue; }
+        const char *want2 = variant ? "uniform writeonly uimage2D" : "uniform writeonly image2D";
+        const char *want3 = variant ? "uniform writeonly uimage3D" : "uniform writeonly image3D";
+        const char *store = variant ? "ivec2(int(r4), int(r5)), uvec4(r0, r1, r2, r3))" : "ivec2(int(r4), int(r5)), uintBitsToFloat(uvec4(r0, r1, r2, r3)))";
+        if (!strstr(a->msl, want2) || !strstr(a->msl, want3) || !strstr(a->msl, store) || !strstr(a->msl, "ivec3(int(r4), int(r5), int(r6))")) {
+            printf("FAIL: image store test (variant %d): wrong declaration or store\n", variant);
+            fails++;
+        }
+        maxwell_free(a);
+    }
+    return fails;
+}
+
 // TLD4.B (a bindless four-texel gather, 2D, all components, an offset register) and VMNMX (the signed clamp UE4 emits for
 // dynamic indices) - the words are Piczle Cross's
 static int check_gather_and_vmnmx(void) {
@@ -520,7 +556,7 @@ static int check_gather_and_vmnmx(void) {
 }
 
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea() || check_shared_and_atomics() || check_handle_across_fsetp_and_iadd()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea() || check_shared_and_atomics() || check_handle_across_fsetp_and_iadd() || check_image_stores()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);

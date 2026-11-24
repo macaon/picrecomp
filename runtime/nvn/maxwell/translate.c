@@ -1170,7 +1170,7 @@ static bool image_handle_slot(Ctx *c, uint32_t pc, unsigned reg, unsigned *k) {
 static int image_slot(Ctx *c, uint32_t pc, unsigned hreg, int kind) {
     unsigned k;
     if (!image_handle_slot(c, pc, hreg, &k)) { fail(c, "unresolved image handle at %#x", pc); return -1; }
-    int slot = tex_slot(c, 4000 + k, TEXTYPE_BUFFER, false, false);
+    int slot = tex_slot(c, 4000 + k, kind == 3 ? TEXTYPE_2D : kind == 4 ? TEXTYPE_3D : TEXTYPE_BUFFER, false, false);
     ShaderTexture *t = &c->info->tex[slot];
     if (t->img_kind && t->img_kind != kind) { fail(c, "image %u used as a store and as an atomic", k); return -1; }
     t->img_kind = (uint8_t)kind;
@@ -1184,17 +1184,31 @@ static int image_slot(Ctx *c, uint32_t pc, unsigned hreg, int kind) {
 // surface_load_store; checked against Piczle Cross: data 0, coordinate 8, swizzle 20, type 33, bindless register 39,
 // is_bound 51, typed 52). The registers' bits go to memory as they are (uimageBuffer, 32-bit components: exec.c texel_view_for).
 static void emit_sust(Ctx *c, uint64_t w, uint32_t pc) {
-    if (!c->glsl || bits(w, 33, 3) != 1 || bits(w, 52, 1) || bits(w, 51, 1) || bits(w, 49, 2) || bits(w, 20, 4) != 0xf) {
+    // dimension (bits 33-35, Ryujinx's SuDim): 1 a 1D buffer, 3 2D, 5 3D. A 2D / 3D store is formatted: the registers hold
+    // what the image's format takes (float bits for float / unorm formats, integers for integer ones), so the declaration
+    // is image* or uimage* by the bound image's format (ShaderKey.buf_mask bit = an integer format, exec.c's buffer_slots).
+    // Piczle Cross: Rune Factory and Piczle Puzzle & Watch Collection: eb20030600f70400 is SUST.P.2D.RGBA [R4, R5], R0..R3.
+    int dim = (int)bits(w, 33, 3);
+    if (!c->glsl || (dim != 1 && dim != 3 && dim != 5) || bits(w, 52, 1) || bits(w, 51, 1) || bits(w, 49, 2) || bits(w, 20, 4) != 0xf) {
         fail(c, "sust form %#llx", (unsigned long long)w);
         return;
     }
-    int slot = image_slot(c, pc, (unsigned)bits(w, 39, 8), 1);
+    int slot = image_slot(c, pc, (unsigned)bits(w, 39, 8), dim == 1 ? 1 : dim == 3 ? 3 : 4);
     if (slot < 0) return;
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
-    char x[4][16], i[16];
-    sp(&c->body, "    imageStore(t%d, int(%s), uvec4(%s, %s, %s, %s));\n",
-       slot, reg(c, a, i), reg(c, d, x[0]), reg(c, d == RZ ? RZ : d + 1, x[1]), reg(c, d == RZ ? RZ : d + 2, x[2]),
-       reg(c, d == RZ ? RZ : d + 3, x[3]));
+    char x[4][16], i[3][16];
+    const char *v0 = reg(c, d, x[0]), *v1 = reg(c, d == RZ ? RZ : d + 1, x[1]), *v2 = reg(c, d == RZ ? RZ : d + 2, x[2]),
+               *v3 = reg(c, d == RZ ? RZ : d + 3, x[3]);
+    if (dim == 1) {
+        sp(&c->body, "    imageStore(t%d, int(%s), uvec4(%s, %s, %s, %s));\n", slot, reg(c, a, i[0]), v0, v1, v2, v3);
+        return;
+    }
+    bool integer = c->key && ((c->key->buf_mask >> slot) & 1);
+    char coords[96];
+    if (dim == 3) sprintf(coords, "ivec2(int(%s), int(%s))", reg(c, a, i[0]), reg(c, a == RZ ? RZ : a + 1, i[1]));
+    else sprintf(coords, "ivec3(int(%s), int(%s), int(%s))", reg(c, a, i[0]), reg(c, a == RZ ? RZ : a + 1, i[1]), reg(c, a == RZ ? RZ : a + 2, i[2]));
+    sp(&c->body, integer ? "    imageStore(t%d, %s, uvec4(%s, %s, %s, %s));\n" : "    imageStore(t%d, %s, uintBitsToFloat(uvec4(%s, %s, %s, %s)));\n",
+       slot, coords, v0, v1, v2, v3);
 }
 
 // SUATOM on a 1D buffer image, 32-bit unsigned (bits: dest 0, coordinate 8, operand 20, op 29 (4), type 33, bindless
@@ -2492,6 +2506,9 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         }
         if (t->is_image) {  // (buffer image: no tsize)
             if (t->img_kind == 2) sp(&s, "layout(set = %d, binding = %d, r32ui) uniform uimageBuffer t%d;\n", set, 32 + i, i);
+            else if (t->img_kind == 3 || t->img_kind == 4)  // (format-less: shaderStorageImageWriteWithoutFormat)
+                sp(&s, "layout(set = %d, binding = %d) uniform writeonly %simage%s t%d;\n", set, 32 + i,
+                   (key && ((key->buf_mask >> i) & 1)) ? "u" : "", t->img_kind == 3 ? "2D" : "3D", i);
             else sp(&s, "layout(set = %d, binding = %d) uniform writeonly uimageBuffer t%d;\n", set, 32 + i, i);
             continue;
         }

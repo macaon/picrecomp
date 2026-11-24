@@ -316,6 +316,15 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     else if (format_supports(vf, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     VkImageCreateFlags flags = 0;
     if (!depthfmt) flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;  // format views (NVN texture views, raw sRGB views)
+    if (b->storage == 1 && !depthfmt && samples == 1) {  // (only images a shader stores to: storage usage can cost compression)
+        VkFormat sf = vk_storage_format(vf);
+        if (sf != VK_FORMAT_UNDEFINED) {
+            usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+            if (sf != vf || !format_supports(vf, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+        } else {
+            b->storage = 2;
+        }
+    }
     if (type == VK_IMAGE_TYPE_2D && layers >= 6 && tw == th && samples == 1) flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .flags = flags, .imageType = type, .format = vf,
                             .extent = {tw, th, depth}, .mipLevels = levels, .arrayLayers = layers,
@@ -370,6 +379,16 @@ void vk_dl_note_upload(void *img, uint32_t w, uint32_t h, uint32_t lv);  // (exe
 
 static uint32_t level_w(const TexBackend *b, uint32_t lv) { uint32_t v = b->width >> lv; return v ? v : 1; }
 static uint32_t level_h(const TexBackend *b, uint32_t lv) { uint32_t v = b->height >> lv; return v ? v : 1; }
+
+VkFormat vk_storage_format(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R8G8B8A8_SRGB: f = VK_FORMAT_R8G8B8A8_UNORM; break;
+    case VK_FORMAT_B8G8R8A8_SRGB: f = VK_FORMAT_B8G8R8A8_UNORM; break;
+    case VK_FORMAT_A8B8G8R8_SRGB_PACK32: f = VK_FORMAT_A8B8G8R8_UNORM_PACK32; break;
+    default: break;
+    }
+    return format_supports(f, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ? f : VK_FORMAT_UNDEFINED;
+}
 
 static void destroy_image(TexBackend *b) {
     views_forget(b);
@@ -661,6 +680,36 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     return b;
 }
 
+// A compute shader stores to t (SUST.P.2D / 3D: Piczle Cross: Rune Factory, Piczle Puzzle & Watch Collection): its image
+// gets STORAGE usage, recreated on first use with its contents copied (every level and layer: same size and format)
+TexBackend *vk_tex_storage(NvnTexture *t) {
+    TexBackend *b = vk_tex(t, true);
+    if (b->storage || !b->image) return b;
+    VkImage old = b->image;
+    VmaAllocation old_mem = b->mem;
+    uint32_t levels = b->levels, layers = b->layers, w = b->width, h = b->height, d = b->depth;
+    VkFormat old_fmt = b->format;
+    views_forget(b);
+    b->storage = 1;
+    b->image = VK_NULL_HANDLE;
+    b->mem = VK_NULL_HANDLE;
+    create_image(t, b);
+    if (b->format == old_fmt && b->levels == levels && b->width == w && b->height == h) {
+        VkCommandBuffer cb = vk_upload_cmd();
+        vk_full_barrier(cb);
+        VkImageCopy rg[16];
+        uint32_t n = 0;
+        for (uint32_t lv = 0; lv < levels && n < 16; lv++)
+            rg[n++] = (VkImageCopy){.srcSubresource = {b->aspect, lv, 0, layers}, .dstSubresource = {b->aspect, lv, 0, layers},
+                                    .extent = {level_w(b, lv), level_h(b, lv), d > 1 ? (d >> lv ? d >> lv : 1) : 1}};
+        vkCmdCopyImage(cb, old, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, n, rg);
+        vk_full_barrier(cb);
+    }
+    defer((Dead){.img = old, .mem = old_mem});
+    { static int nlog; if (nlog++ < 8) LOG("[vk] texture %p (%ux%ux%u, format %d) made storage-capable%s\n", (void *)t, w, h, d, old_fmt, b->storage == 1 ? "" : ": format without storage"); }
+    return b;
+}
+
 void renderer_mark_gpu_owned(NvnTexture *t) { tex_backend(t)->gpu_owned = true; }
 bool renderer_is_gpu_owned(NvnTexture *t) { return tex_backend(t)->gpu_owned; }
 void backend_pool_written(uint64_t addr, uint64_t size) { (void)addr; (void)size; }
@@ -838,6 +887,26 @@ VkImageView vk_dummy_view(int textype) {
     b->layers = cube ? 6 : 1;
     views[textype] = vk_image_view(b, vt, b->format, 0, 1, 0, cube ? 6 : 1, IDENTITY, VK_IMAGE_ASPECT_COLOR_BIT);
     return views[textype];
+}
+
+// An unbound image a compute shader stores to (2D or 3D; RGBA8, unsigned for the integer variant): 1x1, writes go nowhere
+VkImageView vk_dummy_storage_view(int textype, bool integer) {
+    static TexBackend dummies[2][2];
+    static VkImageView views[2][2];
+    int k = textype == TEXTYPE_3D, u = integer;
+    if (views[k][u]) return views[k][u];
+    TexBackend *b = &dummies[k][u];
+    VkFormat f = integer ? VK_FORMAT_R8G8B8A8_UINT : VK_FORMAT_R8G8B8A8_UNORM;
+    VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = k ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D,
+                            .format = f, .extent = {1, 1, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_STORAGE_BIT};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
+    vk_image_init_layout(vk_upload_cmd(), b->image, VK_IMAGE_ASPECT_COLOR_BIT);
+    b->format = f;
+    b->levels = b->layers = 1;
+    views[k][u] = vk_image_view(b, k ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D, f, 0, 1, 0, 1, IDENTITY, VK_IMAGE_ASPECT_COLOR_BIT);
+    return views[k][u];
 }
 
 // ================================================================== samplers

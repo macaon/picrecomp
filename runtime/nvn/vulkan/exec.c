@@ -450,9 +450,10 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout layout) {
             VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 32768}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096},
                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32768},
                                             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1024},
-                                            {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1024}, {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 4096}};
+                                            {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1024}, {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 4096},
+                                            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024}};
             VkDescriptorPoolCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 8192,
-                                             .poolSizeCount = 7, .pPoolSizes = sizes};
+                                             .poolSizeCount = 8, .pPoolSizes = sizes};
             VK_CHECK(vkCreateDescriptorPool(g_vk.dev, &ci, NULL, &s->pools[s->npools++]));
         }
         VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -1652,10 +1653,28 @@ static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
 }
 
 // The slots of this shader's texture list that only a 1D-target TLD fetched and that hold a buffer texture (target 10) now.
+static bool vk_format_is_int(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R8_UINT: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8G8_UINT: case VK_FORMAT_R8G8_SINT: case VK_FORMAT_R8G8B8A8_UINT:
+    case VK_FORMAT_R8G8B8A8_SINT: case VK_FORMAT_R16_UINT: case VK_FORMAT_R16_SINT: case VK_FORMAT_R16G16_UINT: case VK_FORMAT_R16G16_SINT:
+    case VK_FORMAT_R16G16B16A16_UINT: case VK_FORMAT_R16G16B16A16_SINT: case VK_FORMAT_R32_UINT: case VK_FORMAT_R32_SINT:
+    case VK_FORMAT_R32G32_UINT: case VK_FORMAT_R32G32_SINT: case VK_FORMAT_R32G32B32A32_UINT: case VK_FORMAT_R32G32B32A32_SINT:
+    case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+        return true;
+    default: return false;
+    }
+}
+
+// The variant mask of a program: bit i for a buffer texture in a 1D slot that a TLD reads (usamplerBuffer), and for a 2D / 3D
+// image a SUST stores to, an integer-format image (uimage*: the stored registers are integers, not float bits)
 static uint32_t buffer_slots(int stage, const ShaderInfo *si) {
     uint32_t m = 0;
     for (int i = 0; i < si->ntex && i < 31; i++) {
         NvnTexture *t = shader_texture_object(stage, (ShaderTexture *)&si->tex[i]);
+        if (si->tex[i].img_kind == 3 || si->tex[i].img_kind == 4) {
+            if (t && vk_format_is_int(vk_tex(t, true)->format)) m |= 1u << i;
+            continue;
+        }
         if (!((si->tld1d_mask >> i) & 1)) {
             static int nlog;
             if (t && t->target == 10 && !si->tex[i].is_image && nlog++ < 12)
@@ -2742,6 +2761,24 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
                 tex_sc[sg][ti][0] = sc[0]; tex_sc[sg][ti][1] = sc[1];
                 tex_wh[sg][ti][0] = wh[0]; tex_wh[sg][ti][1] = wh[1];
             }
+            w[n].pImageInfo = &ii[n];
+        } else if (b->type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && b->binding >= 32) {  // SUST.P to a 2D / 3D image
+            int ti = (int)b->binding - 32;
+            ShaderTexture *stx = ti < si->ntex ? &si->tex[ti] : NULL;
+            NvnTexture *t = stx ? shader_texture_object(stage, stx) : NULL;
+            int tt = stx && stx->img_kind == 4 ? TEXTYPE_3D : TEXTYPE_2D;
+            TexBackend *tb = t ? vk_tex_storage(t) : NULL;
+            bool integer = tb && vk_format_is_int(tb->format);
+            VkImageView v = VK_NULL_HANDLE;
+            if (tb && tb->storage == 1 && tb->image) {
+                VkFormat f = integer ? uint_view_format(tb->format, t->format) : vk_storage_format(tb->format);
+                if (f != VK_FORMAT_UNDEFINED)
+                    v = vk_image_view(tb, tt == TEXTYPE_3D ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D, f, 0, 1, 0, tt == TEXTYPE_3D ? 1 : 1,
+                                      (VkComponentMapping){0}, VK_IMAGE_ASPECT_COLOR_BIT);
+                tb->gpu_owned = true;  // (its guest memory is not the picture any more: no upload over it)
+            }
+            if (!v) v = vk_dummy_storage_view(tt, integer);
+            ii[n] = (VkDescriptorImageInfo){VK_NULL_HANDLE, v, VK_IMAGE_LAYOUT_GENERAL};
             w[n].pImageInfo = &ii[n];
         } else if ((b->type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER || b->type == VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER) && b->binding >= 32) {
             tv[n] = texel_view_for(stage, si, (int)b->binding - 32);

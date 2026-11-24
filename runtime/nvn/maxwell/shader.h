@@ -54,7 +54,7 @@ typedef struct {
     bool shadow, is_array, is_image, bindless;
     uint32_t bindless_cbuf, bindless_offset;
     uint32_t separate_sampler_offset;
-    uint8_t img_kind;        // is_image: 1 SUST store (imageBuffer, any format), 2 SUATOM (r32ui uimageBuffer); type TEXTYPE_BUFFER
+    uint8_t img_kind;        // is_image: 1 SUST store (imageBuffer, any format), 2 SUATOM (r32ui uimageBuffer), 3 / 4 SUST to a 2D / 3D image
 } ShaderTexture;
 
 typedef struct {

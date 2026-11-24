@@ -96,7 +96,13 @@ typedef struct TexBackend {
     uint8_t astc_bw, astc_bh;  // ASTC without GPU support: decoded to RGBA8 on upload (runtime/nvn/astc.c)
     bool astc_srgb;
     int reg;  // slot in textures.c's live list + 1 (a reboot destroys them all)
+    uint8_t storage;  // 1: created with STORAGE usage, a compute shader stores to it (vk_tex_storage); 2: its format cannot be
 } TexBackend;
+// The view format a shader stores through (sRGB as UNORM: no storage on sRGB formats); VK_FORMAT_UNDEFINED: none
+VkFormat vk_storage_format(VkFormat f);
+// The texture's image, made storage-capable first if it is not (recreated, contents copied)
+TexBackend *vk_tex_storage(NvnTexture *t);
+VkImageView vk_dummy_storage_view(int textype, bool integer);
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)
 VkFormat vk_format(uint32_t nvn_format);
