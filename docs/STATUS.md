@@ -555,7 +555,11 @@ links with one atomic per warp, each lane taking `popcount(ballot & SR_LANEMASK_
 masks (0x38-0x3c) for a 32-wide subgroup (test: `check_lane_masks` in tools/test_translate.c). Verified: 60 consecutive frames at the same
 brightness (before: 87 / 138 at random), screenshots of the title, menu, puzzle list and a puzzle (Vulkan on Linux, hidden window). The
 dead ends on the way (sync submit, fence flush, per-pass submissions, copy aliasing, cbuf hashes) all pointed away from timing on the host:
-a race inside a shader is invisible to them. Note: the masks assume 32 lanes (NVIDIA; a 64-wide AMD wave would need the subgroup size).
+a race inside a shader is invisible to them. Subgroup width: the translated shaders assume 32 lanes (ballots, shuffles, lane masks). NVIDIA is always 32; for AMD RDNA
+and Intel, pipelines whose shaders use these (ShaderInfo.uses_subgroup) now ask for 32-wide subgroups (Vulkan 1.3 subgroup size control); the log
+says `[vk] subgroups: <min> to <max> wide, 32 can be asked for in: ...`, and warns once per stage when the GPU cannot (AMD GCN: always 64 -
+those shaders may draw wrongly; no fallback yet). Tested only on NVIDIA, with `PICRECOMP_VK_SG32=1` forcing the request: validation clean, the
+title scene unchanged. **Needs testers on AMD and Intel** (look for that log line and for the title scene's lit buildings).
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
 which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
 other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
