@@ -135,11 +135,17 @@ static VkFmt fmt_of(uint32_t f) {
     case 0x92: return (VkFmt){VK_FORMAT_ASTC_10x10_SRGB_BLOCK};
     case 0x93: return (VkFmt){VK_FORMAT_ASTC_12x10_SRGB_BLOCK};
     case 0x94: return (VkFmt){VK_FORMAT_ASTC_12x12_SRGB_BLOCK};
-    case 0x95: case 0x96: case 0x97: return (VkFmt){VK_FORMAT_R5G5B5A1_UNORM_PACK16};
-    case 0x98: return (VkFmt){VK_FORMAT_B8G8R8A8_UNORM, 0, 1};
-    case 0x99: return (VkFmt){VK_FORMAT_B8G8R8A8_UNORM};
-    case 0x9A: return (VkFmt){VK_FORMAT_B8G8R8A8_SRGB, 0, 1};
-    case 0x9B: return (VkFmt){VK_FORMAT_B8G8R8A8_SRGB};
+    // BGR565, BGR5, BGR5A1, A1BGR5, BGRX8, BGRA8, BGRX8_SRGB, BGRA8_SRGB (X before A, as RGBX8_SRGB 0x37 / RGBA8_SRGB 0x38).
+    // The list inherited from LASRecomp started BGRX8 at 0x98, one too early: Piczle Cross's UE4 creates its landscape
+    // heightmap and its light-attenuation target as PF_B8G8R8A8, both 0x9A, and read as BGRX8_SRGB the heights were
+    // decoded as sRGB - the ground of the title scene vanished (the sky dome showed below the houses). The 16-bit
+    // ones are not seen in any game yet.
+    case 0x95: return (VkFmt){VK_FORMAT_R5G6B5_UNORM_PACK16};
+    case 0x96: case 0x97: case 0x98: return (VkFmt){VK_FORMAT_R5G5B5A1_UNORM_PACK16};
+    case 0x99: return (VkFmt){VK_FORMAT_B8G8R8A8_UNORM, 0, 1};
+    case 0x9A: return (VkFmt){VK_FORMAT_B8G8R8A8_UNORM};
+    case 0x9B: return (VkFmt){VK_FORMAT_B8G8R8A8_SRGB, 0, 1};
+    case 0x9C: return (VkFmt){VK_FORMAT_B8G8R8A8_SRGB};
     default: return (VkFmt){VK_FORMAT_R8G8B8A8_UNORM};
     }
 }
