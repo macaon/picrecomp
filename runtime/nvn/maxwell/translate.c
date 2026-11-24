@@ -1755,7 +1755,16 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         case 0x25: set_reg(c, d, "ctaid.x"); break;
         case 0x26: set_reg(c, d, "ctaid.y"); break;
         case 0x27: set_reg(c, d, "ctaid.z"); break;
-        case 0x00: set_reg(c, d, "0u"); break;
+        // lane id and lane masks (Ryujinx SReg: LaneId 0, EqMask..GeMask 0x38..0x3c), for a 32-wide subgroup. UE4's
+        // forward light grid (Piczle Cross) reserves its light links with one atomic per warp, each lane adding
+        // popcount(ballot & LANEMASK_LT): read as 0, every lane of a warp wrote the same link, lights were lost at
+        // random and the lit buildings of the title scene flickered between lit and dark green.
+        case 0x00: c->uses_lane = true; set_reg(c, d, "uint(lane)"); break;
+        case 0x38: c->uses_lane = true; set_reg(c, d, "(1u << uint(lane))"); break;
+        case 0x39: c->uses_lane = true; set_reg(c, d, "((1u << uint(lane)) - 1u)"); break;
+        case 0x3a: c->uses_lane = true; set_reg(c, d, "((2u << uint(lane)) - 1u)"); break;
+        case 0x3b: c->uses_lane = true; set_reg(c, d, "(~((2u << uint(lane)) - 1u))"); break;
+        case 0x3c: c->uses_lane = true; set_reg(c, d, "(~((1u << uint(lane)) - 1u))"); break;
         default: sprintf(t, "0u /* sr %#x */", sr); set_reg(c, d, t);
         }
     } else if (OPM(0x5c30000000000000ull, 0xfff8000000000000ull) || OPM(0x4c30000000000000ull, 0xfff8000000000000ull) ||

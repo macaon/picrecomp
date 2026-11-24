@@ -370,6 +370,33 @@ static int check_buffer_images(void) {
     return fails;
 }
 
+// S2R of the lane id and SR_LANEMASK_LT (Piczle Cross's light-grid compute shader: one atomic per warp, each lane's slot
+// is popcount(ballot & lanemask_lt)); both used to read as 0
+static int check_lane_masks(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0xf0c8000003970004ull,  // S2R R4, SR_LANEMASK_LT
+        0xf0c8000000070005ull,  // S2R R5, SR_LANEID
+        0x5c10000000570404ull,  // IADD R4, R4, R5   (keeps both live)
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x100 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    *(uint32_t *)buf = 0x12345679u;
+    memcpy(buf + 0x100, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, sizeof buf, STAGE_COMPUTE, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: lane mask test: %s\n", a->error); fails++; }
+    else if (!strstr(a->msl, "((1u << uint(gl_SubgroupInvocationID)) - 1u)") || !strstr(a->msl, "r5 = uint(gl_SubgroupInvocationID)")) {
+        printf("FAIL: lane mask test: no lane mask / lane id in the output\n");
+        fails++;
+    }
+    maxwell_free(a);
+    return fails;
+}
+
 // TLD4.B (a bindless four-texel gather, 2D, all components, an offset register) and VMNMX (the signed clamp UE4 emits for
 // dynamic indices) - the words are Piczle Cross's
 static int check_gather_and_vmnmx(void) {
@@ -399,7 +426,7 @@ static int check_gather_and_vmnmx(void) {
 }
 
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);
