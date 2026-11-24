@@ -592,6 +592,20 @@ images on the Vulkan side); its effect is not known yet. Around 100 draws a fram
 Once the town behind the profile screen stayed black in one run and not in the next five (timing; not reproduced since).
 Debug: `PICRECOMP_DUMP_FAILED=1` writes the code words of a shader that fails to translate (build/glsl/<addr>_<stage>_failed.txt).
 
+## Piczle Puzzle & Watch Collection (started 2026-11-24)
+
+Title 01001a30155b6000 + update 01001a30155b6800 v65536 (1.01, main build 02dd54e9...), Unreal Engine 4.26.2; same two experiment
+settings as the other Piczle games. Imports and builds (9 min). It asks nifm whether it may go online at startup: the logging stub
+gave no IGeneralService and nn::nifm RequestClient's constructor read through null; runtime/services/nifm.c now answers as a
+console without network (requests never accepted, result NIFM 1111). Seen since (hidden window, Vulkan on Linux): it boots and
+renders at 60 fps (first frame after ~4 s warm, ~23 s with every cache cold), 6 runs in a row without a crash.
+Open: one run (the first after the nifm change, with screenshots and PICRECOMP_DUMP_FAILED on) ended in the game's own deliberate
+crash, a store of 0xE0000002 to address 3 (main 0x70008d01b0), reached when a worker loop (main 0x70008d01f0 -> 0x70008d0310) finds
+`now - [obj+0x88] > [obj+0xa0]` with `[obj+0x140] > 0` - a watchdog on some timestamp, likely the frame present time; not
+reproduced in 6 runs since (warm, cold caches with __GL_SHADER_DISK_CACHE=0 and an empty data root, with screenshots). Next: find
+what writes obj+0x88 (Ghidra) if it comes back. Three compute shaders store to 2D images (SUST.P.2D, unsupported, as one in Rune
+Factory). Not looked at past the title screen yet.
+
 ## What to test and watch for
 
 - Piczle Cross (branch `piczle-cross`): watch the intro and the title / menu on a real window: no black flash in the logo movie, ground
