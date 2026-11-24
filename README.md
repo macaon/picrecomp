@@ -13,7 +13,7 @@ Work in progress, for developers and testers. There are no packaged releases.
 
 | | |
 |---|---|
-| Games | **21 games**: PICROSS S to S9, S+, PICROSS X, the licensed PICROSS editions, and Piczle Cross: Story of Seasons. All boot and reach their menus; most reach a puzzle in a scripted test (the table under *Add your games*) |
+| Games | **21 games**: PICROSS S to S9, S+, PICROSS X, the licensed PICROSS editions, and Piczle Cross: Story of Seasons |
 | Platforms | **Linux x86-64** (developed and tested). **Windows**: build files exist (`tools/windows/`), but nobody has built or run it yet |
 | Graphics | Vulkan 1.3 |
 | Working | Boots, title screen, puzzle selection, solving a puzzle, completed-puzzle thumbnails, audio, 60 fps in the menus on an RTX 5070 Ti |
@@ -86,50 +86,45 @@ from the packages and refuses a game without one. Any version imports: the base 
 
 The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Each game is listed with its base and the newest update it has been run on; any version in between should import too, since nothing in the generated code is tied to a build.
 
-*Reached* is a scripted check of every game, rebuilt from scratch on 2026-11-24 (Linux, Vulkan, NVIDIA): A pressed every eight
-seconds or so, a screenshot after each press. It says how far that got with no crash, shader failure or drawing error, not how far
-the game can be played: the games that stop at the puzzle list or preview open an extra dialog first (input method, tutorial), and
-PICROSS X needs other buttons than A in its menu. All 21 ran at 60 fps.
-
-| Game | Title ID | Version | Main build ID | Reached (2026-11-24) |
-|---|---|---|---|---|
-| PICROSS S | `0100ba0003eea000` | 1.0.0 (base) | `acd7476b42407f4ea50c663a99b6db70` | Puzzle board |
-|  |  | 1.6.2 (update) | `3b86ba97f214ea43929e3a4a0947bf1b` |  |
-| PICROSS S2 | `0100c9600a88e000` | 1.0.0 (base) | `99af6113a64a574695f39af02cdbe6e1` | Puzzle board |
-|  |  | 1.5.3 (update) | `41f118c8371c79478ee2cdf9ea5038ff` |  |
-| KEMONO FRIENDS PICROSS | `01004b100bda2000` | 1.0.0 (base) | `b3a956031cee684b8a4df42874cb3e00` | Puzzle board |
-| PICROSS S3 | `010079200d330000` | 1.0.0 (base) | `7570c9e44f5889459d98794425aee552` | Puzzle board |
-|  |  | 1.5.3 (update) | `7b2a38a86026464c8b4d4d3ffee0aabc` |  |
-| PICROSS LORD OF THE NAZARICK | `010012100e8dc000` | 1.0.0 (base) | `2424aca935dd5f4188d5bafb92a83504` | Puzzle preview |
-| PICROSS S4 | `0100c250115dc000` | 1.0.0 (base) | `9b6fca808b3f1748942eeb59481c1e60` | Puzzle board |
-|  |  | 1.4.2 (update) | `1d49a7937187f94c884c65b2a6a214fb` |  |
-| PICROSS S5 | `0100ac30133ec000` | 1.0.0 (base) | `836b5804280cda4395fe9844bc726a49` | Puzzle board |
-|  |  | 1.3.2 (update) | `8437b2f0aaba5c40ac8f3be47070f855` |  |
-| PICROSS S6 | `010025901432a000` | 1.0.0 (base) | `3b27925f9e8e03429986ca7f5a095558` | Puzzle board |
-|  |  | 1.3.1 (update) | `5e0294a0884a0e4a8ae64a4535214e90` |  |
-| PICROSS S GENESIS & Master System edition | `010089701567a000` | 1.0.0 (base) | `dd82c4e72dadca46838654d03f8c2414` | Puzzle board |
-|  |  | 1.2.1 (update) | `1466f9109e267e458c517ada6b115e99` |  |
-| PICROSS S7 | `01009b2016104000` | 1.0.0 (base) | `aa4cdc0eab6d4e4db6dd46e996f1ac47` | Puzzle board |
-|  |  | 1.2.0 (update) | `528b2e6d6d8a5c448471b84d4d54836f` |  |
-| PICROSS S8 | `01002ce017d26000` | 1.0.0 (base) | `8dc7537c47d3ac4f998a5231204d9c0b` | Puzzle board |
-| PICROSS X : PICBITS VS UZBOROSS | `0100f08018840000` | 1.0 (base) | `40e9866d26170441d914ea4811003d9f` | Main menu |
-|  |  | 1.1.0 (update) | `4f0f49e2051b074b56fb00d7a596a592` |  |
-| PICROSS S9 | `010021a0197ba000` | 1.0.0 (base) | `93d7947d262dc4468eb1ae92b53b11b4` | Puzzle preview |
-| PICROSS S+ | `0100d7b01ae58000` | 1.0.0 (base) | `8ba04068aa05ab45b15e9566fe5452d5` | Puzzle board |
-|  |  | 1.0.1 (update) | `5eb832c899625df5b6bbe8aea93d073c` |  |
-| Piczle Cross: Story of Seasons | `01003f201c5ba000` | 1.0 (base) | `156d5f95f89b42b1d432b278bb82afe8` | Puzzle board |
-|  |  | 1.021 (update) | `b3630600658657938ae9a69e2b701bb5` |  |
-| PICROSS S NAMCO LEGENDARY edition | `010015101def8000` | 1.0.0 (base) | `94682e93edc1b2f824d0f765d29484a5` | Puzzle board |
-|  |  | 1.0.1 (update) | `aa44d9a3064ec70be4f8835f3e3f14aa` |  |
-| PICROSS Records of The Shield Hero | `01004c602018a000` | 1.0.0 (base) | `4252758df60a9acb4b226962e97e26e6` | Puzzle preview |
-|  |  | 1.0.2 (update) | `4c1cf04820df7f24166defcac3409e4a` |  |
-| PICROSS S Doraemon & F Characters edition | `01002b901fa74000` | 1.0.0 (base) | `edf8578a6cc16a6185679a63960314bd` | Puzzle list |
-| PICROSS S CAPCOM CLASSICS edition | `01009ad023f90000` | 1.0.0 (base) | `1de3e8003bb4a76aa7fa308099cbd4d5` | Puzzle list |
-|  |  | 1.0.2 (update) | `e212a43e76af2f1462a7eaa02e14680e` |  |
-| PICROSS S SNK CLASSICS & NEOGEO edition | `0100122023706000` | 1.0.0 (base) | `54fc92b03b3b30748bbc9bab4676dc88` | Puzzle list |
-|  |  | 1.0.2 (update) | `7edb919a39cb182c5bc2f4a8d36991d9` |  |
-| Picross: Juufuutei Raden's Guide for Pixel Museum | `01003d2020aba000` | 1.0.0 (base) | `0f6fb55fcdfc915715594dfe8a1bd751` | Puzzle board |
-|  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |  |
+| Game | Title ID | Version | Main build ID |
+|---|---|---|---|
+| PICROSS S | `0100ba0003eea000` | 1.0.0 (base) | `acd7476b42407f4ea50c663a99b6db70` |
+|  |  | 1.6.2 (update) | `3b86ba97f214ea43929e3a4a0947bf1b` |
+| PICROSS S2 | `0100c9600a88e000` | 1.0.0 (base) | `99af6113a64a574695f39af02cdbe6e1` |
+|  |  | 1.5.3 (update) | `41f118c8371c79478ee2cdf9ea5038ff` |
+| KEMONO FRIENDS PICROSS | `01004b100bda2000` | 1.0.0 (base) | `b3a956031cee684b8a4df42874cb3e00` |
+| PICROSS S3 | `010079200d330000` | 1.0.0 (base) | `7570c9e44f5889459d98794425aee552` |
+|  |  | 1.5.3 (update) | `7b2a38a86026464c8b4d4d3ffee0aabc` |
+| PICROSS LORD OF THE NAZARICK | `010012100e8dc000` | 1.0.0 (base) | `2424aca935dd5f4188d5bafb92a83504` |
+| PICROSS S4 | `0100c250115dc000` | 1.0.0 (base) | `9b6fca808b3f1748942eeb59481c1e60` |
+|  |  | 1.4.2 (update) | `1d49a7937187f94c884c65b2a6a214fb` |
+| PICROSS S5 | `0100ac30133ec000` | 1.0.0 (base) | `836b5804280cda4395fe9844bc726a49` |
+|  |  | 1.3.2 (update) | `8437b2f0aaba5c40ac8f3be47070f855` |
+| PICROSS S6 | `010025901432a000` | 1.0.0 (base) | `3b27925f9e8e03429986ca7f5a095558` |
+|  |  | 1.3.1 (update) | `5e0294a0884a0e4a8ae64a4535214e90` |
+| PICROSS S GENESIS & Master System edition | `010089701567a000` | 1.0.0 (base) | `dd82c4e72dadca46838654d03f8c2414` |
+|  |  | 1.2.1 (update) | `1466f9109e267e458c517ada6b115e99` |
+| PICROSS S7 | `01009b2016104000` | 1.0.0 (base) | `aa4cdc0eab6d4e4db6dd46e996f1ac47` |
+|  |  | 1.2.0 (update) | `528b2e6d6d8a5c448471b84d4d54836f` |
+| PICROSS S8 | `01002ce017d26000` | 1.0.0 (base) | `8dc7537c47d3ac4f998a5231204d9c0b` |
+| PICROSS X : PICBITS VS UZBOROSS | `0100f08018840000` | 1.0 (base) | `40e9866d26170441d914ea4811003d9f` |
+|  |  | 1.1.0 (update) | `4f0f49e2051b074b56fb00d7a596a592` |
+| PICROSS S9 | `010021a0197ba000` | 1.0.0 (base) | `93d7947d262dc4468eb1ae92b53b11b4` |
+| PICROSS S+ | `0100d7b01ae58000` | 1.0.0 (base) | `8ba04068aa05ab45b15e9566fe5452d5` |
+|  |  | 1.0.1 (update) | `5eb832c899625df5b6bbe8aea93d073c` |
+| Piczle Cross: Story of Seasons | `01003f201c5ba000` | 1.0 (base) | `156d5f95f89b42b1d432b278bb82afe8` |
+|  |  | 1.021 (update) | `b3630600658657938ae9a69e2b701bb5` |
+| PICROSS S NAMCO LEGENDARY edition | `010015101def8000` | 1.0.0 (base) | `94682e93edc1b2f824d0f765d29484a5` |
+|  |  | 1.0.1 (update) | `aa44d9a3064ec70be4f8835f3e3f14aa` |
+| PICROSS Records of The Shield Hero | `01004c602018a000` | 1.0.0 (base) | `4252758df60a9acb4b226962e97e26e6` |
+|  |  | 1.0.2 (update) | `4c1cf04820df7f24166defcac3409e4a` |
+| PICROSS S Doraemon & F Characters edition | `01002b901fa74000` | 1.0.0 (base) | `edf8578a6cc16a6185679a63960314bd` |
+| PICROSS S CAPCOM CLASSICS edition | `01009ad023f90000` | 1.0.0 (base) | `1de3e8003bb4a76aa7fa308099cbd4d5` |
+|  |  | 1.0.2 (update) | `e212a43e76af2f1462a7eaa02e14680e` |
+| PICROSS S SNK CLASSICS & NEOGEO edition | `0100122023706000` | 1.0.0 (base) | `54fc92b03b3b30748bbc9bab4676dc88` |
+|  |  | 1.0.2 (update) | `7edb919a39cb182c5bc2f4a8d36991d9` |
+| Picross: Juufuutei Raden's Guide for Pixel Museum | `01003d2020aba000` | 1.0.0 (base) | `0f6fb55fcdfc915715594dfe8a1bd751` |
+|  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |
 
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.

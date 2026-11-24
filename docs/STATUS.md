@@ -576,8 +576,7 @@ data file system ~60 times), audio, longer play (finishing a puzzle, the farm), 
 
 **All 21 games rebuilt and checked (2026-11-24)** after the merge of `piczle-cross` into main (library id changed by the generator work):
 each game's library rebuilt from scratch, then one scripted run each (A every ~8 s, 6 screenshots; Vulkan on Linux, hidden window).
-All 21: no crash, no shader translation failure, no subgroup warning, 60 fps, nothing drawn wrong in the screenshots. How far each
-got is in the README's builds table. Scripts (scratch, not in the repo): `~/temp/rebuild_all.sh g01 ...`, `~/temp/testall.sh`.
+All 21: no crash, no shader translation failure, no subgroup warning, 60 fps, nothing drawn wrong in the screenshots. Scripts (scratch, not in the repo): `~/temp/rebuild_all.sh g01 ...`, `~/temp/testall.sh`.
 
 ## What to test and watch for
 
