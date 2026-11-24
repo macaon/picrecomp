@@ -2017,6 +2017,22 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             set_reg(c, d, t);
         }
         if (pd != PT) { c->pred_used[pd] = 1; sp(&c->body, "    p%d = true;\n", pd); }
+    } else if (OPM(0x5bd0000000000000ull, 0xfff8000000000000ull) || OPM(0x4bd0000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x36d0000000000000ull, 0xfff8000000000000ull)) {  // LEA Rd, A, B, shift (register / cbuf / immediate)
+        // Rd = (A << shift) + B (low word); A negated first with .NEG. Fields per Ryujinx's InstLeaR/C/I (shift 39-43,
+        // NegA 45, X 46, CC 47, carry out to predicate 48-50). Piczle Cross: Rune Factory indexes its per-primitive
+        // data with it: 36d7028000370000 is LEA R0, R0, 0x3, 0x5 (27 shaders failed to translate without it).
+        int sh = (int)bits(w, 39, 5), pc_out = (int)bits(w, 48, 3);
+        if (bits(w, 46, 1) || bits(w, 47, 1)) fail(c, "lea x/cc");
+        char av[160];
+        sprintf(av, bits(w, 45, 1) ? "(0u - (%s << %du))" : "(%s << %du)", R(a), sh);
+        const char *bv = B(false);
+        if (pc_out != PT) {  // the carry of the addition (for a following LEA.HI.X)
+            c->pred_used[pc_out] = 1;
+            sp(&c->body, "    p%d = (ulong(%s) + ulong(%s)) > ulong(0xFFFFFFFFu);\n", pc_out, av, bv);
+        }
+        sprintf(t, "(%s + %s)", av, bv);
+        set_reg(c, d, t);
     } else if (OPM(0x5bd8000000000000ull, 0xfff8000000000000ull)) {  // LEA.HI Rd, A, B, C, shift (register form)
         // Rd = high word of (C:A << shift) + B. Fields per Ryujinx's InstLeaHiR (shift 28-32, C 39-46, NegA 37, X 38,
         // CC 47); checked on shader 5bdf7f81f0370404: LEA.HI R4, R4, R3, RZ, 0x1f.

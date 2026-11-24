@@ -397,6 +397,32 @@ static int check_lane_masks(void) {
     return fails;
 }
 
+// LEA in its immediate and register forms (Piczle Cross: Rune Factory: 36d7028000370000 is LEA R0, R0, 0x3, 0x5)
+static int check_lea(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0x36d7028000370000ull,  // LEA R0, R0, 0x3, 0x5      R0 = (R0 << 5) + 3
+        0x5bd7028000270104ull,  // LEA R4, R1, R2, 0x5        R4 = (R1 << 5) + R2
+        0x5c10000000470004ull,  // IADD R4, R0, R4   (keeps both live)
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x100 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    *(uint32_t *)buf = 0x12345679u;
+    memcpy(buf + 0x100, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, sizeof buf, STAGE_COMPUTE, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: lea test: %s\n", a->error); fails++; }
+    else if (!strstr(a->msl, "((r0 << 5u) + 0x00000003u)") || !strstr(a->msl, "((r1 << 5u) + r2)")) {
+        printf("FAIL: lea test: no shift-and-add in the output\n");
+        fails++;
+    }
+    maxwell_free(a);
+    return fails;
+}
+
 // TLD4.B (a bindless four-texel gather, 2D, all components, an offset register) and VMNMX (the signed clamp UE4 emits for
 // dynamic indices) - the words are Piczle Cross's
 static int check_gather_and_vmnmx(void) {
@@ -426,7 +452,7 @@ static int check_gather_and_vmnmx(void) {
 }
 
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);
