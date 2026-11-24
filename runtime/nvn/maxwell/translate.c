@@ -810,6 +810,14 @@ static bool is_control_flow(uint64_t w) {
            (w & 0xfff8000000000000ull) == 0xf0f8000000000000ull;
 }
 
+// ISETP / FSETP / PSETP: bits 0-7 are predicate fields, not a register (not a writer of a register a handle search is after)
+static bool sets_predicates_only(uint64_t w) {
+    uint64_t top = w & 0xfff0000000000000ull;
+    return top == 0x5b60000000000000ull || top == 0x4b60000000000000ull || (w & 0xfef0000000000000ull) == 0x3660000000000000ull ||
+           top == 0x5bb0000000000000ull || top == 0x4bb0000000000000ull || (w & 0xfef0000000000000ull) == 0x36b0000000000000ull ||
+           (w & 0xfff8000000000000ull) == 0x5090000000000000ull;
+}
+
 // Resolve a static NVN driver c2 pair within the current basic block.
 static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned predicate, unsigned *tex, unsigned *sampler) {
     if (!c->glsl || reg == RZ) return false;
@@ -826,6 +834,9 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
         // it. A DEPBAR (a scoreboard wait) has no destination.
         if ((prev & 0xfff8000000000000ull) == 0xf0f0000000000000ull) continue;
         if (is_control_flow(prev)) continue;  // (an SSY / SYNC between the handle and its use: Piczle Cross's fragment shaders)
+        // (an FSETP between the handle and its use: its low byte is predicates, Piczle Cross: Rune Factory's fragment shaders;
+        // it still counts as a predicate write below)
+        if (sets_predicates_only(prev)) { if (predicate != PT) pred_written = true; continue; }
         unsigned pred = (unsigned)bits(prev, 16, 4);
         uint64_t opcode = prev & 0xfff8000000000000ull;
         if ((prev & 0xfff8000000000000ull) == 0xdeb8000000000000ull) {
@@ -845,6 +856,14 @@ static bool separate_texture_pair(Ctx *c, uint32_t pc, unsigned reg, unsigned pr
             // MOV Rd, Rb: the handle is a copy (PICROSS S NAMCO LEGENDARY edition samples twice with one handle, the
             // second through a copy): the handle's instructions are the ones that built Rb, before this MOV
             reg = (unsigned)bits(prev, 20, 8);
+            if (reg == RZ) return false;
+            continue;
+        }
+        if (!found && opcode == 0x5c10000000000000ull && !(prev & 0x0007ff8000000000ull) && (pred == PT || pred == predicate) &&
+            (bits(prev, 8, 8) == RZ || bits(prev, 20, 8) == RZ)) {
+            // IADD Rd, RZ, Rb (no negation, carry or flags): a copy too. Piczle Cross: Rune Factory's vertex shaders build
+            // the handle in R5, then 5c1000000057ff05 (IADD R5, RZ, R5) before the TLD.B
+            reg = (unsigned)(bits(prev, 8, 8) == RZ ? bits(prev, 20, 8) : bits(prev, 8, 8));
             if (reg == RZ) return false;
             continue;
         }
@@ -1137,10 +1156,7 @@ static bool image_handle_slot(Ctx *c, uint32_t pc, unsigned reg, unsigned *k) {
         memcpy(&prev, c->code + at, sizeof prev);
         if ((prev & 0xffe0000000000000ull) == 0xeb20000000000000ull) continue;  // SUST: no destination
         if (is_control_flow(prev)) continue;
-        uint64_t top = prev & 0xfff0000000000000ull;  // ISETP / FSETP / PSETP: bits 0-7 are predicate fields, not a register
-        if (top == 0x5b60000000000000ull || top == 0x4b60000000000000ull || (prev & 0xfef0000000000000ull) == 0x3660000000000000ull ||
-            top == 0x5bb0000000000000ull || top == 0x4bb0000000000000ull || (prev & 0xfef0000000000000ull) == 0x36b0000000000000ull ||
-            (prev & 0xfff8000000000000ull) == 0x5090000000000000ull) continue;
+        if (sets_predicates_only(prev)) continue;
         if (bits(prev, 0, 8) != reg) continue;
         if ((prev & 0xfff8000000000000ull) != 0x4c98000000000000ull || bits(prev, 34, 5) != 2) return false;
         unsigned off = (unsigned)bits(prev, 20, 14) * 4;

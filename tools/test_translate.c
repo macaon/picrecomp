@@ -457,6 +457,40 @@ static int check_shared_and_atomics(void) {
     return fails;
 }
 
+// Bindless handles across an FSETP (its low byte is predicates) and through an IADD Rd, RZ, Rb copy: Piczle Cross: Rune
+// Factory's fragment and vertex shaders (the game's words)
+static int check_handle_across_fsetp_and_iadd(void) {
+    static const uint64_t fs[] = {
+        0x001fc000e24007f0ull,
+        0x4c9807880607000full,  // MOV R15, c[2][..]   (the texture half)
+        0x4c47020816070f0full,  // LOP.OR R15, R15, c[2][..]   (the sampler half)
+        0x36b1803f8007170full,  // FSETP ...   (bits 0-7: predicates)
+        0x001fc000e24007f0ull,
+        0xdeba0007a0f70c0cull,  // TEX.B R12, R12, R15
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static const uint64_t vs[] = {
+        0x001fc000e24007f0ull,
+        0x4c98078815c70002ull,  // MOV R2, c[2][..]
+        0x4c47020805c70205ull,  // LOP.OR R5, R2, c[2][..]
+        0x5c1000000057ff05ull,  // IADD R5, RZ, R5   (a copy)
+        0x001fc000e24007f0ull,
+        0xdd38000080570000ull,  // TLD.B R0, R0, R5
+        0xe30000000007000full, 0xe2400fffff87000full};
+    int fails = 0;
+    for (int k = 0; k < 2; k++) {
+        static uint8_t buf[0x80 + 8 * 8 + 64];
+        memset(buf, 0, sizeof buf);
+        memcpy(buf + 0x80, k ? vs : fs, sizeof fs);
+        ShaderKey key;
+        memset(&key, 0, sizeof key);
+        key.glsl = 1;
+        ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof fs, k ? STAGE_VERTEX : STAGE_FRAGMENT, &key);
+        if (!a->msl) { printf("FAIL: handle across %s test: %s\n", k ? "IADD" : "FSETP", a->error); fails++; }
+        maxwell_free(a);
+    }
+    return fails;
+}
+
 // TLD4.B (a bindless four-texel gather, 2D, all components, an offset register) and VMNMX (the signed clamp UE4 emits for
 // dynamic indices) - the words are Piczle Cross's
 static int check_gather_and_vmnmx(void) {
@@ -486,7 +520,7 @@ static int check_gather_and_vmnmx(void) {
 }
 
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea() || check_shared_and_atomics()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea() || check_shared_and_atomics() || check_handle_across_fsetp_and_iadd()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);
