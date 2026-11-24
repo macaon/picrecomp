@@ -587,8 +587,10 @@ Seen working (Vulkan on Linux, hidden window, scripted input): logo, title, prof
 What it took: LEA (27 shaders failed on 0x36d7...), compute shared memory LDS / STS / ATOMS and ATOM with a result, the texture
 handle search past FSETP and through IADD Rd, RZ, Rb copies (vertex shaders: ~1650 draws a frame were skipped; the town behind the
 menus was black), and audout ignoring an uninitialised buffer data offset (a crash in SDL at the first sound).
-Open: one compute shader at startup stores to a 2D image (SUST.P.2D, eb20030600f70400; only 1D buffer stores exist: needs storage
-images on the Vulkan side); its effect is not known yet. Around 100 draws a frame are skipped for other reasons (not looked at).
+2D / 3D image stores (SUST.P.2D / .3D) work since 2026-11-24: an image a compute shader stores to is recreated with STORAGE usage on
+first use (contents copied; only those images, storage usage can cost compression), viewed as UNORM for sRGB, float or integer
+image type by the bound format (a shader variant); test check_image_stores. Here: two 1920x1080 B10G11R11 targets. The main
+menu then shows the full town in daylight, the puzzle list its scene. Around 100 draws a frame are skipped for other reasons (not looked at).
 Once the town behind the profile screen stayed black in one run and not in the next five (timing; not reproduced since).
 Debug: `PICRECOMP_DUMP_FAILED=1` writes the code words of a shader that fails to translate (build/glsl/<addr>_<stage>_failed.txt).
 
@@ -603,8 +605,10 @@ Open: one run (the first after the nifm change, with screenshots and PICRECOMP_D
 crash, a store of 0xE0000002 to address 3 (main 0x70008d01b0), reached when a worker loop (main 0x70008d01f0 -> 0x70008d0310) finds
 `now - [obj+0x88] > [obj+0xa0]` with `[obj+0x140] > 0` - a watchdog on some timestamp, likely the frame present time; not
 reproduced in 6 runs since (warm, cold caches with __GL_SHADER_DISK_CACHE=0 and an empty data root, with screenshots). Next: find
-what writes obj+0x88 (Ghidra) if it comes back. Three compute shaders store to 2D images (SUST.P.2D, unsupported, as one in Rune
-Factory). Not looked at past the title screen yet.
+what writes obj+0x88 (Ghidra) if it comes back. Its three compute shaders that store to images (a 64x64x16 RGBA16F 3D one, two 2D R16F) translate since the image-store work; it
+reaches its main menu (Select game / Unbox / View / Options) at 60 fps. With the validation layer on it is slow enough that the
+watchdog crash comes every time: it fires on slow frames. Validation also reports a fragment shader sampling an RGBA8_UINT view with
+a float sampler (VUID-vkCmdDrawIndexed-format-07753, binding t7): not looked at. Not played past the menu yet.
 
 ## What to test and watch for
 
