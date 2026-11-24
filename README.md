@@ -13,17 +13,17 @@ Work in progress, for developers and testers. There are no packaged releases.
 
 | | |
 |---|---|
-| Games | **21 games**: PICROSS S to S9, S+, PICROSS X, the licensed PICROSS editions, and Piczle Cross: Story of Seasons |
+| Games | **22 games**: PICROSS S to S9, S+, PICROSS X, the licensed PICROSS editions, and Piczle Cross: Story of Seasons and Rune Factory |
 | Platforms | **Linux x86-64** (developed and tested). **Windows**: build files exist (`tools/windows/`), but nobody has built or run it yet |
 | Graphics | Vulkan 1.3 |
 | Working | Boots, title screen, puzzle selection, solving a puzzle, completed-puzzle thumbnails, audio, 60 fps in the menus on an RTX 5070 Ti |
 | Not verified | Saves across restarts in every game, every game mode, AMD and Intel GPUs (the shaders need 32-wide subgroups, which the runtime asks for; testers welcome: look for `[vk] subgroups:` in the log) |
-| Not done | The system controller-pairing screen (Plus at the main menu) is skipped, and the game returns to its menu. Piczle Cross still needs two experiment settings: start it with `PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1 tools/picross/play.sh` |
+| Not done | The system controller-pairing screen (Plus at the main menu) is skipped, and the game returns to its menu. The Piczle Cross games still need two experiment settings: start it with `PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1 tools/picross/play.sh` |
 
 ## Requirements
 
 - An x86-64 CPU with AVX2 and FMA (2013 or newer) and a Vulkan 1.3 GPU driver
-- Your own PICROSS S base game and its update as `.nsp` files, and the `prod.keys` from your Switch
+- Your own copy of the game as `.nsp` files (the base game; an update is optional), and the `prod.keys` from your Switch
 - About 2 GB of free disk space for the generated code and the build, and some patience: the first build compiles about
   170,000 generated functions
 
@@ -63,7 +63,7 @@ make -j"$(nproc)"                  # the runtime (and the game library, once the
 ## Add your games
 
 Keep your game files and keys outside the checkout; nothing from the game may ever be committed. Each game needs its base
-`.nsp` and its update `.nsp` (and your `prod.keys`) in one folder.
+`.nsp`, optionally its update `.nsp`, and your `prod.keys` in one folder.
 
 ```bash
 tools/picross/play.sh        # the start screen: choose "+", pick the folder, Import
@@ -82,9 +82,9 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 ```
 
 Each game's name, release date and title ids are in its manifest, `titles/<name>.json`; the importer picks the manifest
-from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S9, S+, PICROSS X, the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System, Namco Legendary, Doraemon & F Characters, CAPCOM CLASSICS and SNK CLASSICS & NEOGEO editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum), and Piczle Cross: Story of Seasons (an Unreal Engine 4 game, not by Jupiter). `docs/STATUS.md` says how far each has been played.
+from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S9, S+, PICROSS X, the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System, Namco Legendary, Doraemon & F Characters, CAPCOM CLASSICS and SNK CLASSICS & NEOGEO editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum), and Piczle Cross: Story of Seasons and Piczle Cross: Rune Factory (Unreal Engine 4 games, not by Jupiter). `docs/STATUS.md` says how far each has been played.
 
-The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Each game is listed with its base and the newest update it has been run on; any version in between should import too, since nothing in the generated code is tied to a build.
+The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Each game is listed with its base and the newest update it has been run on, and both have been played: the base game alone and the game with its update. Any version in between should import too, since nothing in the generated code is tied to a build.
 
 | Game | Title ID | Version | Main build ID |
 |---|---|---|---|
@@ -125,6 +125,8 @@ The builds below are the ones the importer has been run on (main build ID: the g
 |  |  | 1.0.2 (update) | `7edb919a39cb182c5bc2f4a8d36991d9` |
 | Picross: Juufuutei Raden's Guide for Pixel Museum | `01003d2020aba000` | 1.0.0 (base) | `0f6fb55fcdfc915715594dfe8a1bd751` |
 |  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |
+| Piczle Cross: Rune Factory | `0100147020984000` | 1.0 (base) | `1ad16d8417120786b850f60a59732f18` |
+|  |  | 1.04 (update) | `1ad16d8417120786b850f60a59732f18` |
 
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
