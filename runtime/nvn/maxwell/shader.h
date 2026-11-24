@@ -75,6 +75,7 @@ typedef struct {
                             // dispatch's storage buffers - when found, stores too (copied back after the dispatch).
                             // runtime/nvn/vulkan/exec.c
     bool uses_gfar;         // (GLSL) global memory accesses fall back to the GFAR table
+    bool uses_subgroup;     // lane id / masks, shuffles, votes: written for 32-wide warps (Vulkan asks for 32-wide subgroups)
     bool uses_gmem_store;   // writes global memory (STG)
     bool uses_tint;        // fragment: reads the per-draw tint (buffer 19, float4[2]) applied to color target 0
     bool uses_rscale;       // reads the resolution-scale table (fragment/compute buffer 18): float4 [0] = render

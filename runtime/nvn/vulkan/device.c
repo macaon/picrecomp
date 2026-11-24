@@ -246,8 +246,24 @@ static void create_device(void) {
                                             .pNext = g_vk.custom_border ? (void *)&cbc : g_vk.divisor ? (void *)&div : NULL};
     VkPhysicalDeviceVulkan12Features q12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     VkPhysicalDeviceFeatures2 q2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &q12};
+    VkPhysicalDeviceVulkan13Features q13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    q12.pNext = &q13;
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &q2);
     g_vk.bda = q12.bufferDeviceAddress && g_vk.host_import;  // (global memory outside the guest heap: exec.c gfar_table)
+    {   // Maxwell runs 32 threads per warp and the games' shaders rely on it (ballots, shuffles, lane masks: UE4's light
+        // grid in Piczle Cross takes one atomic per warp). NVIDIA's subgroups are always 32; AMD RDNA (32 or 64) and
+        // Intel (8 to 32) choose per pipeline unless asked: pipelines whose shaders need it ask for 32 where allowed.
+        VkPhysicalDeviceVulkan13Properties p13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
+        VkPhysicalDeviceProperties2 pp2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &p13};
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &pp2);
+        g_vk.sg_fixed32 = p13.minSubgroupSize == 32 && p13.maxSubgroupSize == 32;
+        bool can = q13.subgroupSizeControl && p13.minSubgroupSize <= 32 && p13.maxSubgroupSize >= 32;
+        g_vk.sg32_stages = can ? p13.requiredSubgroupSizeStages & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT) : 0;
+        LOG("[vk] subgroups: %u to %u wide, 32 can be asked for in: %s%s%s%s\n", p13.minSubgroupSize, p13.maxSubgroupSize,
+            g_vk.sg32_stages & VK_SHADER_STAGE_VERTEX_BIT ? "vertex " : "", g_vk.sg32_stages & VK_SHADER_STAGE_FRAGMENT_BIT ? "fragment " : "",
+            g_vk.sg32_stages & VK_SHADER_STAGE_COMPUTE_BIT ? "compute" : "", g_vk.sg32_stages ? "" : "none");
+    }
+    f13.subgroupSizeControl = g_vk.sg32_stages != 0;
     VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                                             .timelineSemaphore = VK_TRUE, .shaderInt8 = VK_TRUE, .samplerMirrorClampToEdge = VK_TRUE,
                                             .uniformAndStorageBuffer8BitAccess = VK_TRUE, .storageBuffer8BitAccess = VK_TRUE,

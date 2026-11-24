@@ -39,6 +39,8 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import, bda;
+    bool sg_fixed32;  // subgroups are always 32 wide (NVIDIA): nothing to ask for
+    VkShaderStageFlags sg32_stages;  // stages whose pipelines get 32-wide subgroups when their shaders need it (exec.c)
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;

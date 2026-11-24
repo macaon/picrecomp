@@ -1513,12 +1513,33 @@ static VkPrimitiveTopology topo_class_base(uint8_t c) {
     return c == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST : c == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 }
 
+// pNext of a pipeline stage whose translated shader is written for 32-wide warps (ShaderInfo.uses_subgroup): asks for
+// 32-wide subgroups where the GPU lets us (device.c), says once per stage when it cannot (results may be wrong there)
+static const void *sg32_next(const ShaderInfo *si, VkShaderStageFlagBits stage, VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *r) {
+    static int force = -1;  // PICRECOMP_VK_SG32=1: ask even when subgroups are always 32 (tests this path on NVIDIA)
+    if (force < 0) force = getenv("PICRECOMP_VK_SG32") != NULL;
+    if (!si || !si->uses_subgroup || (g_vk.sg_fixed32 && !force)) return NULL;
+    if (!(g_vk.sg32_stages & stage)) {
+        static _Atomic uint32_t warned;
+        if (!(atomic_fetch_or(&warned, stage) & stage))
+            LOG("[vk] warning: a %s shader needs 32-wide subgroups and this GPU cannot be asked for them there: it may draw wrongly\n",
+                stage == VK_SHADER_STAGE_VERTEX_BIT ? "vertex" : stage == VK_SHADER_STAGE_FRAGMENT_BIT ? "fragment" : "compute");
+        return NULL;
+    }
+    *r = (VkPipelineShaderStageRequiredSubgroupSizeCreateInfo){.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+                                                               .requiredSubgroupSize = 32};
+    return r;
+}
+
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
     PipeKey *k = &pp->k;
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = k->prog->fs, .pName = "main"}};
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfo sgv, sgf;
+    stages[0].pNext = sg32_next(k->prog->vi, VK_SHADER_STAGE_VERTEX_BIT, &sgv);
+    stages[1].pNext = sg32_next(k->prog->fi, VK_SHADER_STAGE_FRAGMENT_BIT, &sgf);
     VkVertexInputAttributeDescription va[32];
     VkVertexInputBindingDescription vb[17];
     VkVertexInputBindingDivisorDescriptionEXT vd[17];
@@ -2768,6 +2789,8 @@ static void build_compute(void *arg) {
                                                 .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = m, .pName = "main",
                                                 .pSpecializationInfo = &spec},
                                       .layout = cp->p.layout};
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfo sg;
+    ci.stage.pNext = sg32_next(cp->si, VK_SHADER_STAGE_COMPUTE_BIT, &sg);
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
     atomic_fetch_add(&stat_compiles, 1);
     atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
