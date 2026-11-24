@@ -574,6 +574,11 @@ other games (the movie and HID changes touch all of them; all libraries are stal
 data file system ~60 times), audio, longer play (finishing a puzzle, the farm), `Journal`, the experiment hooks `PICRECOMP_TEMP_DI` /
 `PICRECOMP_TEMP_KEEP_SRS` still to become real values.
 
+**All 21 games rebuilt and checked (2026-11-24)** after the merge of `piczle-cross` into main (library id changed by the generator work):
+each game's library rebuilt from scratch, then one scripted run each (A every ~8 s, 6 screenshots; Vulkan on Linux, hidden window).
+All 21: no crash, no shader translation failure, no subgroup warning, 60 fps, nothing drawn wrong in the screenshots. How far each
+got is in the README's builds table. Scripts (scratch, not in the repo): `~/temp/rebuild_all.sh g01 ...`, `~/temp/testall.sh`.
+
 ## What to test and watch for
 
 - Piczle Cross (branch `piczle-cross`): watch the intro and the title / menu on a real window: no black flash in the logo movie, ground
