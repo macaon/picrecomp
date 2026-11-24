@@ -423,6 +423,40 @@ static int check_lea(void) {
     return fails;
 }
 
+// Compute shared memory and atomics (Piczle Cross: Rune Factory): STS / STS.128 / ATOM.E.ADD are the game's words; LDS and
+// ATOMS.ADD are assembled from the same fields
+static int check_shared_and_atomics(void) {
+    static const uint64_t words[] = {
+        0x001fc000e24007f0ull,
+        0xef5c0000000705ffull,  // STS [R5], RZ
+        0xef5e000000070a0cull,  // STS.128 [R10], R12..R15
+        0xef4c000000070504ull,  // LDS R4, [R5]
+        0x001fc000e24007f0ull,
+        0xec00000000270506ull,  // ATOMS.ADD R6, [R5], R2
+        0xed01000000380003ull,  // @!P0 ATOM.E.ADD R3, [R0], R3
+        0x5c10000000670404ull,  // IADD R4, R4, R6   (keeps the results live)
+        0x001fc000e24007f0ull,
+        0x5c10000000370404ull,  // IADD R4, R4, R3
+        0xe30000000007000full, 0xe2400fffff87000full};
+    static uint8_t buf[0x100 + sizeof words + 64];
+    memset(buf, 0, sizeof buf);
+    *(uint32_t *)buf = 0x12345679u;
+    memcpy(buf + 0x100, words, sizeof words);
+    ShaderKey key;
+    memset(&key, 0, sizeof key);
+    key.glsl = 1;
+    ShaderInfo *a = maxwell_translate(buf, sizeof buf, STAGE_COMPUTE, &key);
+    int fails = 0;
+    if (!a->msl) { printf("FAIL: shared / atomics test: %s\n", a->error); fails++; }
+    else if (!strstr(a->msl, "shared uint smem[") || !strstr(a->msl, "r4 = smem[min((la >> 2) + 0u,") || !strstr(a->msl, "r6 = atomicAdd(smem[") ||
+             !strstr(a->msl, "o_ = atomicAdd(gmem_.w[")) {
+        printf("FAIL: shared / atomics test: missing shared memory or atomics in the output\n");
+        fails++;
+    }
+    maxwell_free(a);
+    return fails;
+}
+
 // TLD4.B (a bindless four-texel gather, 2D, all components, an offset register) and VMNMX (the signed clamp UE4 emits for
 // dynamic indices) - the words are Piczle Cross's
 static int check_gather_and_vmnmx(void) {
@@ -452,7 +486,7 @@ static int check_gather_and_vmnmx(void) {
 }
 
 int main(int argc, char **argv) {
-    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea()) return 1;
+    if (check_conditional_exit() || check_predicated_tex() || check_copied_handle_and_hsetp2_cbuf() || check_handle_across_blocks() || check_tld_bindless() || check_buffer_images() || check_gather_and_vmnmx() || check_lane_masks() || check_lea() || check_shared_and_atomics()) return 1;
     if (argc < 4) { fprintf(stderr, "usage: %s <translate.c> <count> <seed> [msl|glsl|both] [dump_dir]\n", argv[0]); return 2; }
     load_patterns(argv[1]);
     long count = atol(argv[2]);

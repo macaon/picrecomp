@@ -34,6 +34,7 @@ const uint8_t *maxwell_dbg_vs;
 
 #define RZ 255
 #define LMEM_WORDS 256  // local memory per invocation (1 KB)
+#define SMEM_WORDS 12288  // compute shared memory (48 KiB: NVIDIA's limit; the program's own size is not read yet)
 #define PT 7
 
 typedef struct {
@@ -67,7 +68,7 @@ typedef struct {
     uint8_t pred_used[8];
     uint32_t in_attr_mask, out_attr_mask;
     uint32_t vs_in_comp[32];
-    bool uses_branches, uses_cc, uses_local, uses_vid, uses_iid, uses_frag_coord, uses_front_facing, uses_lane, uses_subgroup;
+    bool uses_branches, uses_cc, uses_local, uses_vid, uses_iid, uses_frag_coord, uses_front_facing, uses_lane, uses_subgroup, uses_shared;
     bool uses_rscale;  // resolution-scale table (fragment/compute only)
     uint32_t flat_mask;           // fragment inputs using constant (flat) interpolation
     uint32_t noperspective_mask;  // fragment inputs using pass (linear) interpolation
@@ -1964,12 +1965,23 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         icmp_expr(cmp, (int)bits(w, 49, 3), cv, "0u", bits(w, 48, 1));
         sprintf(t, "(%s ? %s : %s)", cmp, R(a), bv);
         set_reg(c, d, t);
-    } else if (OPM(0xef40000000000000ull, 0xfff8000000000000ull) || OPM(0xef50000000000000ull, 0xfff8000000000000ull)) {  // LDL / STL
-        // thread-private local memory, modelled as a word array (byte/short accesses within a word)
-        bool store = bits(w, 52, 1);
+    } else if (OPM(0xef40000000000000ull, 0xfff0000000000000ull) || OPM(0xef50000000000000ull, 0xfff0000000000000ull)) {
+        // LDL / STL (thread-private local memory) and LDS / STS (bit 51: compute shared memory, Ryujinx's InstLds/InstSts:
+        // the same fields), each modelled as a word array (byte/short accesses within a word). Piczle Cross: Rune Factory's
+        // compute shaders: ef5c0000000705ff is STS [R5], RZ; ef5e000000070a0c STS.128 [R10], R12..R15.
+        bool store = bits(w, 52, 1), shared = bits(w, 51, 1);
         int size = (int)bits(w, 48, 3);
         int32_t off = (int32_t)sbits(w, 20, 24);
-        c->uses_local = true;
+        if (shared && c->stage != STAGE_COMPUTE) fail(c, "shared memory outside compute");
+        if (shared) c->uses_shared = true; else c->uses_local = true;
+        // index expressions: local memory wraps (as before), shared memory clamps into its 48 KiB
+        char ix0[96], ixk[4][128];
+        const char *mem = shared ? "smem" : "lmem";
+        if (shared) sprintf(ix0, "min(la >> 2, %du)", SMEM_WORDS - 1); else sprintf(ix0, "(la >> 2) & %du", LMEM_WORDS - 1);
+        for (int k = 0; k < 4; k++) {
+            if (shared) sprintf(ixk[k], "min((la >> 2) + %du, %du)", k, SMEM_WORDS - 1);
+            else sprintf(ixk[k], "((la >> 2) + %du) & %du", k, LMEM_WORDS - 1);
+        }
         char addr[128];
         if (a == RZ) sprintf(addr, "%du", off);
         else sprintf(addr, "(%s + %du)", R(a), (uint32_t)off);
@@ -1979,19 +1991,19 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (size < 4) {
                 static const char *const ext[] = {"(v >> sh) & 0xFFu", "uint(int(char((v >> sh) & 0xFFu)))", "(v >> sh) & 0xFFFFu",
                                                   "uint(int(short((v >> sh) & 0xFFFFu)))"};
-                if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      uint v = lmem[(la >> 2) & %du]; uint sh = (la & 3u) * 8u; r%d = %s;\n", LMEM_WORDS - 1, d, ext[size]); }
+                if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      uint v = %s[%s]; uint sh = (la & 3u) * 8u; r%d = %s;\n", mem, ix0, d, ext[size]); }
             } else {
                 for (int k = 0; k < nw; k++)
-                    if (d != RZ && d + k < RZ) { c->reg_used[d + k] = 1; sp(&c->body, "      r%d = lmem[((la >> 2) + %du) & %du];\n", d + k, k, LMEM_WORDS - 1); }
+                    if (d != RZ && d + k < RZ) { c->reg_used[d + k] = 1; sp(&c->body, "      r%d = %s[%s];\n", d + k, mem, ixk[k]); }
             }
         } else {
             if (size < 4) {
                 uint32_t m = size < 2 ? 0xFFu : 0xFFFFu;
-                sp(&c->body, "      uint sh = (la & 3u) * 8u; uint i = (la >> 2) & %du; lmem[i] = (lmem[i] & ~(0x%xu << sh)) | ((%s & 0x%xu) << sh);\n",
-                   LMEM_WORDS - 1, m, R(d), m);
+                sp(&c->body, "      uint sh = (la & 3u) * 8u; uint i = %s; %s[i] = (%s[i] & ~(0x%xu << sh)) | ((%s & 0x%xu) << sh);\n",
+                   ix0, mem, mem, m, R(d), m);
             } else {
                 for (int k = 0; k < nw; k++)
-                    sp(&c->body, "      lmem[((la >> 2) + %du) & %du] = %s;\n", k, LMEM_WORDS - 1, R(d == RZ ? RZ : d + k));
+                    sp(&c->body, "      %s[%s] = %s;\n", mem, ixk[k], R(d == RZ ? RZ : d + k));
             }
         }
         sp(&c->body, "    }\n");
@@ -2061,6 +2073,61 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             sp(&c->body, "      p%d = %s;\n", vp, lane ? (mode == 2 ? "true" : "vp_") : c->glsl ? gl[mode] : ms[mode]);
         }
         sp(&c->body, "    }\n");
+    } else if (OPM(0xed00000000000000ull, 0xff00000000000000ull) || OPM(0xec00000000000000ull, 0xff00000000000000ull)) {
+        // ATOM (global) / ATOMS (compute shared memory): an atomic that returns the old word. Fields per Ryujinx's InstAtom
+        // (value 20-27, offset 28-47 signed, .E 48, size 49-51, op 52-55) and InstAtoms (size 28-29, offset 30-51 in words,
+        // op 52-55). Piczle Cross: Rune Factory: ed01000000380003 is ATOM.E.ADD R3, [R0], R3 (a compute shader's counter).
+        bool shm = OPM(0xec00000000000000ull, 0xff00000000000000ull);
+        int op = (int)bits(w, 52, 4), size = shm ? (int)bits(w, 28, 2) : (int)bits(w, 49, 3), vr = (int)bits(w, 20, 8);
+        static const char *const gl_op[] = {"atomicAdd", "atomicMin", "atomicMax", "", "", "atomicAnd", "atomicOr", "atomicXor", "atomicExchange"};
+        static const char *const ms_op[] = {"atomic_fetch_add_explicit", "atomic_fetch_min_explicit", "atomic_fetch_max_explicit", "", "",
+                                            "atomic_fetch_and_explicit", "atomic_fetch_or_explicit", "atomic_fetch_xor_explicit",
+                                            "atomic_exchange_explicit"};
+        // supported: unsigned 32-bit words; signed only where it does not matter (add, logic, exchange)
+        if (op > 8 || op == 3 || op == 4 || size > 1 || (size == 1 && (op == 1 || op == 2)))
+            fail(c, "%s op %d size %d", shm ? "atoms" : "atom", op, size);
+        if (d != RZ) c->reg_used[d] = 1;
+        char res[16];
+        sprintf(res, d != RZ ? "r%d = " : "", d);
+        if (shm) {
+            if (c->stage != STAGE_COMPUTE) fail(c, "shared memory outside compute");
+            c->uses_shared = true;
+            int32_t off = (int32_t)sbits(w, 30, 22) * 4;
+            char addr[128];
+            if (a == RZ) sprintf(addr, "%du", off); else sprintf(addr, "(%s + %du)", R(a), (uint32_t)off);
+            if (c->glsl) sp(&c->body, "    %s%s(smem[min(%s >> 2, %du)], %s);\n", res, gl_op[op], addr, SMEM_WORDS - 1, R(vr));
+            else sp(&c->body, "    %s%s((threadgroup atomic_uint *)&smem[min(%s >> 2, %du)], %s, memory_order_relaxed);\n", res, ms_op[op],
+                    addr, SMEM_WORDS - 1, R(vr));
+        } else {
+            bool wide = bits(w, 48, 1);
+            int64_t off = sbits(w, 28, 20);
+            c->info->uses_gmem = true;
+            c->uses_gmem_store = true;
+            c->info->uses_gmem_store = true;
+            char addr[256];
+            if (a == RZ) sprintf(addr, "ulong(%lld)", (long long)off);
+            else if (wide) sprintf(addr, "((ulong(%s) << 32 | ulong(%s)) + ulong(%lld))", R(a + 1), R(a), (long long)off);
+            else sprintf(addr, "(ulong(%s) + ulong(%lld))", R(a), (long long)off);
+            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul; uint o_ = 0u;\n", addr,
+               (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+            bool far = c->glsl && maxwell_gfar_ok;
+            if (far) c->info->uses_gfar = true;
+            if (c->glsl && c->stage == STAGE_COMPUTE) {  // (the dispatch's storage buffers' device-local copy first: see RED)
+                c->info->uses_gmem_map = true;
+                sp(&c->body, "      uint fw = ok ? gfind(uint(ga)) : 0xFFFFFFFFu;\n");
+                sp(&c->body, "      if (fw != 0xFFFFFFFFu) o_ = %s(gfast_.w[fw], %s); else if (ok) o_ = %s(gmem_.w[uint(ga >> 2)], %s);", gl_op[op],
+                   R(vr), gl_op[op], R(vr));
+            } else if (c->glsl) {
+                sp(&c->body, "      if (ok) o_ = %s(gmem_.w[uint(ga >> 2)], %s);", gl_op[op], R(vr));
+            } else {
+                sp(&c->body, "      if (ok) o_ = %s((device atomic_uint *)(gmem + ga), %s, memory_order_relaxed);", ms_op[op], R(vr));
+            }
+            if (far)
+                sp(&c->body, " else { ulong fa_ = gfar_find((ga + 0x%llxul) & ~3ul); if (fa_ != 0ul) o_ = %s(GFarRef(fa_).w[0], %s); }",
+                   (unsigned long long)maxwell_gmem_base, gl_op[op], R(vr));
+            if (d != RZ) sp(&c->body, "\n      %so_;\n    }\n", res);
+            else sp(&c->body, "\n    }\n");
+        }
     } else if (OPM(0xebf8000000000000ull, 0xfff8000000000000ull)) {  // RED: atomic reduction to global memory, no result
         // fields per Ryujinx's InstRed: value 0-7, address 8-15 (64-bit pair with .E, bit 48), size 20-22, op 23-25,
         // offset 28-47 (signed). Checked on shader ebf9000003070002: RED.E.OR [R0], R2.
@@ -2448,6 +2515,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         if (c->omap_depth) info->writes_depth = true;
     } else {
         sp(&s, "layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;\n");
+        if (c->uses_shared) sp(&s, "shared uint smem[%d];\n", SMEM_WORDS);
     }
     sp(&s, "void main() {\n");
     if (stage == STAGE_VERTEX) {
@@ -2777,6 +2845,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (c->pred_used[i]) sp(&s, "  bool p%d = false;\n", i);
     if (c->uses_cc) sp(&s, "  uint cc = 0; bool ccz = false, ccs = false;\n");
     if (c->uses_local) sp(&s, "  uint lmem[%d] = {};\n", LMEM_WORDS);
+    if (c->uses_shared) sp(&s, "  threadgroup uint smem[%d];\n", SMEM_WORDS);
     if (dbg) sp(&s, maxwell_dbg_pc == 0xffffffffu ? "  float dbgv = 1.0f;\n" : "  float dbgv = -1.0f;\n");
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0;\n");
