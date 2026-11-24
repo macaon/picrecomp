@@ -548,22 +548,14 @@ held a key down: the menu walked to its last item by itself), and the big one: *
 answered 0** - UE4 culled every dynamic primitive (characters, the puzzle's cells, numbers and cursor were drawn into the shadow maps
 only). It now reports a visible result (0x7FFFFFFF); no real query. Also: compute shaders get the buffer-texture variants; the handle
 search accepts a predicate written between the handle and its TEX when the handle's own instructions are not predicated.
-**Known problem - the main menu flickers** (seen by the user on a real window; reproducible with scripted shots): the buildings of the title scene flip, frame to frame and
-unpredictably, between their right colours and a dark greenish look (three levels of brightness: ~87, ~118, ~138 on a 0-255 mean of the left houses). Sky, water and UI do not
-change; the difference is already in the 853x480 scene pass. Ruled out, each measured: synchronous submit (`PICRECOMP_SYNC_SUBMIT`), flushing after every dispatch, texture
-re-upload timing (`PICRECOMP_TEX_FULLHASH`), a missing texture (no dummy fallbacks), the guest-memory content of every bound 2D texture (identical in all frames), the first 16
-floats of every constant buffer (nothing correlates), statistics of every compute-written buffer image and storage buffer (nothing correlates), buffer-texture snapshots,
-shadow comparison off (`PICRECOMP_NO_SHADOW`), feedback snapshots off. Not ruled out: GPU-rendered intermediate textures (shadow maps, scene captures), the rest of the
-constant buffers, sampler state, a data race inside a shader. It does not happen while every dispatch is flushed *and* hashed (one 40-frame capture), but flushing alone does not stop it.
-Measured later: per-frame brightness of the house region has exactly two states (~87 dark/green, ~138 bright/blue-tinted ambient), in random runs
-(1-8 frames), not periodic and not tied to frame mod 3 (so not a 3-slot ring); sky is identical in both and pass 0/1 (depth) are identical, the first
-differing image is pass 2 (the 853x480 scene colour). Hashing the full constant buffers per draw gave no slot that splits the states (draw counts vary per
-frame, so slots were compared by order only up to the first layout change). The brighter state looks like the intended one. Next idea: hash the
-constant buffers keyed by (shader hash, slot) instead of draw order, and the contents of GPU-written textures sampled by the base pass.
-Also ruled out, each over 60 frames: `PICRECOMP_FENCE_FLUSH=1`, every pass in its own submission (`PICRECOMP_VK_DEVLOST_TRACE=2`), depth-copy aliasing off
-(`PICRECOMP_VK_COPY_OPT=0`). The bright state is the rare one in most runs (single bright frames among ~87s). The flicker vanishes (stuck dark) while
-`PICRECOMP_DEBUG_FRAMES` saves every pass, so what that readback does (a flush plus a texture read back) hides it; per-(shader, slot) constant-buffer
-hashes over 16 such frames showed nothing, but that run had no flicker to correlate with. Next: reproduce with the hashing on in a normal run (no pass dump).
+**Fixed (2026-11-24) - the main-menu flicker** (seen by the user on a real window): the lit buildings of the title scene flipped at random, frame to
+frame, between their colours and a dark green. Cause: UE4's forward light grid (compute shaders 7df2262100 and 7e014c2b00) reserves its light
+links with one atomic per warp, each lane taking `popcount(ballot & SR_LANEMASK_LT)` as its offset; the translator read `S2R SR_LANEMASK_LT`
+(0x39) as 0, so every lane of a warp wrote the same link and which light survived was a race. S2R now gives the lane id (0x00) and the lane
+masks (0x38-0x3c) for a 32-wide subgroup (test: `check_lane_masks` in tools/test_translate.c). Verified: 60 consecutive frames at the same
+brightness (before: 87 / 138 at random), screenshots of the title, menu, puzzle list and a puzzle (Vulkan on Linux, hidden window). The
+dead ends on the way (sync submit, fence flush, per-pass submissions, copy aliasing, cbuf hashes) all pointed away from timing on the host:
+a race inside a shader is invisible to them. Note: the masks assume 32 lanes (NVIDIA; a 64-wide AMD wave would need the subgroup size).
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
 which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
 other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
@@ -572,6 +564,8 @@ data file system ~60 times), audio, longer play (finishing a puzzle, the farm), 
 
 ## What to test and watch for
 
+- Piczle Cross (branch `piczle-cross`): watch the title screen and the menu on a real window for a minute: the buildings should keep
+  their colours (the blue barn on the right lit, not near black) with no flashing. Then play a puzzle; report any other flicker or dark spots.
 - Saves: run S (play.sh) once, look for `[fs] save data of earlier versions copied` in the log and for your progress. The
   save that was in `.picrecomp/runtime/save/save_0/all.dat` may be S2's, not S's, if both were played before this change.
 - Extra puzzles from earlier titles (PICROSS S4 on): the game does not read the earlier titles' saves; it asks the console's
