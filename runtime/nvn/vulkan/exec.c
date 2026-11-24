@@ -1216,6 +1216,20 @@ static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, V
     return l;
 }
 
+// (debug) PICRECOMP_DUMP_FAILED=1: the code words of a program that failed to translate -> build/glsl/<addr>_<stage>_failed.txt
+// (one 64-bit word per line, offset first), to read the instructions around the failure
+static void dump_failed(uint64_t addr, uint64_t max, const char *stage) {
+    if (!addr || !getenv("PICRECOMP_DUMP_FAILED")) return;
+    mkdir("build/glsl", 0755);
+    char path[256];
+    snprintf(path, sizeof path, "build/glsl/%llx_%s_failed.txt", (unsigned long long)addr, stage);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    if (!max || max > 0x4000) max = 0x4000;
+    for (uint64_t o = 0; o + 8 <= max; o += 8) fprintf(f, "%05llx %016llx\n", (unsigned long long)o, (unsigned long long)*(const uint64_t *)(uintptr_t)(addr + o));
+    fclose(f);
+}
+
 static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
     if (!getenv("PICRECOMP_SAVE_MSL")) return;
     mkdir("build/glsl", 0755);
@@ -1263,11 +1277,13 @@ static void translate_program(void *arg) {
     pthread_mutex_unlock(&translate_lock);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
+        dump_failed(p->code[0], p->cmax[0], "vs");
         atomic_store(&p->state, 2);
         return;
     }
     if (!p->fi->msl) {
-        LOG("[shader] FS translate failed: %s\n", p->fi->error);
+        LOG("[shader] FS translate failed: %s (code %llx)\n", p->fi->error, (unsigned long long)p->code[1]);
+        dump_failed(p->code[1], p->cmax[1], "fs");
         atomic_store(&p->state, 2);
         return;
     }
