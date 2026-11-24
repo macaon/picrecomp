@@ -578,6 +578,20 @@ data file system ~60 times), audio, longer play (finishing a puzzle, the farm), 
 each game's library rebuilt from scratch, then one scripted run each (A every ~8 s, 6 screenshots; Vulkan on Linux, hidden window).
 All 21: no crash, no shader translation failure, no subgroup warning, 60 fps, nothing drawn wrong in the screenshots. Scripts (scratch, not in the repo): `~/temp/rebuild_all.sh g01 ...`, `~/temp/testall.sh`.
 
+## Piczle Cross: Rune Factory (started 2026-11-24)
+
+Title 0100147020984000 + update 0100147020984800 v262144 (1.04, main build 1ad16d84...), Unreal Engine 4 like Story of Seasons;
+run with the same two experiment settings (`PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1`). Imports and builds (11 min).
+Seen working (Vulkan on Linux, hidden window, scripted input): logo, title, profile selection, profile creation (Down x10 to
+"Create profile", A), the tutorial with its puzzle board, the guide character and the animated background, 60 fps there.
+What it took: LEA (27 shaders failed on 0x36d7...), compute shared memory LDS / STS / ATOMS and ATOM with a result, the texture
+handle search past FSETP and through IADD Rd, RZ, Rb copies (vertex shaders: ~1650 draws a frame were skipped; the town behind the
+menus was black), and audout ignoring an uninitialised buffer data offset (a crash in SDL at the first sound).
+Open: one compute shader at startup stores to a 2D image (SUST.P.2D, eb20030600f70400; only 1D buffer stores exist: needs storage
+images on the Vulkan side); its effect is not known yet. Around 100 draws a frame are skipped for other reasons (not looked at).
+Once the town behind the profile screen stayed black in one run and not in the next five (timing; not reproduced since).
+Debug: `PICRECOMP_DUMP_FAILED=1` writes the code words of a shader that fails to translate (build/glsl/<addr>_<stage>_failed.txt).
+
 ## What to test and watch for
 
 - Piczle Cross (branch `piczle-cross`): watch the intro and the title / menu on a real window: no black flash in the logo movie, ground
