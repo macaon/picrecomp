@@ -394,6 +394,14 @@ static void live_remove(TexBackend *b) {
     b->reg = 0;
 }
 
+static pthread_mutex_t pending_lock = PTHREAD_MUTEX_INITIALIZER;
+// Video frames for textures that have no backend yet (renderer_upload_rgba, decoder thread), handed over when the
+// backend is made. UE4's media player in Piczle Cross decodes each frame into the next texture of a pool, and a
+// pool texture gets its backend only when first drawn: its first frame was dropped and the texture drawn black - a
+// one-frame black flash in the logo movie.
+#define PARKED 16
+static struct { NvnTexture *t; void *px; uint32_t w, h, stride; } parked[PARKED];
+
 static TexBackend *tex_backend(NvnTexture *t) {
     TexBackend *b = t->backend;
     if (b) {
@@ -423,13 +431,26 @@ static TexBackend *tex_backend(NvnTexture *t) {
     b = calloc(1, sizeof *b);
     b->scalable = tex_scalable(t);
     create_image(t, b);
+    pthread_mutex_lock(&pending_lock);
     t->backend = b;
+    for (int i = 0; i < PARKED; i++)
+        if (parked[i].t == t) {
+            b->pending_rgba = parked[i].px;
+            b->pending_w = parked[i].w; b->pending_h = parked[i].h; b->pending_stride = parked[i].stride;
+            b->gpu_owned = true;
+            parked[i].t = NULL; parked[i].px = NULL;
+        }
+    pthread_mutex_unlock(&pending_lock);
     live_add(t, b);
     return b;
 }
 
 void backend_texture_destroyed(NvnTexture *t) {
     TexBackend *b = t->backend;
+    pthread_mutex_lock(&pending_lock);
+    for (int i = 0; i < PARKED; i++)
+        if (parked[i].t == t) { free(parked[i].px); parked[i].t = NULL; parked[i].px = NULL; }
+    pthread_mutex_unlock(&pending_lock);
     if (b) {
         extern void vk_alias_texture_destroyed(NvnTexture *t);  // (exec.c copy aliases: a source's contents handed over)
         vk_alias_texture_destroyed(t);
@@ -478,8 +499,6 @@ static uint64_t fnv_sample(const uint8_t *p, uint64_t n) {
     for (uint64_t i = 0; i < n; i += step) { h ^= p[i]; h *= 1099511628211ull; }
     return h ^ n;
 }
-
-static pthread_mutex_t pending_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void upload_pending(TexBackend *b) {
     pthread_mutex_lock(&pending_lock);
@@ -648,11 +667,23 @@ void backend_pool_written(uint64_t addr, uint64_t size) { (void)addr; (void)size
 
 // Host-produced texel data (decoded video, any thread): applied on the render thread at the texture's next use.
 void renderer_upload_rgba(NvnTexture *t, const void *rgba, uint32_t w, uint32_t h, uint32_t stride) {
-    TexBackend *b = t->backend;
-    if (!b) return;  // the game binds the texture before decoding into it; first frames may arrive earlier
     void *copy = malloc((size_t)stride * h);
     memcpy(copy, rgba, (size_t)stride * h);
     pthread_mutex_lock(&pending_lock);
+    TexBackend *b = t->backend;
+    if (!b) {  // no backend yet: parked until tex_backend makes one
+        int slot = -1;
+        for (int i = 0; i < PARKED && slot < 0; i++) if (parked[i].t == t) slot = i;
+        for (int i = 0; i < PARKED && slot < 0; i++) if (!parked[i].t) slot = i;
+        if (slot < 0) { pthread_mutex_unlock(&pending_lock); free(copy); return; }
+        free(parked[slot].px);
+        parked[slot].t = t; parked[slot].px = copy;
+        parked[slot].w = w; parked[slot].h = h; parked[slot].stride = stride;
+        pthread_mutex_unlock(&pending_lock);
+        static int nlog;
+        if (nlog++ < 8) LOG("[tex] video frame for %p kept until the texture is first used\n", (void *)t);
+        return;
+    }
     free(b->pending_rgba);
     b->pending_rgba = copy;
     b->pending_w = w; b->pending_h = h; b->pending_stride = stride;
