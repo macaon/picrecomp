@@ -560,6 +560,14 @@ and Intel, pipelines whose shaders use these (ShaderInfo.uses_subgroup) now ask 
 says `[vk] subgroups: <min> to <max> wide, 32 can be asked for in: ...`, and warns once per stage when the GPU cannot (AMD GCN: always 64 -
 those shaders may draw wrongly; no fallback yet). Tested only on NVIDIA, with `PICRECOMP_VK_SG32=1` forcing the request: validation clean, the
 title scene unchanged. **Needs testers on AMD and Intel** (look for that log line and for the title scene's lit buildings).
+**Fixed (2026-11-24, reported by the user) - no ground, black flash in the intro.** (1) The title scene's ground was missing (the sky dome
+showed below the houses, which I had taken for water): the NVN format list inherited from LASRecomp put BGRX8 at 0x98; it is 0x99 (BGR565,
+BGR5, BGR5A1, A1BGR5 at 0x95-0x98, then BGRX8, BGRA8, BGRX8_SRGB, BGRA8_SRGB). UE4's landscape heightmap and light-attenuation target are
+PF_B8G8R8A8 = 0x9A and were read as BGRX8_SRGB: sRGB-decoded heights. Seen working: ground, dirt path and grass on the title, the farm behind
+the menu and the puzzles. **This touches every game** using 0x98-0x9C (none of the PICROSS games was seen to; not re-run). (2) A one-frame black
+flash in the logo movie (LOGO_splashes.mp4): UE4 decodes each frame into the next texture of a pool and a pool texture has no backend until
+first drawn; `renderer_upload_rgba` dropped such frames. They are kept now and handed over when the backend is made. Seen: frames 160-385 of
+the intro shot one by one, no black frame, smooth fades (before: frame 178 black).
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
 which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
 other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
@@ -568,8 +576,9 @@ data file system ~60 times), audio, longer play (finishing a puzzle, the farm), 
 
 ## What to test and watch for
 
-- Piczle Cross (branch `piczle-cross`): watch the title screen and the menu on a real window for a minute: the buildings should keep
-  their colours (the blue barn on the right lit, not near black) with no flashing. Then play a puzzle; report any other flicker or dark spots.
+- Piczle Cross (branch `piczle-cross`): watch the intro and the title / menu on a real window: no black flash in the logo movie, ground
+  (dirt path, grass) under the houses, the buildings keep their colours with no flashing. The title scene's colours change between boots
+  (a seasonal variant, it seems). Then play a puzzle; report any other flicker or dark spots.
 - Saves: run S (play.sh) once, look for `[fs] save data of earlier versions copied` in the log and for your progress. The
   save that was in `.picrecomp/runtime/save/save_0/all.dat` may be S2's, not S's, if both were played before this change.
 - Extra puzzles from earlier titles (PICROSS S4 on): the game does not read the earlier titles' saves; it asks the console's
