@@ -3,5 +3,6 @@
   "name": "Piczle Puzzle & Watch Collection",
   "released": "2021-07-29",
   "base_id": "01001a30155b6000",
-  "update_id": "01001a30155b6800"
+  "update_id": "01001a30155b6800",
+  "async_shaders": true
 }

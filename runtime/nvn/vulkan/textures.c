@@ -681,28 +681,46 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
 }
 
 // A compute shader stores to t (SUST.P.2D / 3D: Piczle Cross: Rune Factory, Piczle Puzzle & Watch Collection): its image
-// gets STORAGE usage, recreated on first use with its contents copied (every level and layer: same size and format)
+// gets STORAGE usage, recreated on first use with its contents preserved across the existing levels and layers.
 TexBackend *vk_tex_storage(NvnTexture *t) {
     TexBackend *b = vk_tex(t, true);
     if (b->storage || !b->image) return b;
+    vk_end_pass();
     VkImage old = b->image;
     VmaAllocation old_mem = b->mem;
     uint32_t levels = b->levels, layers = b->layers, w = b->width, h = b->height, d = b->depth;
     VkFormat old_fmt = b->format;
     views_forget(b);
     b->storage = 1;
+    // A store writes the game's own pixel grid: an image at the internal resolution (scalable: 1280x720 for Rune Factory's
+    // 1920x1080 TAA targets behind a 1280x720 window) took a third of the stores out of range, and the rest of it - never
+    // written - was blended back every frame (its puzzle list's backdrop: black, or blue and yellow). Samplers read it at
+    // scale 1 (renderer_texture_scale).
+    b->scalable = false;
     b->image = VK_NULL_HANDLE;
     b->mem = VK_NULL_HANDLE;
     create_image(t, b);
-    if (b->format == old_fmt && b->levels == levels && b->width == w && b->height == h) {
-        VkCommandBuffer cb = vk_upload_cmd();
+    if (b->format == old_fmt) {
+        // Earlier draws may still be recorded in the main command buffer. Preserve their results here, after
+        // those draws, rather than in the upload buffer which is submitted before them.
+        VkCommandBuffer cb = vk_cmd();
         vk_full_barrier(cb);
-        VkImageCopy rg[16];
-        uint32_t n = 0;
-        for (uint32_t lv = 0; lv < levels && n < 16; lv++)
-            rg[n++] = (VkImageCopy){.srcSubresource = {b->aspect, lv, 0, layers}, .dstSubresource = {b->aspect, lv, 0, layers},
-                                    .extent = {level_w(b, lv), level_h(b, lv), d > 1 ? (d >> lv ? d >> lv : 1) : 1}};
-        vkCmdCopyImage(cb, old, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, n, rg);
+        bool resize = w != b->width || h != b->height;
+        bool blit = resize && format_supports(old_fmt, VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT);
+        for (uint32_t lv = 0; lv < levels && lv < b->levels; lv++) {
+            uint32_t sw = w >> lv ? w >> lv : 1, sh = h >> lv ? h >> lv : 1;
+            uint32_t dw = level_w(b, lv), dh = level_h(b, lv), z = d >> lv ? d >> lv : 1;
+            if (blit) {
+                VkImageBlit rg = {.srcSubresource = {b->aspect, lv, 0, layers}, .dstSubresource = {b->aspect, lv, 0, layers},
+                    .srcOffsets = {{0, 0, 0}, {(int32_t)sw, (int32_t)sh, (int32_t)z}},
+                    .dstOffsets = {{0, 0, 0}, {(int32_t)dw, (int32_t)dh, (int32_t)z}}};
+                vkCmdBlitImage(cb, old, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg, VK_FILTER_NEAREST);
+            } else {
+                VkImageCopy rg = {.srcSubresource = {b->aspect, lv, 0, layers}, .dstSubresource = {b->aspect, lv, 0, layers},
+                    .extent = {sw < dw ? sw : dw, sh < dh ? sh : dh, z}};
+                vkCmdCopyImage(cb, old, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+            }
+        }
         vk_full_barrier(cb);
     }
     defer((Dead){.img = old, .mem = old_mem});

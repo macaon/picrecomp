@@ -1,7 +1,41 @@
 # Status
 
-Updated: 2026-11-20. Platform tested: Linux x86-64, Vulkan, NVIDIA RTX 5070 Ti (Wayland, PipeWire audio).
+Updated: 2026-11-26. Platform tested: Linux x86-64, Vulkan, NVIDIA RTX 5070 Ti (Wayland, PipeWire audio).
 Windows has not been built or run for PICROSS S.
+
+## Per-title shader policy and storage images (2026-11-26)
+
+Vulkan compiles shaders synchronously by default, preserving PICROSS's one-time draws into textures. The three Piczle
+manifests opt into asynchronous compilation so cold compilation does not block presentation long enough to trigger UE4's
+watchdog. `PICRECOMP_ASYNC_SHADERS=0` forces synchronous compilation; `=1` forces asynchronous compilation. Older installs
+missing the field use the shipped manifest identified by their slug. Explicit installed fields take precedence.
+The policy resets when loading another title. Reboot drains translation and compilation jobs before clearing Vulkan state
+and guest memory; worker creation uses `pthread_once`.
+
+Images first used for compute stores now use the game's native pixel dimensions, independent of window/render scaling.
+Promotion preserves preceding GPU writes in command-buffer order, including mip levels and array layers; resized images
+use nearest blits where supported. This prevents scaled TAA targets from discarding out-of-range native pixel stores.
+These are runtime and title-manifest changes; rebuilding generated game libraries is unnecessary.
+
+Validation on Linux/NVIDIA:
+
+- `tools/test_shader_policy.sh`: defaults, installed flags, manifest fallback, environment overrides, both switch directions,
+  and draining 2,000 asynchronous jobs passed without game data or a GPU.
+- `PICRECOMP_VK_VALIDATION=1 tools/test_vk_storage.sh`: native-size promotion, preservation of pending GPU writes and all
+  tested mip/layer contents, actual compute stores, and subsequent scale changes passed with no validation messages.
+  Covers 2D at 0.5x/1x/1.5x, 3D and 2D arrays.
+- Same-process PICROSS Lord of the Nazarick → Story of Seasons and the reverse both reached rendered title screens;
+  logs confirmed synchronous → asynchronous and asynchronous → synchronous policies respectively.
+- Puzzle & Watch, empty runtime cache with the NVIDIA disk cache disabled: presented frames after about four seconds,
+  initially black while compilation continued, then reached its Select game / Unbox / View / Options menu without the watchdog crash.
+
+- Rune Factory: a scratch copy of the existing save reached puzzle RFN008 with its board and outdoor background rendered
+  at 1280x720. Some compute programs remain skipped, as previously recorded; this was a rendering smoke test, not a completed puzzle.
+
+Remaining limitations: all three Piczle games still require the existing experimental
+`PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1` settings. Applying `TEMP_KEEP_SRS=1` to PICROSS S breaks allocator startup,
+so the cross-engine switch tests used Nazarick. These changes do not resolve that allocator issue or Puzzle & Watch's
+previously recorded float-sampler/integer-view validation error. Windows, AMD and Intel remain untested.
 
 ## Pinned game
 

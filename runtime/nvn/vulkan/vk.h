@@ -57,6 +57,8 @@ extern VkG g_vk;
 VkRect2D vk_sc_rect(int x, int y, int w, int h);
 
 // ---- submissions (exec.c)
+// Guest threads stopped: drain translation and compilation before resetting the old game's GPU state.
+void vk_shader_jobs_wait(void);
 // Work is recorded into the current command buffer; uploads go into a separate one that runs first.
 VkCommandBuffer vk_cmd(void);         // current command buffer (outside any rendering unless exec.c began one)
 VkCommandBuffer vk_upload_cmd(void);  // upload command buffer of the pending submission

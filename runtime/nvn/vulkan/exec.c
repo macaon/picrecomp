@@ -600,11 +600,16 @@ static VkSpan guest_copy(uint64_t addr, uint64_t size) {
 // A program or pipeline is built on first use and the draw waits for it. PICRECOMP_ASYNC_SHADERS=1 builds it on a worker
 // thread and skips draws until it is ready (as on Metal): that fits a game that redraws everything every frame, but
 // PICROSS draws some things once, into a texture (the "Play this puzzle?" preview), and a skipped draw left that texture
-// black for good. Shaders are cached on disk, so only a first run pays for the waiting.
+// black for good. Shaders are cached on disk, so only a first run pays for the waiting. A manifest's "async_shaders": true
+// turns it on for that game: the Piczle games (UE4) redraw every frame, and UE4's present watchdog ends the game itself
+// after 25 s without a presented frame - a first run with every pipeline still to build took 23 s to its first frame on an
+// RTX 5070 Ti (Piczle Puzzle & Watch Collection crashed so, error 0xE0000002); asynchronously, about 4 s.
 typedef struct Job { void (*fn)(void *); void *arg; struct Job *next; } Job;
 static Job *jobs_head, *jobs_tail;
 static pthread_mutex_t jobs_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t jobs_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t jobs_idle = PTHREAD_COND_INITIALIZER;
+static unsigned jobs_pending;
 
 static void *worker(void *a) {
     (void)a;
@@ -617,14 +622,15 @@ static void *worker(void *a) {
         pthread_mutex_unlock(&jobs_lock);
         j->fn(j->arg);
         free(j);
+        pthread_mutex_lock(&jobs_lock);
+        if (!--jobs_pending) pthread_cond_broadcast(&jobs_idle);
+        pthread_mutex_unlock(&jobs_lock);
     }
     return NULL;
 }
 
 static bool sync_shaders(void) {
-    static int v = -1;
-    if (v < 0) v = getenv("PICRECOMP_ASYNC_SHADERS") == NULL;
-    return v;
+    return !settings_async_shaders();
 }
 
 // Shader translation: one dedicated thread (the translator isn't re-entrant - translate.c's RSC2 string ring - and
@@ -633,6 +639,8 @@ static pthread_mutex_t translate_lock = PTHREAD_MUTEX_INITIALIZER;  // (compute 
 static Job *tjobs_head, *tjobs_tail;
 static pthread_mutex_t tjobs_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t tjobs_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t tjobs_idle = PTHREAD_COND_INITIALIZER;
+static unsigned tjobs_pending;
 static void *translator(void *a) {
     (void)a;
     for (;;) {
@@ -644,37 +652,51 @@ static void *translator(void *a) {
         pthread_mutex_unlock(&tjobs_lock);
         j->fn(j->arg);
         free(j);
+        pthread_mutex_lock(&tjobs_lock);
+        if (!--tjobs_pending) pthread_cond_broadcast(&tjobs_idle);
+        pthread_mutex_unlock(&tjobs_lock);
     }
     return NULL;
 }
 static bool sync_shaders(void);
+static void start_translator(void) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, translator, NULL)) FATAL("cannot start shader translator\n");
+    pthread_detach(t);
+}
 static void run_translate(void (*fn)(void *), void *arg) {
     if (sync_shaders()) { fn(arg); return; }
-    static bool started;
-    if (!started) { started = true; pthread_t t; pthread_create(&t, NULL, translator, NULL); }
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, start_translator);
     Job *j = malloc(sizeof *j);
     j->fn = fn; j->arg = arg; j->next = NULL;
     pthread_mutex_lock(&tjobs_lock);
+    tjobs_pending++;
     if (tjobs_tail) tjobs_tail->next = j; else tjobs_head = j;
     tjobs_tail = j;
     pthread_cond_signal(&tjobs_cond);
     pthread_mutex_unlock(&tjobs_lock);
 }
 
+static void start_workers(void) {
+    // First entry into an area builds dozens of pipelines at once.
+    int n = SDL_GetNumLogicalCPUCores() - 4;
+    if (n < 4) n = 4;
+    if (n > 16) n = 16;
+    for (int i = 0; i < n; i++) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, worker, NULL)) FATAL("cannot start shader worker\n");
+        pthread_detach(t);
+    }
+}
 static void run_job(void (*fn)(void *), void *arg) {
     if (sync_shaders()) { fn(arg); return; }
-    static bool started;
-    if (!started) {
-        started = true;
-        // first entry into an area builds dozens of pipelines at once: use most of the CPU (draws wait for them)
-        int n = SDL_GetNumLogicalCPUCores() - 4;
-        if (n < 4) n = 4;
-        if (n > 16) n = 16;
-        for (int i = 0; i < n; i++) { pthread_t t; pthread_create(&t, NULL, worker, NULL); }
-    }
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, start_workers);
     Job *j = malloc(sizeof *j);
     j->fn = fn; j->arg = arg; j->next = NULL;
     pthread_mutex_lock(&jobs_lock);
+    jobs_pending++;
     if (jobs_tail) jobs_tail->next = j; else jobs_head = j;
     jobs_tail = j;
     pthread_cond_signal(&jobs_cond);
@@ -2437,6 +2459,17 @@ static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSi
 }
 
 static int g_cs_n;  // (compute program table below)
+
+// Translation can enqueue compilation, so drain that queue before waiting for the compile/pipeline workers.
+// The guest threads have stopped; neither queue may retain pointers into the old guest memory during reset.
+void vk_shader_jobs_wait(void) {
+    pthread_mutex_lock(&tjobs_lock);
+    while (tjobs_pending) pthread_cond_wait(&tjobs_idle, &tjobs_lock);
+    pthread_mutex_unlock(&tjobs_lock);
+    pthread_mutex_lock(&jobs_lock);
+    while (jobs_pending) pthread_cond_wait(&jobs_idle, &jobs_lock);
+    pthread_mutex_unlock(&jobs_lock);
+}
 
 // In-place reboot (device.c backend_reset; GPU idle): drop what is keyed by guest addresses - programs by code
 // address (the old Prog / Pipe objects are leaked, so pipeline keys holding their pointers can't collide), compute

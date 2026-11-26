@@ -42,3 +42,5 @@ const char *settings_language_name(void);
 // falls back to English (US), else the game's first.
 void settings_game_languages(const char *game_root);
 bool settings_language_supported(int index);  // index into g_language_codes (LANG_AUTO is always)
+// The current title's policy (default synchronous); PICRECOMP_ASYNC_SHADERS=0/1 overrides it.
+bool settings_async_shaders(void);

@@ -6,6 +6,7 @@
 
 #include "hle.h"
 #include "input_bind.h"
+#include "paths.h"
 
 #define SETTINGS_FILE settings_file()
 
@@ -72,9 +73,55 @@ static const int8_t k_flag_to_index[16] = {2, 3, 1, 4, 6, 9, 8, 7, 10, 5, 15, 11
 
 // The add-on content the game's title.json lists ("addons": [1, 2, ...], the importer found their packages): aoc:u
 static char g_title_text[2048];  // the title.json read at boot
+static bool g_shader_policy_ready, g_async_shaders;
 
 static uint32_t g_addons[64];
 static int g_addon_count;
+
+static bool json_bool(const char *text, const char *key, bool *value) {
+    char k[64];
+    snprintf(k, sizeof k, "\"%s\"", key);
+    const char *p = strstr(text, k);
+    if (!p) return false;
+    for (p += strlen(k); *p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'; p++) {}
+    if (*p != ':') return false;
+    for (p++; *p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'; p++) {}
+    size_t n = !strncmp(p, "true", 4) ? 4 : !strncmp(p, "false", 5) ? 5 : 0;
+    if (!n || (p[n] && !strchr(" \t\r\n,}", p[n]))) return false;
+    *value = n == 4;
+    return true;
+}
+
+static bool title_async_shaders(void) {
+    bool value = false;
+    if (json_bool(g_title_text, "async_shaders", &value)) return value;
+    // Older imports lack new manifest fields. Look up the shipped manifest by slug, without changing the install.
+    const char *slug = strstr(g_title_text, "\"slug\"");
+    if (!slug || !(slug = strchr(slug + 6, ':'))) return false;
+    for (slug++; *slug == ' ' || *slug == '\t' || *slug == '\r' || *slug == '\n'; slug++) {}
+    if (*slug++ != '"') return false;
+    size_t len = strspn(slug, "abcdefghijklmnopqrstuvwxyz0123456789-");
+    if (!len || len > 100 || slug[len] != '"') return false;
+    char name[128], path[1100], text[2048] = {0};
+    snprintf(name, sizeof name, "titles/%.*s.json", (int)len, slug);
+    if (!rt_resource(name, name, path, sizeof path)) return false;
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    return json_bool(text, "async_shaders", &value) && value;
+}
+
+bool settings_async_shaders(void) {
+    // An explicit 0 forces synchronous builds, including titles which normally compile asynchronously.
+    const char *override = getenv("PICRECOMP_ASYNC_SHADERS");
+    if (override) return strcmp(override, "0") != 0;
+    if (!g_shader_policy_ready) {
+        g_async_shaders = title_async_shaders();
+        g_shader_policy_ready = true;
+    }
+    return g_async_shaders;
+}
 
 int settings_addons(const uint32_t **list) {
     *list = g_addons;
@@ -98,6 +145,7 @@ void settings_game_languages(const char *game_root) {
     g_game_languages = 0;
     g_addon_count = 0;
     g_title_text[0] = 0;
+    g_shader_policy_ready = false;
     char path[1100], text[2048] = {0};
     snprintf(path, sizeof path, "%s/title.json", game_root);
     FILE *f = fopen(path, "rb");

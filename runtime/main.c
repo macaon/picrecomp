@@ -211,6 +211,7 @@ static void boot(const char *root) {
     }
     { extern void settings_load(void); settings_load(); }
     settings_game_languages(root);  // (this game's languages: Settings offers those, the game is served one it has)
+    LOG("[shader] compilation policy: %s\n", settings_async_shaders() ? "asynchronous" : "synchronous");
     kernel_init();
     dispatch_init();
 
