@@ -30,16 +30,10 @@ static uint32_t device_integer(uint32_t which) {
         [43] = 0x40000, [44] = 15, [45] = 2048,
         [46] = 1, [47] = 5, [48] = 1, [49] = 15,
         [50] = 256, [51] = 1, [52] = 0, [53] = 0, [54] = 0, [55] = 256, [56] = 1, [57] = 0x1000,
-        [58] = 1, [59] = 1, [60] = 1, [61] = 1, [62] = 1, [63] = 1, [64] = 1,
+        [58] = 1, [59] = 1, [60] = 1,
+        [61] = 16384, [62] = 1, [63] = 1, [64] = 16384, // texture dimension limits queried by UE4 (61/64)
         [94] = 32,  // separate texture bindings per stage
     };
-    if (getenv("PICRECOMP_TEMP_DI")) {  // EXPERIMENT: PICRECOMP_TEMP_DI=<id>,<id>,...: those ids answer 16384
-        for (const char *p = getenv("PICRECOMP_TEMP_DI"); p && *p;) {
-            unsigned id = (unsigned)strtoul(p, (char **)&p, 10);
-            if (id == which) return 16384;
-            if (*p == ',') p++; else break;
-        }
-    }
     return which < sizeof v / sizeof *v ? v[which] : 0;
 }
 

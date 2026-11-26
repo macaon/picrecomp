@@ -1,11 +1,14 @@
 # PicRecomp
 
-PicRecomp runs the **PICROSS S** series of Nintendo Switch games natively on a PC. It is not an emulator: the game's
+PicRecomp runs Nintendo Switch **PICROSS** and **Piczle** games natively on a PC. It is not an emulator: the game's
 ARM64 code is translated to C once, at build time, from your own copy of the game, and compiled into a library the
 runtime loads. The runtime replaces the Switch's operating system (Horizon) and its GPU API (NVN), drawing with Vulkan.
 
 This is a fan project. It is not affiliated with or endorsed by Nintendo or Jupiter. It contains no game files, keys or
 assets, and it needs a legal copy of the game that you own.
+
+Each title is independent: owning only S9 or one Piczle game is sufficient to use that title. PICROSS S is not required.
+The importer builds from the selected game's own executable and SDK modules; the runtime loads that game's assets and saves.
 
 ## Status
 
@@ -13,19 +16,25 @@ Work in progress, for developers and testers. There are no packaged releases.
 
 | | |
 |---|---|
-| Games | **22 games**: PICROSS S to S9, S+, PICROSS X, the licensed PICROSS editions, and Piczle Cross: Story of Seasons and Rune Factory |
+| Games | **23 title manifests**: 20 PICROSS games, Piczle Cross: Story of Seasons, Piczle Cross: Rune Factory, and Piczle Puzzle & Watch Collection |
 | Platforms | **Linux x86-64** (developed and tested). **Windows**: build files exist (`tools/windows/`), but nobody has built or run it yet |
 | Graphics | Vulkan 1.3 |
-| Working | Boots, title screen, puzzle selection, solving a puzzle, completed-puzzle thumbnails, audio, 60 fps in the menus on an RTX 5070 Ti |
+| Verified | PICROSS S: puzzle selection, solving a puzzle, completed-puzzle thumbnails and audio. Saves kept separately for S/S2/S3. Other PICROSS titles have title/menu/puzzle-selection smoke tests; Piczle coverage is described below |
 | Not verified | Saves across restarts in every game, every game mode, AMD and Intel GPUs (the shaders need 32-wide subgroups, which the runtime asks for; testers welcome: look for `[vk] subgroups:` in the log) |
-| Not done | The system controller-pairing screen (Plus at the main menu) is skipped, and the game returns to its menu. The Piczle Cross games still need two experiment settings: start it with `PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1 tools/picross/play.sh` |
+| Known limitations | The system controller-pairing screen is skipped. Piczle gameplay coverage is limited; Rune Factory still skips two unsupported compute shaders. See the per-title notes |
+
+Story of Seasons has reached gameplay; Rune Factory has reached its tutorial and a rendered puzzle board; Puzzle & Watch
+has reached its main menu. Puzzle completion and save/reload have not been verified across these three games. Most recorded
+menu runs reach about 60 fps on the RTX 5070 Ti; startup compilation and Vulkan validation can be slower. See
+[docs/STATUS.md](docs/STATUS.md) for the evidence and limitations per title.
 
 ## Requirements
 
 - An x86-64 CPU with AVX2 and FMA (2013 or newer) and a Vulkan 1.3 GPU driver
 - Your own copy of the game as `.nsp` files (the base game; an update is optional), and the `prod.keys` from your Switch
-- About 2 GB of free disk space for the generated code and the build, and some patience: the first build compiles about
-  170,000 generated functions
+- Disk space for each game's assets, generated code and build. Installed sizes here range from 375 MB for PICROSS S to
+  1.8 GB for Rune Factory, with additional temporary space needed during import. A PICROSS S build compiles about
+  170,000 generated functions; larger games take longer
 
 ## Build
 
@@ -71,9 +80,10 @@ tools/picross/play.sh        # the start screen: choose "+", pick the folder, Im
 
 Importing runs seven stages and then two long ones, shown as a step list with a bar: the files are prepared
 (`tools/picross/prepare.py`, with the bundled hactool; it works offline and uses the tickets inside the packages), the
-game's code is lifted to C and compiled into the game's own library (together about four minutes on 16 threads). The game
+game's code is lifted to C and compiled into the game's own library (about four minutes for PICROSS S on 16 threads;
+recent Piczle imports took 9–11 minutes). The game
 then shows as a card with the icon the Switch shows. It needs `python3`, `clang`, `make` and `bash` (the Build section),
-and about 1.5 GB of disk per game. The keys are read from the folder, from `~/.switch`, or a file you choose.
+and temporary disk space beyond the installed sizes above. The keys are read from the folder, from `~/.switch`, or a file you choose.
 
 The same from a terminal:
 
@@ -82,9 +92,13 @@ python3 tools/picross/install.py --folder "/path/to/the/game's/folder" --games .
 ```
 
 Each game's name, release date and title ids are in its manifest, `titles/<name>.json`; the importer picks the manifest
-from the packages and refuses a game without one. Any version imports: the base game alone, or with any update. Today there are manifests for PICROSS S, S2 to S9, S+, PICROSS X, the licensed games (Kemono Friends, Lord of the Nazarick, the Genesis & Master System, Namco Legendary, Doraemon & F Characters, CAPCOM CLASSICS and SNK CLASSICS & NEOGEO editions, Records of The Shield Hero, Juufuutei Raden's Guide for Pixel Museum), and Piczle Cross: Story of Seasons and Piczle Cross: Rune Factory (Unreal Engine 4 games, not by Jupiter). `docs/STATUS.md` says how far each has been played.
+from the packages and refuses a game without one. The importer accepts a base game alone or a base game with an update;
+untested versions may still expose runtime gaps. The table below lists all 23 titles with manifests. The three Piczle games
+use Unreal Engine 4 and are not by Jupiter. `docs/STATUS.md` says how far each has been played.
 
-The builds below are the ones the importer has been run on (main build ID: the game's executable, from its own header). Each game is listed with its base and the newest update it has been run on, and both have been played: the base game alone and the game with its update. Any version in between should import too, since nothing in the generated code is tied to a build.
+The builds below are recorded imports (main build ID: the game's executable, from its own header). A listed build does
+not imply a completed puzzle or full compatibility. Puzzle & Watch has only its tested update listed. Other versions
+need their own checks; the importer generates code from the selected executable.
 
 | Game | Title ID | Version | Main build ID |
 |---|---|---|---|
@@ -127,9 +141,30 @@ The builds below are the ones the importer has been run on (main build ID: the g
 |  |  | 1.0.5 (update) | `7cff713af0d89e278142db4fd0279a4b` |
 | Piczle Cross: Rune Factory | `0100147020984000` | 1.0 (base) | `1ad16d8417120786b850f60a59732f18` |
 |  |  | 1.04 (update) | `1ad16d8417120786b850f60a59732f18` |
+| Piczle Puzzle & Watch Collection | `01001a30155b6000` | 1.01 (update) | `02dd54e917f1f763ddec54711f23cc36` |
 
 
 Settings, saves and shader caches go to `.picrecomp/runtime`. Set `PICRECOMP_DATA_ROOT` to use another folder.
+
+### Running the Piczle games
+
+Launch the Piczle games from their launcher cards, or start an imported title directly. No experimental startup flags are required:
+
+```bash
+tools/picross/play.sh .picrecomp/runtime/games/piczle-cross-story-of-seasons
+```
+
+Use `piczle-cross-rune-factory` or `piczle-puzzle-watch-collection` as the folder name for the other two. The runtime now preserves
+already-mapped allocator pages and reports the texture limits the games need. It keeps each title's declared system resource
+size during startup. All three Piczle games were tested switching back to PICROSS S; S → Story of Seasons was also checked.
+Other title pairs remain unverified. The old `PICRECOMP_TEMP_DI` and `PICRECOMP_TEMP_KEEP_SRS` experiments have been removed.
+
+Shader compilation policy is automatic: PICROSS waits for shaders so one-time texture draws are preserved; the Piczle
+manifests enable asynchronous compilation to avoid UE4's startup watchdog. A cold Piczle launch may show black or incomplete
+frames while shaders compile. `PICRECOMP_ASYNC_SHADERS=0` forces synchronous compilation; `=1` forces asynchronous compilation.
+Use those overrides for diagnosis: forcing asynchronous compilation in PICROSS can leave puzzle previews blank, while
+forcing synchronous compilation in Piczle can trigger the watchdog. Rebuilding generated game libraries is unnecessary for
+these runtime shader fixes.
 
 ## Controls
 

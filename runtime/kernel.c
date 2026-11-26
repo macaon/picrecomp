@@ -157,6 +157,30 @@ static void region_add(uint64_t addr, uint64_t size, uint32_t type, uint32_t per
     region_insert(addr, size, type, perm);
 }
 
+// MapPhysicalMemory fills holes; existing pages retain their contents. PICROSS S's VAM allocator writes
+// metadata into its first page, then maps a larger overlapping range. Clearing it all destroyed that metadata.
+static void region_map_physical(uint64_t addr, uint64_t size) {
+    uint64_t end = addr + size;
+    while (addr < end) {
+        uint64_t next = end;
+        bool mapped = false;
+        for (int i = 0; i < nregions; i++) {
+            Region *r = &regions[i];
+            if (r->type != 0x7 || r->addr + r->size <= addr || r->addr >= end) continue;
+            if (r->addr <= addr) {
+                addr = r->addr + r->size < end ? r->addr + r->size : end;
+                mapped = true;
+                break;
+            }
+            if (r->addr < next) next = r->addr;
+        }
+        if (mapped) continue;
+        region_add(addr, next - addr, 0x7, 3);  // commit before touching pages (Windows)
+        memset((void *)addr, 0, next - addr);
+        addr = next;
+    }
+}
+
 // UnmapPhysicalMemory(addr, size): what is mapped there goes, a region cut in two if only a part of it does
 static void region_unmap_physical(uint64_t addr, uint64_t size) {
     uint64_t end = addr + size;
@@ -853,8 +877,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         break;
     }
     case 0x2C:  // MapPhysicalMemory(addr, size)
-        memset((void *)x[0], 0, x[1]);
-        region_add(x[0], x[1], 0x7, 3);
+        region_map_physical(x[0], x[1]);
         x[0] = R_OK;
         break;
     case 0x2D:  // UnmapPhysicalMemory(addr, size)

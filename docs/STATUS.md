@@ -3,6 +3,61 @@
 Updated: 2026-11-26. Platform tested: Linux x86-64, Vulkan, NVIDIA RTX 5070 Ti (Wayland, PipeWire audio).
 Windows has not been built or run for PICROSS S.
 
+## Current overview
+
+The repository contains 23 title manifests, all installed and started locally. A successful import or menu smoke test does
+not establish complete gameplay support. The dated sections below retain the debugging history; this overview and the next
+steps describe the current state.
+
+| Titles | Recorded coverage | Still to verify |
+|---|---|---|
+| PICROSS S to S9, S+, X and nine licensed editions (20 titles) | All reached title/menu/puzzle-selection screens; S has puzzle-solving coverage, and S/S2/S3 saves were checked by the user. X's menu character and Easy Puzzle tutorial movie render | Every mode, puzzle completion and save/reload in every title; remaining tutorial clips |
+| Piczle Cross: Story of Seasons | Title scene, menus and gameplay; ground and building rendering fixed | Complete a puzzle, save/reload, longer farm play, audio and Journal |
+| Piczle Cross: Rune Factory | Title/profile screens, tutorial and puzzle RFN008 with its outdoor background | Complete a puzzle and save/reload; remaining skipped compute programs |
+| Piczle Puzzle & Watch Collection | Main menu; cold startup and menu tested with asynchronous shaders; sampler format mismatch fixed | Enter and play the included games; saving, audio and longer play |
+
+The three Piczle games now boot without experimental flags. PICROSS S keeps its declared system resources and its virtual
+allocator works. Each Piczle game switched back to S in the same process; S → Story of Seasons also passed. Other title pairs
+remain unverified. Shader policy is automatic per title: PICROSS synchronous, Piczle asynchronous. See the README's launch instructions.
+
+Latest checks: runtime build, movie regressions (including ASan/UBSan), shader-policy/drain tests, storage-image GPU tests,
+integer sampled-texture regressions and 2,000 generated shader cases. PICROSS S and Puzzle & Watch reached their menus with
+Vulkan validation; Puzzle & Watch still emits unused-fragment-output warnings. All GPU checks used Linux/NVIDIA.
+
+Documentation reconciled on 2026-11-26 against the manifests, installed Puzzle & Watch metadata and recorded test results.
+The earlier 21-game rebuild was a dated test batch, not the current catalog size.
+
+No title depends on owning or installing PICROSS S. It is used as a regression reference in the notes below. Separate data
+roots containing only an S9 card or only a Story of Seasons card were tested through the launcher; each loaded its own game
+library and modules. Missing game names now use a generic label, manifest-directory discovery does not probe S's manifest,
+and a missing/invalid NPDM program ID fails instead of borrowing S's identity or the previous title's identity.
+
+## Startup allocator and texture limits (2026-11-26)
+
+Removed `PICRECOMP_TEMP_KEEP_SRS` and `PICRECOMP_TEMP_DI` instead of adding title-specific workarounds. Startup now retains
+the system resource size from each NPDM throughout allocator initialization, resetting it before reading the next title's
+metadata. NVN device queries 61 and 64 report 16,384 rather than the placeholder 1 used before the experiments.
+
+The allocator failure was `MapPhysicalMemory` clearing pages that were already mapped. Local PICROSS S SVC tracing showed
+maps at alias address `0x7440000000` of 0x1000 bytes and then 0x740000 bytes. The game had written allocator metadata into
+the first page; clearing the overlapping range erased it and the SDK subsequently dereferenced zero in `sdk+0x31dce4`.
+The kernel now commits and zeroes only holes, preserving existing physical pages. This also commits new pages before
+writing them, as Windows requires. No game code regeneration or publisher assets changed.
+
+Checks on Linux/NVIDIA, with both old environment variables absent:
+
+- `tools/test_physical_memory.sh`: overlapping and repeated maps preserve bytes, multiple holes are zeroed, unmap/remap
+  provides fresh zero pages, untouched neighbours survive, and texture limits are correct. Also passed ASan/UBSan with leak checking.
+- PICROSS S reached its main menu using its VAM allocator; S → Story of Seasons reached the rendered introduction.
+- Story of Seasons reached puzzle S004, Rune Factory reached RFN008 with its outdoor scene, and Puzzle & Watch reached its menu.
+- Each of the three Piczle games switched back to S, which reached its main menu. Puzzle & Watch → S also ran with Vulkan
+  validation enabled, without validation errors; existing unused-fragment-output warnings remain.
+
+Rune Factory still reports two unsupported SULD compute programs (instruction words `0xeb10048200490300` and
+`0xeb10028200480488` in local logs). This startup fix does not resolve those shaders or establish full gameplay support.
+Scripted Story of Seasons input exercised drawing on S004, but did not complete it; puzzle-completion/save-reload remains
+unverified. All gameplay checks used scratch saves and left the user's save files unchanged.
+
 ## Per-title shader policy and storage images (2026-11-26)
 
 Vulkan compiles shaders synchronously by default, preserving PICROSS's one-time draws into textures. The three Piczle
@@ -32,10 +87,10 @@ Validation on Linux/NVIDIA:
 - Rune Factory: a scratch copy of the existing save reached puzzle RFN008 with its board and outdoor background rendered
   at 1280x720. Some compute programs remain skipped, as previously recorded; this was a rendering smoke test, not a completed puzzle.
 
-Remaining limitations: all three Piczle games still require the existing experimental
+At this earlier checkpoint, all three Piczle games still required the experimental
 `PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1` settings. Applying `TEMP_KEEP_SRS=1` to PICROSS S breaks allocator startup,
-so the cross-engine switch tests used Nazarick. These changes do not resolve that allocator issue or Puzzle & Watch's
-previously recorded float-sampler/integer-view validation error. Windows, AMD and Intel remain untested.
+so the cross-engine switch tests used Nazarick. The startup allocator work above subsequently removed that limitation; the sampled integer texture work
+below fixes Puzzle & Watch's float-sampler/integer-view error. Windows, AMD and Intel remain untested.
 
 ## Movie regression harness (2026-11-26)
 
@@ -66,7 +121,7 @@ The translator test script's default reference `652e234` is absent from this che
 `9418e76`. SPIRV-Tools' library and CLI are installed locally but its development header is missing; the header was downloaded
 from Khronos into ignored build scratch space for the test build.
 
-## Pinned game
+## Original debugging reference: PICROSS S
 
 | | |
 |---|---|
@@ -75,7 +130,8 @@ from Khronos into ignored build scratch space for the test build.
 | Modules | `main` (120,117 functions), `subsdk0` (13,670), `sdk` (39,292), loaded at `0x7000000000`, `0x7008000000`, `0x700C000000` |
 | Generated | `generated/` is about 645 MB of C |
 
-Patch and HLE addresses are valid only for this build. The generator refuses any other.
+This historical baseline anchors the earlier address-specific notes. Do not reuse those addresses for another build.
+The current importer supports the title manifests and generates libraries for their own executable build IDs.
 
 ## What works (seen running)
 
@@ -315,7 +371,8 @@ Patch and HLE addresses are valid only for this build. The generator refuses any
   minutes, compile) and gave a ready card. After the generator changes below S and S2 were installed again (about
   4 minutes each on 16 threads) and both were started in a scripted run through the title, the main menu and the stage
   list to the "Play this puzzle?" popup, with its preview: S2 was checked to there and S through a puzzle's first
-  seconds. **S3 has been prepared only, not generated, built or started.** Nothing beyond those paths has been played on S2. `runtime/main.c`'s `sdk + 0xcdd210` is in the shared `sdk` module
+  seconds. S3 was subsequently built and run; the user verified separate saves for S/S2/S3, and the 2026-11-24 batch
+  rebuilt the then-existing 21 titles. Full gameplay coverage remains limited. `runtime/main.c`'s `sdk + 0xcdd210` is in the shared `sdk` module
   (same build ID in all three games).
 
 - **Generated code and jump tables.** A function with a jump table gets a fallback switch over all its instructions,
@@ -344,12 +401,16 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 
 ## Next steps
 
-1. Verify the remaining screens and a gamepad. Look for `[am] ... unhandled`, `[ipc] STUB` and frozen windows.
-2. Play S2, then import and play S3. Look for missing
-   textures and wrong shaders. The importer keeps `generated/` (about 650 MB per game) for rebuilds; only `obj/` is removed.
-3. Finish the launcher: set a game up from the start screen (it still has the base project's setup flow), tell the user
-   why a card cannot be played, and test the cards with a gamepad.
-4. The cleanup above, then Windows.
+1. Implement Rune Factory's remaining SULD compute programs, then recheck its puzzle rendering and skipped dispatches.
+2. Complete a puzzle, quit and reload its save in each Piczle game. For Puzzle & Watch, first test entry into its included games.
+   Check audio, remaining skipped compute programs, long frames and any renewed watchdog failures.
+3. Make the translator regression workflow reproducible: its default reference commit is absent from this checkout and
+   the local SPIRV-Tools development header was missing. Then broaden gamepad, remaining modes and tutorial-movie checks.
+4. Test AMD/Intel subgroup behavior and the Windows build; address the inherited cleanup items separately.
+
+The launcher already imports through its "+" card and switches installed games. The inherited setup flow is unreachable
+cleanup, not a prerequisite for importing. Successful imports delete generated C by default; use `--keep-generated` when
+needed for development rebuilds.
 
 ### Exceptions and versions (2026-11-19)
 
@@ -632,10 +693,11 @@ flash in the logo movie (LOGO_splashes.mp4): UE4 decodes each frame into the nex
 first drawn; `renderer_upload_rgba` dropped such frames. They are kept now and handed over when the backend is made. Seen: frames 160-385 of
 the intro shot one by one, no black frame, smooth fades (before: frame 178 black).
 Debug: `PICRECOMP_DEBUG_FRAME=<n>` writes `build/pass_NNN.png` of that frame's passes, `PICRECOMP_COPY_TRACE=<n>` lists its draws, the log says
-which no-op NVN commands and shaders taken for compute the game used. Not yet checked: the Vulkan validation layer (it crashed itself once), the
-other games (the movie and HID changes touch all of them; all libraries are stale until rebuilt), Windows, saving (the game opens the save
-data file system ~60 times), audio, longer play (finishing a puzzle, the farm), `Journal`, the experiment hooks `PICRECOMP_TEMP_DI` /
-`PICRECOMP_TEMP_KEEP_SRS` still to become real values.
+which no-op NVN commands and shaders taken for compute the game used. The other games were subsequently rebuilt in the batch
+below; the statement that their libraries were stale applied before that rebuild. Current gaps: Windows, saving (the game opens
+the save data file system ~60 times), audio, longer play (finishing a puzzle, the farm), `Journal`, and replacing the experiment
+hooks `PICRECOMP_TEMP_DI` / `PICRECOMP_TEMP_KEEP_SRS` with proper handling (now fixed by the startup work above).
+Later Vulkan validation coverage is recorded above.
 
 **All 21 games rebuilt and checked (2026-11-24)** after the merge of `piczle-cross` into main (library id changed by the generator work):
 each game's library rebuilt from scratch, then one scripted run each (A every ~8 s, 6 screenshots; Vulkan on Linux, hidden window).
@@ -644,7 +706,8 @@ All 21: no crash, no shader translation failure, no subgroup warning, 60 fps, no
 ## Piczle Cross: Rune Factory (started 2026-11-24)
 
 Title 0100147020984000 + update 0100147020984800 v262144 (1.04, main build 1ad16d84...), Unreal Engine 4 like Story of Seasons;
-run with the same two experiment settings (`PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1`). Imports and builds (11 min).
+initially tested with the same two experiment settings (`PICRECOMP_TEMP_DI=61,64 PICRECOMP_TEMP_KEEP_SRS=1`), now removed.
+Imports and builds (11 min).
 Seen working (Vulkan on Linux, hidden window, scripted input): logo, title, profile selection, profile creation (Down x10 to
 "Create profile", A), the tutorial with its puzzle board, the guide character and the animated background, 60 fps there.
 What it took: LEA (27 shaders failed on 0x36d7...), compute shared memory LDS / STS / ATOMS and ATOM with a result, the texture
@@ -660,23 +723,24 @@ Debug: `PICRECOMP_DUMP_FAILED=1` writes the code words of a shader that fails to
 ## Piczle Puzzle & Watch Collection (started 2026-11-24)
 
 Title 01001a30155b6000 + update 01001a30155b6800 v65536 (1.01, main build 02dd54e9...), Unreal Engine 4.26.2; same two experiment
-settings as the other Piczle games. Imports and builds (9 min). It asks nifm whether it may go online at startup: the logging stub
+settings as the other Piczle games were used initially; no startup flags are needed now. Imports and builds (9 min).
+It asks nifm whether it may go online at startup: the logging stub
 gave no IGeneralService and nn::nifm RequestClient's constructor read through null; runtime/services/nifm.c now answers as a
-console without network (requests never accepted, result NIFM 1111). Seen since (hidden window, Vulkan on Linux): it boots and
-renders at 60 fps (first frame after ~4 s warm, ~23 s with every cache cold), 6 runs in a row without a crash.
-Open: one run (the first after the nifm change, with screenshots and PICRECOMP_DUMP_FAILED on) ended in the game's own deliberate
+console without network (requests never accepted, result NIFM 1111). Early synchronous-compilation tests reached frames after
+~4 s warm or ~23 s cold, with six runs without a crash. Another run ended in the game's own deliberate
 crash, a store of 0xE0000002 to address 3 (main 0x70008d01b0), reached when a worker loop (main 0x70008d01f0 -> 0x70008d0310) finds
-`now - [obj+0x88] > [obj+0xa0]` with `[obj+0x140] > 0` - a watchdog on some timestamp, likely the frame present time; not
-reproduced in 6 runs since (warm, cold caches with __GL_SHADER_DISK_CACHE=0 and an empty data root, with screenshots). Next: find
-what writes obj+0x88 (Ghidra) if it comes back. Its three compute shaders that store to images (a 64x64x16 RGBA16F 3D one, two 2D R16F) translate since the image-store work; it
-reaches its main menu (Select game / Unbox / View / Options) at 60 fps. With the validation layer on it is slow enough that the
-watchdog crash comes every time: it fires on slow frames (the asynchronous policy above now avoids the cold compilation stall).
+`now - [obj+0x88] > [obj+0xa0]` with `[obj+0x140] > 0` - a watchdog on some timestamp, likely the frame present time.
+Synchronous cold compilation with Vulkan validation reproduced that timeout. Since 2026-11-26, its manifest enables
+asynchronous compilation: cold tests presented frames after ~4 s, initially black, then reached the main menu without the crash.
+Validation-enabled menu tests also passed; unused-fragment-output warnings remain. If the watchdog returns during longer play,
+trace the writes to obj+0x88. Its compute image-store shaders now translate (including a 64x64x16 RGBA16F 3D image and 2D R16F
+images). The Select game / Unbox / View / Options menu runs at about 60 fps after compilation; startup scenes can be slower.
 The float-sampler/RGBA8_UINT mismatch at binding t7 is fixed by the sampled integer texture variants described above.
 Not played past the menu yet.
 
 ## What to test and watch for
 
-- Piczle Cross (branch `piczle-cross`): watch the intro and the title / menu on a real window: no black flash in the logo movie, ground
+- Piczle Cross: Story of Seasons (merged into `main`): watch the intro and the title / menu on a real window: no black flash in the logo movie, ground
   (dirt path, grass) under the houses, the buildings keep their colours with no flashing. The title scene's colours change between boots
   (a seasonal variant, it seems). Then play a puzzle; report any other flicker or dark spots.
 - Saves: run S (play.sh) once, look for `[fs] save data of earlier versions copied` in the log and for your progress. The

@@ -12,7 +12,7 @@
 extern uint32_t g_system_resource_size;
 
 const char *g_romfs_dir;
-uint64_t g_program_id = 0x0100BA0003EEA000ull;  // PICROSS S until main.npdm says otherwise
+uint64_t g_program_id;  // the selected title's main.npdm; never borrow another game's identity
 
 // rtld normally passes these to nn::init::Start: run every module's init/fini arrays.
 static void run_array(Cpu *c, uint64_t arr, uint64_t size) {
@@ -42,7 +42,7 @@ static void rtld_init_sdk(Cpu *c) {
         // AllocateAddressRegion through a null region: PICROSS Juufuutei Raden's Guide for Pixel Museum), an older one never
         // did before the game's constructors; once, so the game's constructors are not the first to find it set up
         uint64_t entry = loader_find_symbol("_ZN2nn2os30InitializeVirtualAddressMemoryEv");
-        if (entry) {  // (the first PICROSS S's SDK has none, and never needed it)
+        if (entry) {
             LOG("initializing SDK virtual address memory before the SDK constructors\n");
             guest_call(c, entry);
         }
@@ -52,11 +52,8 @@ static void rtld_init_sdk(Cpu *c) {
         uint64_t *startup = (uint64_t *)loader_import_slot(sdk, "nninitStartup");  // (the sdk's import of the game's)
         uint64_t entry = loader_find_symbol("nninitStartup");
         if (!startup || !entry || *startup != entry) FATAL("the sdk does not import the game's nninitStartup\n");
-        LOG("initializing PICROSS S allocator before SDK constructors\n");
-        uint32_t resource_size = g_system_resource_size;
-        if (!getenv("PICRECOMP_TEMP_KEEP_SRS")) g_system_resource_size = 0;  // EXPERIMENT
+        LOG("initializing game allocator before SDK constructors\n");
         guest_call(c, entry);
-        g_system_resource_size = resource_size;
         *startup = hle_register("<picross_startup_complete>", picross_startup_complete);
     }
     module_init(c, sdk);
@@ -217,6 +214,8 @@ static void boot(const char *root) {
 
     uint32_t stack_size = 0x100000;
     int prio = 44;
+    g_system_resource_size = 0;
+    g_program_id = 0;
     FILE *f = fopen(npdm_path, "rb");
     if (f) {
         uint8_t meta[0x80];
@@ -231,6 +230,7 @@ static void boot(const char *root) {
         }
         fclose(f);
     }
+    if (!g_program_id) FATAL("%s: missing or invalid program id in the selected game's metadata\n", npdm_path);
     LOG("main thread: prio %d, stack 0x%x\n", prio, stack_size);
 
     // An older SDK (KEMONO FRIENDS PICROSS) has Start(thread, args, init_sdk, init) without the fini: the same call, the

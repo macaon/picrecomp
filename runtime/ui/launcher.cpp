@@ -363,7 +363,7 @@ static void scan_cards(const std::string &current) {
         Card c;
         c.root = r;
         c.name = json_str(r + "/title.json", "name");
-        if (c.name.empty()) c.name = "PICROSS S";  // (a folder prepared before the manifests)
+        if (c.name.empty()) c.name = "Imported game";  // (a folder prepared before the manifests)
         c.tex = load_icon(r + "/icon.jpg");
         if (r == current) g_card = g_cards.size(), found = true;
         g_cards.push_back(c);
@@ -373,8 +373,8 @@ static void scan_cards(const std::string &current) {
     // without the manifests) goes by name, after the known ones, with "+" sorting after the digits
     std::map<std::string, std::string> released;
     char probe[1100];
-    if (rt_resource(NULL, "titles/picross-s.json", probe, sizeof probe)) {
-        std::string titles(probe, strlen(probe) - strlen("picross-s.json"));
+    if (rt_resource("titles", "titles", probe, sizeof probe)) {
+        std::string titles = std::string(probe) + "/";
         if (DIR *d = opendir(titles.c_str())) {
             while (dirent *e = readdir(d)) {
                 size_t n = strlen(e->d_name);
