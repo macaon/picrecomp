@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "shaders.h"
 
@@ -113,12 +114,21 @@ static uint32_t *no_contraction(uint32_t *spv, size_t *nwords) {
 // No spirv-opt by default: it rewrote the depth pre-pass and colour-pass vertex shaders differently enough that
 // their depths stopped matching (EQUAL test: black holes in foliage), and it was most of the compile time; the
 // driver optimises anyway. PICRECOMP_VK_OPT=1 turns it back on (experiments).
+static uint64_t shader_clock_ns(void) {
+    struct timespec t;
+    timespec_get(&t, TIME_UTC);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
 uint32_t *vk_glsl_to_spirv(const char *src, int stage, const char *name, size_t *nwords) {
+    uint64_t started = shader_clock_ns();
     uint64_t h = src_hash(src, stage);
     static int nocache = -1;
     if (nocache < 0) nocache = getenv("PICRECOMP_VK_NO_SPIRV_CACHE") != NULL;
     uint32_t *out = nocache ? NULL : cache_load(h, nwords);
-    if (out) return out;
+    if (out) {
+        if (getenv("PICRECOMP_SHADER_TIMING")) LOG("[shader-time] %s SPIR-V %016llx cache hit %.2f ms\n",name,(unsigned long long)h,(shader_clock_ns()-started)/1e6);
+        return out;
+    }
     static __thread shaderc_compiler_t comp;
     if (!comp) comp = shaderc_compiler_initialize();
     shaderc_compile_options_t o = shaderc_compile_options_initialize();
@@ -139,6 +149,7 @@ uint32_t *vk_glsl_to_spirv(const char *src, int stage, const char *name, size_t 
         if (!nocache) cache_store(h, out, *nwords);
     }
     shaderc_result_release(r);
+    if (getenv("PICRECOMP_SHADER_TIMING")) LOG("[shader-time] %s SPIR-V %016llx compiled %.2f ms\n",name,(unsigned long long)h,(shader_clock_ns()-started)/1e6);
     return out;
 }
 

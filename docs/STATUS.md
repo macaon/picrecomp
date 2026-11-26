@@ -32,6 +32,25 @@ roots containing only an S9 card or only a Story of Seasons card were tested thr
 library and modules. Missing game names now use a generic label, manifest-directory discovery does not probe S's manifest,
 and a missing/invalid NPDM program ID fails instead of borrowing S's identity or the previous title's identity.
 
+## Rune Factory transition delays (2026-11-26)
+
+Profiling RFN008 reproduced a 5,194 ms call to `vkCreateGraphicsPipelines`. The corresponding GLSL/SPIR-V
+cache lookup already hit; the delay was native driver pipeline compilation. Loading the existing saved Vulkan
+pipeline cache reduced creation of the same shader-source pipeline to 1.28 ms on this Linux/NVIDIA machine.
+With that cache loaded, scripted Save & quit, re-entry into RFN008 and a second Save & quit completed without
+another multi-second compilation stall. An exit still reached 523 ms with effectively zero pipeline-build time;
+that smaller transition cost remains to investigate separately.
+
+The FPS log now includes aggregate native `pipeline` build milliseconds. `PICRECOMP_SHADER_TIMING=1` logs
+SPIR-V cache/compilation, graphics-module setup and individual graphics/compute pipeline timings; native builds
+taking at least 100 ms are logged without the flag. These are diagnostics, not a fix for first-use compilation.
+Synchronous compilation remains enabled to preserve one-time render targets such as the color lookup table.
+Normal shutdown saves the native pipeline cache; screenshot auto-exit bypasses shutdown, so profiling runs
+must account for that when comparing cache behavior. Tests used scratch game/save data.
+
+Validation: runtime build and shader-policy tests passed; screenshots verified both exits and the intervening
+puzzle session. Detailed logs and screenshots are local ignored artifacts under `build/rune-delay/`.
+
 ## Rune Factory colors and missing terrain (2026-11-26)
 
 The yellow/blue scene came from a corrupted 1024x32 color lookup table. Rune Factory generates this texture once; skipping

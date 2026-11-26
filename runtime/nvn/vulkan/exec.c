@@ -37,6 +37,7 @@ uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
 static _Atomic int stat_compiles;
+static _Atomic uint64_t stat_pipeline_ns;
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
 static char stats_text[2048];
@@ -756,7 +757,7 @@ void vk_prof_frame(uint64_t frame, uint64_t present_ns) {
     if (last_t && now - last_t > 50000000) {
         uint64_t dt = now - last_t, ex = cum_exec - l_exec, wt = cum_wait - l_wait;
         LOG("[hitch] frame %llu: %.0f ms = backend exec %.1f (of which GPU waits %.1f) + present %.1f + other %.1f; %llu draws, "
-            "%llu submits, compiles %d pending\n", (unsigned long long)frame, dt / 1e6, ex / 1e6, wt / 1e6, present_ns / 1e6,
+            "%llu submits, %d builds since stats\n", (unsigned long long)frame, dt / 1e6, ex / 1e6, wt / 1e6, present_ns / 1e6,
             ((double)dt - ex - present_ns) / 1e6, (unsigned long long)(cum_draws - l_draws), (unsigned long long)(cum_submits - l_subs),
             atomic_load(&stat_compiles));
     }
@@ -771,10 +772,10 @@ const char *renderer_stats(void) {
         LOG("\n");
     }
     snprintf(stats_text, sizeof stats_text,
-             "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d, fbcopy %llu, upload %.1fMB",
+             "%llu draws, %llu skipped, %llu passes, %llu dispatches, %llu flushes, wait %.0fms, compile %d, pipeline %.0fms, fbcopy %llu, upload %.1fMB",
              (unsigned long long)stat_draws, (unsigned long long)stat_skipped, (unsigned long long)stat_passes,
              (unsigned long long)stat_dispatches, (unsigned long long)stat_flushes, (double)stat_wait_ns / 1e6,
-             atomic_exchange(&stat_compiles, 0), (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
+             atomic_exchange(&stat_compiles, 0), (double)atomic_exchange(&stat_pipeline_ns, 0) / 1e6, (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
     stat_feedback_copies = stat_upload_bytes = 0;
     if (stat_skipped) {
         size_t n = strlen(stats_text);
@@ -1227,6 +1228,7 @@ typedef struct {
     ShaderInfo *vi, *fi, *gi;
     uint64_t code[3], cmax[3];  // translation inputs (copied: translated on the translator thread)
     ShaderKey vkey, fkey;
+    uint64_t source_hash; // diagnostic identity independent of guest shader addresses
     VkShaderModule vs, fs, gs;
     VkBindingInfo binds[MAX_BIND];
     int nbinds;
@@ -1270,8 +1272,11 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
     if (f) { fputs(src, f); fclose(f); }
 }
 
+static uint64_t hash_words(uint64_t h, const void *p, size_t n);
+
 static void compile_program(void *arg) {
     Prog *p = arg;
+    uint64_t started = SDL_GetTicksNS();
     size_t nv = 0, nf = 0, ng = 0;
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
@@ -1287,6 +1292,8 @@ static void compile_program(void *arg) {
     free(sv);
     free(sf);
     p->layout = make_layout(p, p->gi ? 3 : 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+    if (getenv("PICRECOMP_SHADER_TIMING")) LOG("[shader-time] graphics modules %016llx vs %llx fs %llx %.2f ms\n",
+        (unsigned long long)p->source_hash, (unsigned long long)p->code[0], (unsigned long long)p->code[1], (SDL_GetTicksNS()-started)/1e6);
     atomic_fetch_add(&stat_compiles, 1);
     atomic_store(&p->state, p->vs && p->fs && (!p->gi || p->gs) ? 1 : 2);
 }
@@ -1334,6 +1341,9 @@ static void translate_program(void *arg) {
         atomic_store(&p->state, 2);
         return;
     }
+    p->source_hash = hash_words(0xcbf29ce484222325ull, p->vi->msl, strlen(p->vi->msl));
+    p->source_hash = hash_words(p->source_hash, p->fi->msl, strlen(p->fi->msl));
+    if (p->gi) p->source_hash = hash_words(p->source_hash, p->gi->msl, strlen(p->gi->msl));
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
     if (p->code[1]) save_glsl(p->fi->msl, p->code[1], "fs");
@@ -1664,7 +1674,13 @@ static void build_pipeline(void *arg) {
                                        .pStages = stages, .pVertexInputState = &vi, .pInputAssemblyState = &ia, .pViewportState = &vs,
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = k->prog->layout};
+    uint64_t started = SDL_GetTicksNS();
     VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &pp->pipe);
+    uint64_t elapsed = SDL_GetTicksNS() - started;
+    atomic_fetch_add(&stat_pipeline_ns, elapsed);
+    if (getenv("PICRECOMP_SHADER_TIMING") || elapsed >= 100000000ull) LOG("[shader-time] graphics pipeline source %016llx key %016llx vs %llx fs %llx %.2f ms\n",
+        (unsigned long long)k->prog->source_hash, (unsigned long long)hash_words(0xcbf29ce484222325ull,k,sizeof *k),
+        (unsigned long long)k->prog->code[0],(unsigned long long)k->prog->code[1],elapsed/1e6);
     if (r != VK_SUCCESS) {
         static int n;
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
@@ -2933,7 +2949,12 @@ static void build_compute(void *arg) {
                                       .layout = cp->p.layout};
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo sg;
     ci.stage.pNext = sg32_next(cp->si, VK_SHADER_STAGE_COMPUTE_BIT, &sg);
+    uint64_t started = SDL_GetTicksNS();
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
+    uint64_t elapsed = SDL_GetTicksNS() - started;
+    atomic_fetch_add(&stat_pipeline_ns, elapsed);
+    if (getenv("PICRECOMP_SHADER_TIMING") || elapsed >= 100000000ull)
+        LOG("[shader-time] compute pipeline %llx %.2f ms\n", (unsigned long long)cp->p.code[0], elapsed/1e6);
     atomic_fetch_add(&stat_compiles, 1);
     atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
@@ -2962,6 +2983,7 @@ static CsProg *compute_program(NvnProgram *np, uint32_t mask, uint64_t uint_mask
     cp->si = maxwell_translate((const uint8_t *)(uintptr_t)ss->code_addr, ss->const_offset ? ss->const_offset : 0x10000, STAGE_COMPUTE, &k);
     pthread_mutex_unlock(&translate_lock);
     cp->p.vi = cp->si;
+    cp->p.code[0] = ss->code_addr;
     if (!cp->si->msl) {
         LOG("[compute] translate failed: %s (code %llx)\n", cp->si->error, (unsigned long long)ss->code_addr);
         const uint32_t *wd = (const uint32_t *)(uintptr_t)ss->code_addr;  // (the blob's start: header layout)
