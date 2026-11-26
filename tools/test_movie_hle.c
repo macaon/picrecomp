@@ -143,6 +143,12 @@ static void check_reader(void) {
     assert(fake_closes == 1 && !memcmp(&cpu, &saved, sizeof cpu));
 }
 
+// The included movie implementation also has a texture-output path; these tests exercise CPU buffers only.
+uint64_t renderer_present_count(void) {
+    assert(!"CPU-output regression test must not query the renderer");
+    return 0;
+}
+
 void renderer_upload_rgba(NvnTexture *texture, const void *rgba, uint32_t width, uint32_t height, uint32_t stride) {
     (void)texture; (void)rgba; (void)width; (void)height; (void)stride;
     assert(!"CPU-output regression test must not upload a texture");

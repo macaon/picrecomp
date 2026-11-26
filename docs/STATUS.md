@@ -37,6 +37,13 @@ Remaining limitations: all three Piczle games still require the existing experim
 so the cross-engine switch tests used Nazarick. These changes do not resolve that allocator issue or Puzzle & Watch's
 previously recorded float-sampler/integer-view validation error. Windows, AMD and Intel remain untested.
 
+## Movie regression harness (2026-11-26)
+
+`tools/test_movie_hle.sh` builds again after adding the renderer-present-counter stub required by movie texture-upload
+debug logging. Like the existing upload stub, it asserts if called: the test exercises CPU output and must not enter the
+renderer path. No runtime or generated game code changed. Both movie test scripts pass, including separate ASan/UBSan
+builds with leak checking. The sanitizer runs require execution outside the sandbox's ptrace wrapper.
+
 ## Pinned game
 
 | | |
