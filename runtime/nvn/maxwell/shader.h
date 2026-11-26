@@ -46,6 +46,7 @@ typedef struct {
     uint32_t vs_out_mask;   // fragment: varyings the vertex shader provides
     uint8_t glsl;           // emit Vulkan GLSL (see the contract above) instead of MSL
     uint32_t buf_mask;      // GLSL: texture slots (bit i) that hold a buffer texture: a TLD on a 1D slot is then a usamplerBuffer fetch
+    uint64_t uint_tex_mask, sint_tex_mask; // GLSL sampled texture slots: numeric type of the bound view
 } ShaderKey;
 
 typedef struct {

@@ -816,14 +816,25 @@ static const VkComponentMapping IDENTITY = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_CO
 
 // render: attachment view (one level, one layer). Otherwise a sampled view of type want_textype (TEXTYPE_*),
 // with the NVN component swizzle, converting between compatible types the way renderer.m does.
-VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render, int want_textype) {
-    TexBackend *b = vk_tex(t, render);
-    if (!has_view) v = NULL;
+static VkFormat view_format(NvnTexture *t, TexBackend *b, const NvnTextureView *v) {
     VkFormat fmt = b->format;
     if (v && (v->setmask & 4) && !(b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
         VkFormat vf = fmt_of(v->format).vf;
         if (vk_format(t->format) == b->format) fmt = vf;  // (fallback images keep their own format)
     }
+    return fmt;
+}
+
+VkFormat vk_sampled_format(NvnTexture *t, const NvnTextureView *v, bool has_view) {
+    // Type selection needs the allocation's fallback format, but must not upload guest pixels on every draw.
+    TexBackend *b = t->backend ? t->backend : tex_backend(t);
+    return view_format(t, b, has_view ? v : NULL);
+}
+
+VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render, int want_textype) {
+    TexBackend *b = vk_tex(t, render);
+    if (!has_view) v = NULL;
+    VkFormat fmt = view_format(t, b, v);
     uint32_t lv0 = v && (v->setmask & 1) ? v->base_level : 0;
     uint32_t nlv = v && (v->setmask & 1) && v->num_levels ? v->num_levels : b->levels - (lv0 < b->levels ? lv0 : 0);
     uint32_t ly0 = v && (v->setmask & 2) ? v->min_layer : 0;

@@ -73,6 +73,12 @@ static void check_storage(int target, float scale) {
     renderer_set_scale(scale, scale);
     TexBackend *b = vk_tex(&t, true);
     assert(b->width == (target == 1 ? (uint32_t)lroundf(192*scale) : 192));
+    // Shader variants follow a view override, not just the texture's original format.
+    NvnTextureView view = {.setmask=4, .format=0x27};
+    assert(vk_sampled_format(&t, &view, true) == VK_FORMAT_R8G8B8A8_UINT);
+    view.format = 0x28;
+    assert(vk_sampled_format(&t, &view, true) == VK_FORMAT_R8G8B8A8_SINT);
+    assert(vk_sampled_format(&t, &view, false) == VK_FORMAT_R8G8B8A8_UNORM);
     // Record a GPU write without flushing: promotion must preserve it after the main buffer executes.
     VkClearColorValue clear = {.float32={0.25f,0.5f,0.75f,1}};
     VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, b->levels, 0, b->layers};

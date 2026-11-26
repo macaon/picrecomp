@@ -44,6 +44,28 @@ debug logging. Like the existing upload stub, it asserts if called: the test exe
 renderer path. No runtime or generated game code changed. Both movie test scripts pass, including separate ASan/UBSan
 builds with leak checking. The sanitizer runs require execution outside the sandbox's ptrace wrapper.
 
+## Sampled integer textures (2026-11-26)
+
+Puzzle & Watch bound an RGBA8_UINT texture view to fragment slot t7, but ordinary sampled textures were always declared
+as float samplers. Vulkan reported `VUID-vkCmdDrawIndexed-format-07753`. Shader variants now follow the effective view's
+numeric type, including format overrides, for vertex, fragment and compute stages. Integer reads use unsigned/signed GLSL
+samplers and write integer register bits directly; signed values retain their sign extension. Graphics and compute program
+keys include those types, so rebinding a different format selects the corresponding shader. Type selection avoids uploading
+texture pixels. No generated game code or asset changes are required; the SPIR-V cache already keys on generated source.
+
+Verification: Puzzle & Watch reached its menu with Vulkan validation enabled and no sampler numeric-type errors. The existing
+unused-fragment-output warnings remain. Fetch and gather regressions compile and validate float, unsigned and signed variants;
+the typed regressions fail against commit `9418e76`. Two seeds covering 2,000 generated programs produced no MSL differences
+against that commit; all 1,033 successful GLSL translations compiled and passed SPIR-V validation. Unsupported instruction
+patterns are still rejected by the translator. The storage-image GPU test also passes with validation, including checks that
+unsigned/signed view overrides select their effective format. PICROSS S also reached its main menu with Vulkan validation
+enabled and no validation errors. Linux/NVIDIA tested; other GPU vendors and Windows remain untested. These are menu/rendering
+smoke tests, not completed puzzle sessions.
+
+The translator test script's default reference `652e234` is absent from this checkout. These comparisons explicitly used
+`9418e76`. SPIRV-Tools' library and CLI are installed locally but its development header is missing; the header was downloaded
+from Khronos into ignored build scratch space for the test build.
+
 ## Pinned game
 
 | | |
@@ -648,8 +670,9 @@ crash, a store of 0xE0000002 to address 3 (main 0x70008d01b0), reached when a wo
 reproduced in 6 runs since (warm, cold caches with __GL_SHADER_DISK_CACHE=0 and an empty data root, with screenshots). Next: find
 what writes obj+0x88 (Ghidra) if it comes back. Its three compute shaders that store to images (a 64x64x16 RGBA16F 3D one, two 2D R16F) translate since the image-store work; it
 reaches its main menu (Select game / Unbox / View / Options) at 60 fps. With the validation layer on it is slow enough that the
-watchdog crash comes every time: it fires on slow frames. Validation also reports a fragment shader sampling an RGBA8_UINT view with
-a float sampler (VUID-vkCmdDrawIndexed-format-07753, binding t7): not looked at. Not played past the menu yet.
+watchdog crash comes every time: it fires on slow frames (the asynchronous policy above now avoids the cold compilation stall).
+The float-sampler/RGBA8_UINT mismatch at binding t7 is fixed by the sampled integer texture variants described above.
+Not played past the menu yet.
 
 ## What to test and watch for
 

@@ -1327,6 +1327,8 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     for (size_t i = 0; i < sizeof *vkey; i++) { h ^= vb[i]; h *= 0x100000001B3ull; }
     for (int i = 0; i < 8; i++) { h ^= fkey->rt_kind[i]; h *= 0x100000001B3ull; }
     h ^= fkey->buf_mask; h *= 0x100000001B3ull;
+    h ^= fkey->uint_tex_mask; h *= 0x100000001B3ull;
+    h ^= fkey->sint_tex_mask; h *= 0x100000001B3ull;
     if (!h) h = 1;
     uint32_t slot = (uint32_t)(h ^ (h >> 31)) & (PROG_TAB - 1);
     while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
@@ -1706,6 +1708,25 @@ static uint32_t buffer_slots(int stage, const ShaderInfo *si) {
         if (t && t->target == 10) m |= 1u << i;
     }
     return m;
+}
+
+static void sampled_texture_key(int stage, const ShaderInfo *si, ShaderKey *key) {
+    key->uint_tex_mask = key->sint_tex_mask = 0;
+    for (int i = 0; i < si->ntex && i < 64; i++) {
+        const ShaderTexture *s = &si->tex[i];
+        if (s->is_image || s->shadow || s->type == TEXTYPE_BUFFER) continue;
+        NvnTexture *t = shader_texture_object(stage, (ShaderTexture *)s);
+        if (!t || t->target == 10) continue;
+        uint32_t tic = shader_texture_handle(stage, (ShaderTexture *)s) & 0xFFFFF;
+        NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
+        VkFormat f = vk_sampled_format(t, &e->view, e->has_view);
+        if (!vk_format_is_int(f)) continue;
+        bool sign = f == VK_FORMAT_R8_SINT || f == VK_FORMAT_R8G8_SINT || f == VK_FORMAT_R8G8B8A8_SINT ||
+            f == VK_FORMAT_R16_SINT || f == VK_FORMAT_R16G16_SINT || f == VK_FORMAT_R16G16B16A16_SINT ||
+            f == VK_FORMAT_R32_SINT || f == VK_FORMAT_R32G32_SINT || f == VK_FORMAT_R32G32B32A32_SINT;
+        if (sign) key->sint_tex_mask |= UINT64_C(1) << i;
+        else key->uint_tex_mask |= UINT64_C(1) << i;
+    }
 }
 
 static bool is_attachment(NvnTexture *t) {
@@ -2883,22 +2904,25 @@ static void build_compute(void *arg) {
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }
 
-static struct CsEnt { uint64_t addr; uint32_t mask; CsProg *cp; } g_cs_tab[256];  // compute programs by code address and buffer-texture slots (ShaderKey.buf_mask)
+static struct CsEnt { uint64_t addr; uint32_t mask; uint64_t uint_mask, sint_mask; CsProg *cp; } g_cs_tab[256];
 
-static CsProg *compute_program(NvnProgram *np, uint32_t mask) {
+static CsProg *compute_program(NvnProgram *np, uint32_t mask, uint64_t uint_mask, uint64_t sint_mask) {
     NvnShaderStage *ss = &np->stages[5];
     if (!ss->code_addr) return NULL;
     struct CsEnt *tab = g_cs_tab;
     int n = g_cs_n;
-    for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr && tab[i].mask == mask) return tab[i].cp;
+    for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr && tab[i].mask == mask &&
+        tab[i].uint_mask == uint_mask && tab[i].sint_mask == sint_mask) return tab[i].cp;
     CsProg *cp = calloc(1, sizeof *cp);
-    if (n < 256) { tab[n].addr = ss->code_addr; tab[n].mask = mask; tab[n].cp = cp; g_cs_n = n + 1; }
+    if (n < 256) { tab[n] = (struct CsEnt){ss->code_addr, mask, uint_mask, sint_mask, cp}; g_cs_n = n + 1; }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
     maxwell_gfar_ok = g_vk.bda;
     ShaderKey k = {0};
     k.glsl = 1;
     k.buf_mask = mask;
+    k.uint_tex_mask = uint_mask;
+    k.sint_tex_mask = sint_mask;
     pthread_mutex_lock(&translate_lock);
     cp->si = maxwell_translate((const uint8_t *)(uintptr_t)ss->code_addr, ss->const_offset ? ss->const_offset : 0x10000, STAGE_COMPUTE, &k);
     pthread_mutex_unlock(&translate_lock);
@@ -2928,10 +2952,13 @@ static CsProg *compute_program(NvnProgram *np, uint32_t mask) {
 static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     snap_reason = "compute"; snapshots_invalidate(NULL);
     if (!st.program || !gx || !gy || !gz) return;
-    CsProg *cp = compute_program(st.program, 0);
+    CsProg *cp = compute_program(st.program, 0, 0, 0);
     if (cp && atomic_load(&cp->p.state) == 1) {  // buffer textures in 1D slots: the variant that fetches them as buffers
         uint32_t bm = buffer_slots(5, cp->si);
-        if (bm) cp = compute_program(st.program, bm);
+        ShaderKey key = {0};
+        sampled_texture_key(5, cp->si, &key);
+        if (bm || key.uint_tex_mask || key.sint_tex_mask)
+            cp = compute_program(st.program, bm, key.uint_tex_mask, key.sint_tex_mask);
     }
     if (!cp || atomic_load(&cp->p.state) != 1) { SKIP(SKIP_COMPUTE_PROG); return; }
     {   // PICRECOMP_SKIP_CS=<code address hex> (debug): skip that compute shader's dispatches, to see what it does
@@ -3031,10 +3058,15 @@ static void draw_(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    if (pr && atomic_load(&pr->state) == 1) {  // buffer textures bound to 1D slots: the variant of the program that fetches them as buffers
+    if (pr && atomic_load(&pr->state) == 1) {  // The same Maxwell program can sample different view types on successive draws.
         uint32_t vm = buffer_slots(0, pr->vi), fm = buffer_slots(1, pr->fi);
-        if (vm != vkey.buf_mask || fm != fkey.buf_mask) {
-            { static int nlog; if (nlog++ < 10) LOG("[vk] buffer textures in 1D slots: vertex %#x, fragment %#x (vs %llx fs %llx)\n", vm, fm, (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr); }
+        sampled_texture_key(0, pr->vi, &vkey);
+        sampled_texture_key(1, pr->fi, &fkey);
+        if (vm != vkey.buf_mask || fm != fkey.buf_mask || vkey.uint_tex_mask || vkey.sint_tex_mask ||
+            fkey.uint_tex_mask || fkey.sint_tex_mask) {
+            { static int nlog; if (nlog++ < 10) LOG("[vk] texture variants: buffers vs %#x fs %#x, uint vs %llx fs %llx, sint vs %llx fs %llx\n",
+                vm, fm, (unsigned long long)vkey.uint_tex_mask, (unsigned long long)fkey.uint_tex_mask,
+                (unsigned long long)vkey.sint_tex_mask, (unsigned long long)fkey.sint_tex_mask); }
             vkey.buf_mask = vm;
             fkey.buf_mask = fm;
             pr = get_program(st.program, &vkey, &fkey);

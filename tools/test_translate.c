@@ -316,9 +316,41 @@ static int check_handle_across_blocks(void) {
     return fails;
 }
 
-// TLD.B, a bindless texel fetch with integer coordinates (PICROSS: Piczle Cross, an Unreal Engine game): the handle is built
-// in R12 from the driver's c2 tables as for TEX.B; the instruction is the one the game's fragment shader has (2D, coordinates
-// R22 / R23, the alpha component, no lod, no offset)
+// Signed and unsigned sampled views must keep integer register bits; float views retain the original path.
+static int check_sampled_variant(const ShaderInfo *s, int variant) {
+    if (!s->msl) { printf("FAIL: sampled variant %d: %s\n", variant, s->error); return 1; }
+    const char *type = variant == 1 ? "uniform usampler2D t0" : variant == 2 ? "uniform isampler2D t0" : "uniform sampler2D t0";
+    if (!strstr(s->msl, type) || (variant && (!strstr(s->msl, "uvec4 t = uvec4(") || !strstr(s->msl, "= t[")))) {
+        printf("FAIL: sampled variant %d: missing type or integer register transport\n", variant);
+        return 1;
+    }
+#ifdef WITH_GLSL
+    shaderc_compiler_t compiler = shaderc_compiler_initialize();
+    shaderc_compile_options_t options = shaderc_compile_options_initialize();
+    shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+    shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, s->msl, strlen(s->msl),
+        shaderc_fragment_shader, "sampled-variant", "main", options);
+    int failed = shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success;
+    if (failed) printf("FAIL: sampled variant %d: %s\n", variant, shaderc_result_get_error_message(result));
+    else {
+        spv_context context = spvContextCreate(SPV_ENV_VULKAN_1_3);
+        spv_const_binary_t binary = {(const uint32_t *)shaderc_result_get_bytes(result), shaderc_result_get_length(result) / 4};
+        spv_diagnostic diagnostic = NULL;
+        failed = spvValidate(context, &binary, &diagnostic) != SPV_SUCCESS;
+        if (failed) printf("FAIL: sampled variant %d SPIR-V: %s\n", variant, diagnostic ? diagnostic->error : "unknown");
+        spvDiagnosticDestroy(diagnostic);
+        spvContextDestroy(context);
+    }
+    shaderc_result_release(result);
+    shaderc_compile_options_release(options);
+    shaderc_compiler_release(compiler);
+    return failed;
+#else
+    return 0;
+#endif
+}
+
+// TLD.B: a bindless texel fetch, with the handle built from the driver's c2 tables (Piczle Cross).
 static int check_tld_bindless(void) {
     static const uint64_t words[] = {
         0x001fc000e24007f0ull,
@@ -332,11 +364,15 @@ static int check_tld_bindless(void) {
     ShaderKey key;
     memset(&key, 0, sizeof key);
     key.glsl = 1;
-    ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
     int fails = 0;
-    if (!a->msl) { printf("FAIL: bindless TLD test: %s\n", a->error); fails++; }
-    else if (!strstr(a->msl, "texelFetch")) { printf("FAIL: bindless TLD test: no texel fetch in the output\n"); fails++; }
-    maxwell_free(a);
+    for (int variant = 0; variant < 3; variant++) {
+        key.uint_tex_mask = variant == 1 ? 1 : 0;
+        key.sint_tex_mask = variant == 2 ? 1 : 0;
+        ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
+        fails += check_sampled_variant(a, variant);
+        if (a->msl && !strstr(a->msl, "texelFetch")) { printf("FAIL: bindless TLD test: no texel fetch in the output\n"); fails++; }
+        maxwell_free(a);
+    }
     return fails;
 }
 
@@ -544,14 +580,18 @@ static int check_gather_and_vmnmx(void) {
     ShaderKey key;
     memset(&key, 0, sizeof key);
     key.glsl = 1;
-    ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
     int fails = 0;
-    if (!a->msl) { printf("FAIL: gather / vmnmx test: %s\n", a->error); fails++; }
-    else if (!strstr(a->msl, "textureGatherOffset") || !strstr(a->msl, "min(max(")) {
-        printf("FAIL: gather / vmnmx test: no gather or clamp in the output\n");
-        fails++;
+    for (int variant = 0; variant < 3; variant++) {
+        key.uint_tex_mask = variant == 1 ? 1 : 0;
+        key.sint_tex_mask = variant == 2 ? 1 : 0;
+        ShaderInfo *a = maxwell_translate(buf, 0x80 + sizeof words, STAGE_FRAGMENT, &key);
+        fails += check_sampled_variant(a, variant);
+        if (a->msl && (!strstr(a->msl, "textureGatherOffset") || !strstr(a->msl, "min(max("))) {
+            printf("FAIL: gather / vmnmx test: no gather or clamp in the output\n");
+            fails++;
+        }
+        maxwell_free(a);
     }
-    maxwell_free(a);
     return fails;
 }
 
