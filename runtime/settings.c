@@ -92,10 +92,9 @@ static bool json_bool(const char *text, const char *key, bool *value) {
     return true;
 }
 
-static bool title_async_shaders(void) {
-    bool value = false;
-    if (json_bool(g_title_text, "async_shaders", &value)) return value;
-    // Older imports lack new manifest fields. Look up the shipped manifest by slug, without changing the install.
+static bool manifest_async_shaders(bool *value) {
+    // Runtime compatibility policy can change after an import. Prefer the current shipped manifest over stale
+    // metadata (Rune Factory's one-time color LUT is corrupted when its initial draw is skipped).
     const char *slug = strstr(g_title_text, "\"slug\"");
     if (!slug || !(slug = strchr(slug + 6, ':'))) return false;
     for (slug++; *slug == ' ' || *slug == '\t' || *slug == '\r' || *slug == '\n'; slug++) {}
@@ -109,7 +108,13 @@ static bool title_async_shaders(void) {
     if (!f) return false;
     fread(text, 1, sizeof text - 1, f);
     fclose(f);
-    return json_bool(text, "async_shaders", &value) && value;
+    return json_bool(text, "async_shaders", value);
+}
+
+static bool title_async_shaders(void) {
+    bool value = false;
+    if (manifest_async_shaders(&value)) return value;
+    return json_bool(g_title_text, "async_shaders", &value) && value;
 }
 
 bool settings_async_shaders(void) {

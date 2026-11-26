@@ -38,7 +38,7 @@ typedef struct {
     VkPipelineCache pcache;
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
-    bool custom_border, divisor, host_import, bda;
+    bool custom_border, divisor, host_import, bda, layer_output, geometry_shader;
     bool sg_fixed32;  // subgroups are always 32 wide (NVIDIA): nothing to ask for
     VkShaderStageFlags sg32_stages;  // stages whose pipelines get 32-wide subgroups when their shaders need it (exec.c)
     // window
@@ -112,6 +112,7 @@ bool vk_format_alpha_one(uint32_t nvn_format);
 // View of t (optionally through an NVN texture view) for rendering or sampling.
 VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render, int want_textype);
 VkFormat vk_sampled_format(NvnTexture *t, const NvnTextureView *v, bool has_view);
+uint32_t vk_render_layers(NvnTexture *t, const NvnTextureView *v, bool has_view);
 VkImageView vk_image_view(TexBackend *b, VkImageViewType type, VkFormat fmt, uint32_t lv0, uint32_t nlv, uint32_t ly0,
                           uint32_t nly, VkComponentMapping sw, VkImageAspectFlags aspect);
 VkImageView vk_dummy_view(int textype);

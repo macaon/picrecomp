@@ -13,12 +13,12 @@ steps describe the current state.
 |---|---|---|
 | PICROSS S to S9, S+, X and nine licensed editions (20 titles) | All reached title/menu/puzzle-selection screens; S has puzzle-solving coverage, and S/S2/S3 saves were checked by the user. X's menu character and Easy Puzzle tutorial movie render | Every mode, puzzle completion and save/reload in every title; remaining tutorial clips |
 | Piczle Cross: Story of Seasons | Title scene, menus and gameplay; ground and building rendering fixed | Complete a puzzle, save/reload, longer farm play, audio and Journal |
-| Piczle Cross: Rune Factory | Title/profile screens, tutorial and puzzle RFN008 with its outdoor background | Complete a puzzle and save/reload; remaining skipped compute programs |
-| Piczle Puzzle & Watch Collection | Main menu; cold startup and menu tested with asynchronous shaders; sampler format mismatch fixed | Enter and play the included games; saving, audio and longer play |
+| Piczle Cross: Rune Factory | Main-menu terrain and tutorial-room colors restored; indirect draws/dispatches execute; observed SULD failures fixed; RFN008 tested | Complete a puzzle and save/reload; longer play and other scenes |
+| Piczle Puzzle & Watch Collection | Opening confirmed working by the user after the Rune Factory fixes; colored title consoles and game boxes/reflections restored; layered rendering and formatted buffer reads verified | Included-game completion, saving, audio and longer play |
 
 The three Piczle games now boot without experimental flags. PICROSS S keeps its declared system resources and its virtual
 allocator works. Each Piczle game switched back to S in the same process; S → Story of Seasons also passed. Other title pairs
-remain unverified. Shader policy is automatic per title: PICROSS synchronous, Piczle asynchronous. See the README's launch instructions.
+remain unverified. Shader policy is automatic per title: PICROSS and Rune Factory synchronous; Story of Seasons and Puzzle & Watch asynchronous. See the README's launch instructions.
 
 Latest checks: runtime build, movie regressions (including ASan/UBSan), shader-policy/drain tests, storage-image GPU tests,
 integer sampled-texture regressions and 2,000 generated shader cases. PICROSS S and Puzzle & Watch reached their menus with
@@ -31,6 +31,95 @@ No title depends on owning or installing PICROSS S. It is used as a regression r
 roots containing only an S9 card or only a Story of Seasons card were tested through the launcher; each loaded its own game
 library and modules. Missing game names now use a generic label, manifest-directory discovery does not probe S's manifest,
 and a missing/invalid NPDM program ID fails instead of borrowing S's identity or the previous title's identity.
+
+## Rune Factory colors and missing terrain (2026-11-26)
+
+The yellow/blue scene came from a corrupted 1024x32 color lookup table. Rune Factory generates this texture once; skipping
+its draw while an asynchronous shader compiles leaves invalid data for subsequent tone mapping. Synchronous compilation
+produced a valid lookup table and correct colors. Rune Factory now defaults to synchronous compilation. Current shipped
+manifest policy overrides stale imported `async_shaders` fields; custom installs without a shipped policy retain theirs,
+and the diagnostic environment override still wins.
+
+The landscape was a separate omission: the main view uses `DrawElementsIndirect`, which the Vulkan executor silently
+ignored. It now resolves indirect array/indexed draw and compute-dispatch arguments at execution time, after synchronizing
+prior GPU writes, then uses the existing draw/dispatch paths. First-index byte offsets, signed base vertices and base
+instances are preserved; zero vertex/instance/group counts do no work. The CPU resolution path adds GPU waits; native
+indirect command submission remains a possible performance improvement.
+
+Verified on Linux/Vulkan/NVIDIA RTX 5070 Ti:
+
+- The main menu shows grass, dirt and paths beneath the buildings; the tutorial room has normal material colors.
+- The validation-enabled menu capture reported no Vulkan errors or shader/pipeline failures. A separate cold-cache run,
+  including a disabled NVIDIA disk cache, reached the main menu and tutorial room with the default synchronous policy.
+  After compilation the tutorial room held about 58–60 fps, with zero skipped work. The menu was slower with indirect
+  argument synchronization; full gameplay completion and save/reload remain unverified.
+- `PICRECOMP_VK_VALIDATION=1 tools/test_vk_indirect.sh`: real GPU writes supply indirect arguments immediately before indexed
+  and array draws and a 2x2x2 compute dispatch. Pixel/counter results pass, along with nonzero first indices, negative base
+  vertices, base instances, execution-time reads and zero-count no-ops.
+- `tools/test_shader_policy.sh` passes, including updated shipped policy overriding stale imported metadata.
+
+## Puzzle & Watch missing scenes and console textures (2026-11-26)
+
+The intro and menu geometry were rendered, then disappeared during tone mapping. Its color-grading lookup table is a
+32-slice 3D render target, generated by an instanced draw with a geometry shader. The Vulkan backend rejected 3D attachment
+views and ignored the geometry stage. It now creates compatible slice views, sets the framebuffer's layer count, and
+translates/compiles/binds geometry programs, including per-vertex attribute reads, ISBERD, VMAD, VSETP, invocation information,
+layer output and vertex emission. Clip conversion occurs once, in the last vertex-processing stage. Geometry texture
+resources and unsupported instruction forms fail explicitly; this is not complete tessellation/geometry coverage.
+
+A second issue made the recovered title consoles pale and incorrectly textured: TLD buffer reads used unsigned raw views
+for half-float UV data. Sampled buffers now preserve float/normalized/signed/unsigned format conversion and select matching
+sampler declarations. Raw SULD and storage-buffer views retain their own semantics. These are runtime changes; generated
+game libraries and publisher assets are unchanged, and shader caches key on generated source.
+
+Verified on Linux/Vulkan/NVIDIA RTX 5070 Ti:
+
+- The startup 3D camera sequence is visible, the title shows yellow/red/cyan console artwork with reflections, and game selection
+  shows the illustrated boxes and their reflections. Selecting Unbox also rendered the box-opening sequence. The final
+  validation run reported no Vulkan errors or shader/pipeline failures, with zero skipped work after compilation.
+  A synchronous-startup comparison ruled out asynchronous compilation
+  as the cause of the pale consoles.
+- `PICRECOMP_VK_VALIDATION=1 tools/test_vk_layered.sh`: synthetic Maxwell geometry instructions execute through the runtime's
+  graphics pipeline. All 3D slices / array layers match, including selected layer ranges, mip levels and clip conversion.
+- `PICRECOMP_VK_VALIDATION=1 tools/test_vk_texel.sh`: half-float, UNORM, SNORM, unsigned and signed buffer reads match their
+  expected register values; descriptor formats and sampler numeric types agree.
+- Storage-image promotion and raw SULD GPU regressions pass with validation. 2,000 generated shader cases compared with
+  `abfe752` produced no MSL differences; all 849 successful GLSL translations compiled and passed SPIR-V validation.
+
+The user confirmed on 2026-11-26 that the opening now works after the Rune Factory fixes. The exact connection to those
+changes has not been isolated. Earlier local tests also showed the moving startup camera sequence with a clean runtime
+shader cache, at 1280x720 and 1920x1080, with audio enabled, and through launcher autoplay. The package's full directory
+inventory contains no standalone movie asset, although the executable imports movie APIs. The earlier menu smoke tests
+had missed the absent 3D scenes. Full included-game completion, save/reload and audio remain unverified; Windows and other
+GPUs remain untested.
+
+## Rune Factory buffer surface loads (2026-11-26)
+
+The two observed compute failures (`0xeb10048200490300`, `0xeb10028200480488`) were SULD.B.1D U128 loads. The Vulkan
+translator now supports raw 32-, 64- and 128-bit buffer surface loads: byte addresses select words from an R32_UINT view,
+independent of the texture's declared format, and data goes directly into consecutive guest registers. The address and all
+loaded words are captured before writing destinations, including the game's R0..R3 load addressed by R3. Raw reads use a
+read-only texel-buffer descriptor and do not mark memory as GPU-written. Raw loads and formatted stores of the same image
+handle have separate views. Unsupported dimensions, sub-word sizes and other unimplemented forms fail explicitly.
+
+The byte-addressing semantics follow NVIDIA's [surface-memory instruction description](https://patents.google.com/patent/US9519947B2/en).
+This is a runtime translator/backend fix; generated game libraries and assets are unchanged. Shader caches key on source.
+
+Verified on Linux/Vulkan/NVIDIA RTX 5070 Ti:
+
+- Rune Factory loaded a scratch copy of the existing save and reached RFN008. Its puzzle board and outdoor background
+  rendered; after compilation, draws and compute dispatches had zero skips. The validation-enabled run reported no Vulkan
+  errors, shader translation failures or pipeline failures. A normal run then held about 58.5–60 fps with zero skips in
+  the tested puzzle. Puzzle completion, saving and longer play remain unverified.
+- `PICRECOMP_VK_VALIDATION=1 tools/test_vk_suld.sh` translates and executes synthetic Maxwell shaders with the real view
+  resolver, without game data. Raw values match for U32/U64/U128 at nonzero byte offsets, including float/NaN/sign bit
+  patterns and an address/destination overlap. RGBA32_FLOAT and R16_FLOAT source descriptors both retain raw word semantics.
+  Out-of-range reads return zero; shared raw-load/formatted-store handles and rejection of unsupported forms are checked.
+- 4,000 generated translator cases, compared with `abfe752`: no MSL differences; all 1,916 successful GLSL translations
+  compiled and passed SPIR-V validation, with zero compile or validation failures. The existing missing default reference
+  and local development-header limitation still apply; the explicit reference and scratch header were used.
+
+Other GPUs and Windows remain untested.
 
 ## Startup allocator and texture limits (2026-11-26)
 
@@ -53,8 +142,8 @@ Checks on Linux/NVIDIA, with both old environment variables absent:
 - Each of the three Piczle games switched back to S, which reached its main menu. Puzzle & Watch → S also ran with Vulkan
   validation enabled, without validation errors; existing unused-fragment-output warnings remain.
 
-Rune Factory still reports two unsupported SULD compute programs (instruction words `0xeb10048200490300` and
-`0xeb10028200480488` in local logs). This startup fix does not resolve those shaders or establish full gameplay support.
+At this point Rune Factory still reported two unsupported SULD compute programs, subsequently fixed by the buffer-load
+work above. The startup fix alone did not establish full gameplay support.
 Scripted Story of Seasons input exercised drawing on S004, but did not complete it; puzzle-completion/save-reload remains
 unverified. All gameplay checks used scratch saves and left the user's save files unchanged.
 
@@ -401,9 +490,9 @@ Removed in this stage: the Android, macOS and Metal ports, and every name from E
 
 ## Next steps
 
-1. Implement Rune Factory's remaining SULD compute programs, then recheck its puzzle rendering and skipped dispatches.
-2. Complete a puzzle, quit and reload its save in each Piczle game. For Puzzle & Watch, first test entry into its included games.
-   Check audio, remaining skipped compute programs, long frames and any renewed watchdog failures.
+1. Complete a puzzle, quit and reload its save in each Piczle game. For Puzzle & Watch, first test entry into its included games.
+2. Check audio and longer play in Rune Factory and the other Piczle games, including other scenes, long frames and any
+   renewed watchdog failures or newly encountered unsupported shader instructions.
 3. Make the translator regression workflow reproducible: its default reference commit is absent from this checkout and
    the local SPIRV-Tools development header was missing. Then broaden gamepad, remaining modes and tutorial-movie checks.
 4. Test AMD/Intel subgroup behavior and the Windows build; address the inherited cleanup items separately.
@@ -716,7 +805,8 @@ menus was black), and audout ignoring an uninitialised buffer data offset (a cra
 2D / 3D image stores (SUST.P.2D / .3D) work since 2026-11-24: an image a compute shader stores to is recreated with STORAGE usage on
 first use (contents copied; only those images, storage usage can cost compression), viewed as UNORM for sRGB, float or integer
 image type by the bound format (a shader variant); test check_image_stores. Here: two 1920x1080 B10G11R11 targets. The main
-menu then shows the full town in daylight, the puzzle list its scene. Around 100 draws a frame are skipped for other reasons (not looked at).
+menu then shows the full town in daylight, the puzzle list its scene. Around 100 draws a frame were still skipped at that
+stage; the 2026-11-26 SULD fix above removes the remaining observed skips in the RFN008 run.
 Once the town behind the profile screen stayed black in one run and not in the next five (timing; not reproduced since).
 Debug: `PICRECOMP_DUMP_FAILED=1` writes the code words of a shader that fails to translate (build/glsl/<addr>_<stage>_failed.txt).
 

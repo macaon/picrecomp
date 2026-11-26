@@ -315,6 +315,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     if (depthfmt) usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     else if (format_supports(vf, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     VkImageCreateFlags flags = 0;
+    if (type == VK_IMAGE_TYPE_3D) flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
     if (!depthfmt) flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;  // format views (NVN texture views, raw sRGB views)
     if (b->storage == 1 && !depthfmt && samples == 1) {  // (only images a shader stores to: storage usage can cost compression)
         VkFormat sf = vk_storage_format(vf);
@@ -831,6 +832,22 @@ VkFormat vk_sampled_format(NvnTexture *t, const NvnTextureView *v, bool has_view
     return view_format(t, b, has_view ? v : NULL);
 }
 
+// A framebuffer can address slices of a 3D image as layers (UE4's instanced color-grading LUT draw).
+static uint32_t render_layer_range(TexBackend *b, const NvnTextureView *v, uint32_t *base) {
+    uint32_t lv = v && (v->setmask & 1) ? v->base_level : 0;
+    if (lv >= b->levels) lv = b->levels - 1;
+    uint32_t total = b->base_type == VK_IMAGE_VIEW_TYPE_3D ? (b->depth >> lv ? b->depth >> lv : 1) : b->layers;
+    *base = v && (v->setmask & 2) ? v->min_layer : 0;
+    if (*base >= total) *base = total - 1;
+    uint32_t n = v && (v->setmask & 2) && v->num_layers ? v->num_layers : total - *base;
+    return n > total - *base ? total - *base : n;
+}
+
+uint32_t vk_render_layers(NvnTexture *t, const NvnTextureView *v, bool has_view) {
+    uint32_t base;
+    return render_layer_range(vk_tex(t, true), has_view ? v : NULL, &base);
+}
+
 VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render, int want_textype) {
     TexBackend *b = vk_tex(t, render);
     if (!has_view) v = NULL;
@@ -844,9 +861,9 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
     if (ly0 >= b->layers) ly0 = b->layers - 1;
     if (ly0 + nly > b->layers) nly = b->layers - ly0;
     if (render) {
-        VkImageViewType type = b->base_type == VK_IMAGE_VIEW_TYPE_3D ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
-        if (b->base_type == VK_IMAGE_VIEW_TYPE_3D) return VK_NULL_HANDLE;  // (3D render targets: not used by the game)
-        return vk_image_view(b, type, fmt, lv0, 1, ly0, 1, IDENTITY, b->aspect);
+        nly = render_layer_range(b, v, &ly0);
+        VkImageViewType type = nly > 1 || b->base_type == VK_IMAGE_VIEW_TYPE_3D ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        return vk_image_view(b, type, fmt, lv0, 1, ly0, nly, IDENTITY, b->aspect);
     }
     VkImageAspectFlags aspect = b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : b->aspect;
     VkComponentMapping sw = IDENTITY;

@@ -82,7 +82,13 @@ int main(void) {
     unsetenv("PICRECOMP_ASYNC_SHADERS");
     assert(sync_shaders());
     load_title("{\"slug\":\"test-piczle\",\"async_shaders\":false}");
-    assert(sync_shaders());  // An explicit installed field overrides the manifest.
+    assert(!sync_shaders());  // Current runtime policy overrides stale imported metadata.
+    snprintf(path, sizeof path, "%s/titles/test-piczle.json", fixture);
+    write_text(path, "{\"async_shaders\": false}");
+    load_title("{\"slug\":\"test-piczle\",\"async_shaders\":true}");
+    assert(sync_shaders());
+    load_title("{\"slug\":\"custom-unshipped-title\",\"async_shaders\":true}");
+    assert(!sync_shaders()); // Custom installs retain their own policy when no shipped manifest provides one.
     load_title("{\"async_shaders\":trueish}");
     assert(sync_shaders());
     load_title("{\"slug\":\"../test-piczle\"}");

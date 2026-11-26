@@ -2,7 +2,7 @@
 // SPIR-V at runtime with shaderc). ShaderKey.glsl selects the dialect; the MSL output does not depend on it.
 //
 // GLSL contract (what the Vulkan renderer binds):
-//  - `#version 460`, entry point `main`. Descriptor set: vertex 0, fragment 1, compute 0.
+//  - `#version 460`, entry point `main`. Descriptor set: vertex 0, fragment 1, geometry 2, compute 0.
 //  - hardware cbuf k -> binding k: `layout(std140, set=S, binding=k) uniform CB<k> { uvec4 cb<k>[N]; };`
 //    (anonymous block). N = max(cbuf_size[k] / 16, highest constant-index vec4 + 1), and at least 4096 when
 //    cbuf_dynamic has bit k (the renderer binds up to 64 KB). Register-indexed reads are clamped to N - 1.
@@ -43,9 +43,10 @@ typedef struct {
     bool flip_y;            // lower-left window origin
     bool flip_x;            // mirror the image left to right (mirror mode's scene composite). (In the padding
                             // after flip_y: keys without it hash as before - shader caches stay valid.)
+    uint8_t geometry_input; // GLSL: 0 absent, 1 points, 2 lines, 3 triangles; defer vertex clip conversion to GS
     uint32_t vs_out_mask;   // fragment: varyings the vertex shader provides
     uint8_t glsl;           // emit Vulkan GLSL (see the contract above) instead of MSL
-    uint32_t buf_mask;      // GLSL: texture slots (bit i) that hold a buffer texture: a TLD on a 1D slot is then a usamplerBuffer fetch
+    uint32_t buf_mask;      // GLSL: texture slots (bit i) that hold a buffer texture: a 1D TLD uses a typed samplerBuffer fetch
     uint64_t uint_tex_mask, sint_tex_mask; // GLSL sampled texture slots: numeric type of the bound view
 } ShaderKey;
 
@@ -55,7 +56,7 @@ typedef struct {
     bool shadow, is_array, is_image, bindless;
     uint32_t bindless_cbuf, bindless_offset;
     uint32_t separate_sampler_offset;
-    uint8_t img_kind;        // is_image: 1 SUST store (imageBuffer, any format), 2 SUATOM (r32ui uimageBuffer), 3 / 4 SUST to a 2D / 3D image
+    uint8_t img_kind;        // is_image: 1 buffer SUST, 2 SUATOM, 3/4 2D/3D SUST, 5 raw buffer SULD (R32_UINT view)
 } ShaderTexture;
 
 typedef struct {
@@ -68,7 +69,7 @@ typedef struct {
     ShaderTexture tex[64];
     uint32_t attr_mask;     // vertex: input attributes; fragment: input varyings
     uint32_t out_mask;      // vertex: output varyings; fragment: render targets written
-    bool writes_depth, uses_discard, writes_point_size;
+    bool writes_depth, uses_discard, writes_point_size, writes_layer;
     uint32_t tld1d_mask;    // GLSL: texture slots only a TLD on a 1D target used (the ones that may be buffer textures: ShaderKey.buf_mask)
     bool uses_gmem;         // global memory access: bind the guest heap at GMEM_BUFFER_INDEX
     bool uses_gmem_map;     // (GLSL compute only) gmem loads look their address up in GMap (uniform, binding

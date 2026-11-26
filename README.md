@@ -21,7 +21,7 @@ Work in progress, for developers and testers. There are no packaged releases.
 | Graphics | Vulkan 1.3 |
 | Verified | PICROSS S: puzzle selection, solving a puzzle, completed-puzzle thumbnails and audio. Saves kept separately for S/S2/S3. Other PICROSS titles have title/menu/puzzle-selection smoke tests; Piczle coverage is described below |
 | Not verified | Saves across restarts in every game, every game mode, AMD and Intel GPUs (the shaders need 32-wide subgroups, which the runtime asks for; testers welcome: look for `[vk] subgroups:` in the log) |
-| Known limitations | The system controller-pairing screen is skipped. Piczle gameplay coverage is limited; Rune Factory still skips two unsupported compute shaders. See the per-title notes |
+| Known limitations | The system controller-pairing screen is skipped. Piczle gameplay coverage is limited, including puzzle completion, save/reload and longer play. See the per-title notes |
 
 Story of Seasons has reached gameplay; Rune Factory has reached its tutorial and a rendered puzzle board; Puzzle & Watch
 has reached its main menu. Puzzle completion and save/reload have not been verified across these three games. Most recorded
@@ -159,11 +159,11 @@ already-mapped allocator pages and reports the texture limits the games need. It
 size during startup. All three Piczle games were tested switching back to PICROSS S; S → Story of Seasons was also checked.
 Other title pairs remain unverified. The old `PICRECOMP_TEMP_DI` and `PICRECOMP_TEMP_KEEP_SRS` experiments have been removed.
 
-Shader compilation policy is automatic: PICROSS waits for shaders so one-time texture draws are preserved; the Piczle
-manifests enable asynchronous compilation to avoid UE4's startup watchdog. A cold Piczle launch may show black or incomplete
-frames while shaders compile. `PICRECOMP_ASYNC_SHADERS=0` forces synchronous compilation; `=1` forces asynchronous compilation.
-Use those overrides for diagnosis: forcing asynchronous compilation in PICROSS can leave puzzle previews blank, while
-forcing synchronous compilation in Piczle can trigger the watchdog. Rebuilding generated game libraries is unnecessary for
+Shader compilation policy is automatic: PICROSS and Rune Factory wait for shaders so one-time texture draws are preserved.
+Story of Seasons and Puzzle & Watch enable asynchronous compilation to avoid UE4's startup watchdog; cold launches may show
+black or incomplete frames while shaders compile. The current shipped manifest takes precedence over stale imported policy. `PICRECOMP_ASYNC_SHADERS=0` forces synchronous compilation; `=1` forces asynchronous compilation.
+Use those overrides for diagnosis: forcing asynchronous compilation in PICROSS can leave puzzle previews blank, and in Rune
+Factory can corrupt its color lookup table. Forcing synchronous compilation in other Piczle titles can trigger the watchdog. Rebuilding generated game libraries is unnecessary for
 these runtime shader fixes.
 
 ## Controls

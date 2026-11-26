@@ -250,6 +250,8 @@ static void create_device(void) {
     q12.pNext = &q13;
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &q2);
     g_vk.bda = q12.bufferDeviceAddress && g_vk.host_import;  // (global memory outside the guest heap: exec.c gfar_table)
+    g_vk.layer_output = q12.shaderOutputLayer;
+    g_vk.geometry_shader = have.features.geometryShader;
     {   // Maxwell runs 32 threads per warp and the games' shaders rely on it (ballots, shuffles, lane masks: UE4's light
         // grid in Piczle Cross takes one atomic per warp). NVIDIA's subgroups are always 32; AMD RDNA (32 or 64) and
         // Intel (8 to 32) choose per pipeline unless asked: pipelines whose shaders need it ask for 32 where allowed.
@@ -267,13 +269,15 @@ static void create_device(void) {
     VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                                             .timelineSemaphore = VK_TRUE, .shaderInt8 = VK_TRUE, .samplerMirrorClampToEdge = VK_TRUE,
                                             .uniformAndStorageBuffer8BitAccess = VK_TRUE, .storageBuffer8BitAccess = VK_TRUE,
-                                            .scalarBlockLayout = VK_TRUE, .bufferDeviceAddress = g_vk.bda, .pNext = &f13};
+                                            .scalarBlockLayout = VK_TRUE, .bufferDeviceAddress = g_vk.bda,
+                                            .shaderOutputLayer = g_vk.layer_output, .pNext = &f13};
     VkPhysicalDeviceVulkan11Features f11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
                                             .storageBuffer16BitAccess = VK_TRUE, .pNext = &f12};
     VkPhysicalDeviceFaultFeaturesEXT ff = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT, .deviceFault = VK_TRUE,
                                            .pNext = &f11};
     VkPhysicalDeviceFeatures2 f = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = fault ? (void *)&ff : (void *)&f11};
     VkPhysicalDeviceFeatures *b = &f.features, *h = &have.features;
+    b->geometryShader = g_vk.geometry_shader;
     b->independentBlend = h->independentBlend;
     b->dualSrcBlend = h->dualSrcBlend;
     b->fillModeNonSolid = h->fillModeNonSolid;

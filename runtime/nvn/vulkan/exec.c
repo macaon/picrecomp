@@ -876,7 +876,7 @@ static uint32_t tex_wh[2][64][2];
 
 // ================================================================== render passes
 static VkFormat pass_color[8], pass_depth, pass_stencil;
-static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
+static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h, pass_layers = 1;
 static int debug_pass_no;
 
 // Redundant-state filter: what draw() last set in the current command buffer, so unchanged pipeline binds, dynamic
@@ -959,6 +959,7 @@ static void begin_pass(void) {
     }
     VkRenderingAttachmentInfo ca[8], da = {0}, sa = {0};
     uint32_t w = 0, minw = UINT32_MAX, minh = UINT32_MAX;  // w: first attachment seen
+    uint32_t minlayers = UINT32_MAX;
     pass_ncolor = (uint32_t)st.rt.ncolor;
     pass_samples = 1;
     for (int i = 0; i < st.rt.ncolor; i++) {
@@ -970,6 +971,8 @@ static void begin_pass(void) {
         VkImageView v = vk_view(t, &st.rt.cview[i], st.rt.has_cview[i], true, TEXTYPE_2D);
         TexBackend *b = t->backend;
         if (!v) continue;
+        uint32_t layers = vk_render_layers(t, &st.rt.cview[i], st.rt.has_cview[i]);
+        if (layers < minlayers) minlayers = layers;
         ca[i].imageView = v;
         ca[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         ca[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -995,6 +998,8 @@ static void begin_pass(void) {
         VkImageView v = vk_view(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
         TexBackend *b = st.rt.depth->backend;
         if (v && renderer_format_is_depth(st.rt.depth->format)) {
+            uint32_t layers = vk_render_layers(st.rt.depth, &st.rt.dview, st.rt.has_dview);
+            if (layers < minlayers) minlayers = layers;
             VkRenderingAttachmentInfo a = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = v,
                                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL, .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
                                            .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
@@ -1010,7 +1015,9 @@ static void begin_pass(void) {
     }
     if (!w) { pass_sx = pass_sy = 1; minw = minh = 16; }
     pass_w = minw; pass_h = minh;
-    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}}, .layerCount = 1,
+    pass_layers = minlayers == UINT32_MAX ? 1 : minlayers;
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}},
+                          .layerCount = pass_layers,
                           .colorAttachmentCount = pass_ncolor, .pColorAttachments = ca,
                           .pDepthAttachment = has_d ? &da : NULL, .pStencilAttachment = has_s ? &sa : NULL};
     vkCmdBeginRendering(cb, &ri);
@@ -1185,7 +1192,7 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
         }
         VkImageAspectFlags dsa = (depth && pass_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil && pass_stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
         if (dsa) a[n++] = (VkClearAttachment){.aspectMask = dsa, .clearValue.depthStencil = {dval, sval}};
-        VkClearRect cr = {rect, 0, 1};
+        VkClearRect cr = {rect, 0, pass_layers};
         if (n) vkCmdClearAttachments(cb, n, a, 1, &cr);
         return;
     }
@@ -1217,13 +1224,13 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
 // ================================================================== programs
 #define MAX_BIND 96
 typedef struct {
-    ShaderInfo *vi, *fi;
-    uint64_t code[2], cmax[2];  // translation inputs (copied: translated on the translator thread)
+    ShaderInfo *vi, *fi, *gi;
+    uint64_t code[3], cmax[3];  // translation inputs (copied: translated on the translator thread)
     ShaderKey vkey, fkey;
-    VkShaderModule vs, fs;
+    VkShaderModule vs, fs, gs;
     VkBindingInfo binds[MAX_BIND];
     int nbinds;
-    VkDescriptorSetLayout set_layout[2];
+    VkDescriptorSetLayout set_layout[3];
     VkPipelineLayout layout;
     bool vs_uses_vid;
     _Atomic int state;  // 0 building, 1 ready, 2 failed
@@ -1232,6 +1239,7 @@ typedef struct {
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
     p->set_layout[0] = vk_set_layout(p->binds, p->nbinds, 0, s0);
     if (nsets > 1) p->set_layout[1] = vk_set_layout(p->binds, p->nbinds, 1, s1);
+    if (nsets > 2) p->set_layout[2] = vk_set_layout(p->binds, p->nbinds, 2, VK_SHADER_STAGE_GEOMETRY_BIT);
     VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = (uint32_t)nsets,
                                      .pSetLayouts = p->set_layout};
     VkPipelineLayout l;
@@ -1264,19 +1272,23 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
 
 static void compile_program(void *arg) {
     Prog *p = arg;
-    size_t nv = 0, nf = 0;
+    size_t nv = 0, nf = 0, ng = 0;
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
-    if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
+    uint32_t *sg = p->gi && sf ? vk_glsl_to_spirv(p->gi->msl, STAGE_GEOMETRY, "gs", &ng) : NULL;
+    if (!sv || !sf || (p->gi && !sg)) { free(sv); free(sf); free(sg); atomic_store(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
+    if (sg) p->nbinds += vk_reflect(sg, ng, p->binds + p->nbinds, MAX_BIND - p->nbinds);
     p->vs = vk_module(sv, nv);
     p->fs = vk_module(sf, nf);
+    if (sg) p->gs = vk_module(sg, ng);
+    free(sg);
     free(sv);
     free(sf);
-    p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+    p->layout = make_layout(p, p->gi ? 3 : 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
+    atomic_store(&p->state, p->vs && p->fs && (!p->gi || p->gs) ? 1 : 2);
 }
 
 static void translate_program(void *arg) {
@@ -1289,6 +1301,12 @@ static void translate_program(void *arg) {
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
     if (p->vi->msl) {
         p->fkey.vs_out_mask = p->vi->out_mask;
+        if (p->code[2]) {
+            ShaderKey gkey = p->vkey;
+            gkey.vs_out_mask = p->vi->out_mask;
+            p->gi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[2], p->cmax[2], STAGE_GEOMETRY, &gkey);
+            p->fkey.vs_out_mask = p->gi->out_mask;
+        }
         if (p->code[1]) p->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[1], p->cmax[1], STAGE_FRAGMENT, &p->fkey);
         else {  // a depth-only program (Piczle Cross's shadow / depth passes): nothing to shade, nothing written
             p->fi = calloc(1, sizeof *p->fi);
@@ -1304,6 +1322,12 @@ static void translate_program(void *arg) {
         atomic_store(&p->state, 2);
         return;
     }
+    if (p->gi && !p->gi->msl) {
+        LOG("[shader] GS translate failed: %s (code %llx)\n", p->gi->error, (unsigned long long)p->code[2]);
+        dump_failed(p->code[2], p->cmax[2], "gs");
+        atomic_store(&p->state, 2);
+        return;
+    }
     if (!p->fi->msl) {
         LOG("[shader] FS translate failed: %s (code %llx)\n", p->fi->error, (unsigned long long)p->code[1]);
         dump_failed(p->code[1], p->cmax[1], "fs");
@@ -1313,6 +1337,7 @@ static void translate_program(void *arg) {
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
     if (p->code[1]) save_glsl(p->fi->msl, p->code[1], "fs");
+    if (p->gi) save_glsl(p->gi->msl, p->code[2], "gs");
     run_job(compile_program, p);
 }
 
@@ -1322,7 +1347,7 @@ static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     if (!(np->stage_mask & 1)) return NULL;  // (no fragment shader: a depth-only draw, translate_program gives it an empty one)
     uint64_t h = 0xcbf29ce484222325ull;
-    for (int i = 0; i < 2; i++) { uint64_t a = np->stages[i].code_addr; for (int k = 0; k < 8; k++) { h ^= (a >> (k * 8)) & 0xFF; h *= 0x100000001B3ull; } }
+    for (int i = 0; i < 3; i++) { uint64_t a = np->stages[i].code_addr; for (int k = 0; k < 8; k++) { h ^= (a >> (k * 8)) & 0xFF; h *= 0x100000001B3ull; } }
     const uint8_t *vb = (const uint8_t *)vkey;
     for (size_t i = 0; i < sizeof *vkey; i++) { h ^= vb[i]; h *= 0x100000001B3ull; }
     for (int i = 0; i < 8; i++) { h ^= fkey->rt_kind[i]; h *= 0x100000001B3ull; }
@@ -1336,7 +1361,7 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     Prog *p = calloc(1, sizeof *p);
     prog_tab[slot].key = h;
     prog_tab[slot].prog = p;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->cmax[i] = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
     }
@@ -1575,12 +1600,20 @@ static const void *sg32_next(const ShaderInfo *si, VkShaderStageFlagBits stage, 
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
     PipeKey *k = &pp->k;
-    VkPipelineShaderStageCreateInfo stages[2] = {
+    if (k->prog->vi->writes_layer && !g_vk.layer_output) {
+        LOG("[vk] this GPU lacks vertex shader layer output required by the game\n");
+        atomic_store(&pp->state, 2);
+        return;
+    }
+    VkPipelineShaderStageCreateInfo stages[3] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = k->prog->fs, .pName = "main"}};
-    VkPipelineShaderStageRequiredSubgroupSizeCreateInfo sgv, sgf;
+    if (k->prog->gs) stages[2] = (VkPipelineShaderStageCreateInfo){.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_GEOMETRY_BIT, .module = k->prog->gs, .pName = "main"};
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfo sgv, sgf, sgg;
     stages[0].pNext = sg32_next(k->prog->vi, VK_SHADER_STAGE_VERTEX_BIT, &sgv);
     stages[1].pNext = sg32_next(k->prog->fi, VK_SHADER_STAGE_FRAGMENT_BIT, &sgf);
+    if (k->prog->gs) stages[2].pNext = sg32_next(k->prog->gi, VK_SHADER_STAGE_GEOMETRY_BIT, &sgg);
     VkVertexInputAttributeDescription va[32];
     VkVertexInputBindingDescription vb[17];
     VkVertexInputBindingDivisorDescriptionEXT vd[17];
@@ -1627,7 +1660,7 @@ static void build_pipeline(void *arg) {
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .colorAttachmentCount = k->ncolor,
                                         .pColorAttachmentFormats = k->color, .depthAttachmentFormat = k->depth,
                                         .stencilAttachmentFormat = k->stencil};
-    VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri, .stageCount = 2,
+    VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri, .stageCount = k->prog->gs ? 3 : 2,
                                        .pStages = stages, .pVertexInputState = &vi, .pInputAssemblyState = &ia, .pViewportState = &vs,
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = k->prog->layout};
@@ -1689,7 +1722,7 @@ static bool vk_format_is_int(VkFormat f) {
     }
 }
 
-// The variant mask of a program: bit i for a buffer texture in a 1D slot that a TLD reads (usamplerBuffer), and for a 2D / 3D
+// The variant mask of a program: bit i for a buffer texture in a 1D slot that a TLD reads (typed samplerBuffer), and for a 2D / 3D
 // image a SUST stores to, an integer-format image (uimage*: the stored registers are integers, not float bits)
 static uint32_t buffer_slots(int stage, const ShaderInfo *si) {
     uint32_t m = 0;
@@ -1714,12 +1747,12 @@ static void sampled_texture_key(int stage, const ShaderInfo *si, ShaderKey *key)
     key->uint_tex_mask = key->sint_tex_mask = 0;
     for (int i = 0; i < si->ntex && i < 64; i++) {
         const ShaderTexture *s = &si->tex[i];
-        if (s->is_image || s->shadow || s->type == TEXTYPE_BUFFER) continue;
+        if (s->is_image || s->shadow) continue;
         NvnTexture *t = shader_texture_object(stage, (ShaderTexture *)s);
-        if (!t || t->target == 10) continue;
+        if (!t) continue;
         uint32_t tic = shader_texture_handle(stage, (ShaderTexture *)s) & 0xFFFFF;
         NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
-        VkFormat f = vk_sampled_format(t, &e->view, e->has_view);
+        VkFormat f = t->target == 10 ? vk_texel_format(t) : vk_sampled_format(t, &e->view, e->has_view);
         if (!vk_format_is_int(f)) continue;
         bool sign = f == VK_FORMAT_R8_SINT || f == VK_FORMAT_R8G8_SINT || f == VK_FORMAT_R8G8B8A8_SINT ||
             f == VK_FORMAT_R16_SINT || f == VK_FORMAT_R16G16_SINT || f == VK_FORMAT_R16G16B16A16_SINT ||
@@ -1810,8 +1843,8 @@ static void ct_draw(Prog *pr, const char *what) {
     if (st.rt.depth) LOG(" d=%p/%#x%s", (void *)st.rt.depth, st.rt.depth->format, st.ds[0] && st.ds[1] ? "W" : "");
     LOG(" cm %08x vp %.0f %.0f %.0f %.0f sc %d %d %d %d | tex", st.channel_mask, st.viewport[0][0], st.viewport[0][1], st.viewport[0][2],
         st.viewport[0][3], st.scissor[0][0], st.scissor[0][1], st.scissor[0][2], st.scissor[0][3]);
-    ShaderInfo *infos[2] = {pr->vi, pr->fi};
-    for (int sg = 0; sg < 2; sg++)
+    ShaderInfo *infos[3] = {pr->vi, pr->fi, pr->gi};
+    for (int sg = 0; sg < 3; sg++)
         for (int i = 0; i < (infos[sg] ? infos[sg]->ntex : 0); i++) {
             NvnTexture *t = shader_texture_object(sg, &infos[sg]->tex[i]);
             if (t) LOG(" %s%p/%#x/%ux%u", sg ? "" : "v:", (void *)t, t->format, t->width, t->height);
@@ -1975,9 +2008,9 @@ static void resolve_feedback(Prog *pr) {
     static int off = -1;
     if (off < 0) off = getenv("PICRECOMP_NO_FEEDBACK") != NULL;
     if (off) return;
-    ShaderInfo *infos[2] = {pr->vi, pr->fi};
-    for (int sg = 0; sg < 2; sg++)
-        for (int i = 0; i < infos[sg]->ntex; i++) {
+    ShaderInfo *infos[3] = {pr->vi, pr->fi, pr->gi};
+    for (int sg = 0; sg < 3; sg++)
+        for (int i = 0; i < (infos[sg] ? infos[sg]->ntex : 0); i++) {
             NvnTexture *t = shader_texture_object(sg, &infos[sg]->tex[i]);
             if (!is_attachment(t)) continue;
             bool have = false;
@@ -2640,9 +2673,8 @@ static VkBufferView texel_import(uint64_t addr, VkDeviceSize range, VkFormat f) 
     return v;
 }
 
-// A buffer texture is read and written as raw register bits: its view is the same layout as unsigned integers, as the shader's
-// uimageBuffer / usamplerBuffer want (UE4's ClearUAV sends float or uint bits to float or uint buffers; a TLD's registers get the bits).
-// Components narrower than 32 bits keep their size (R16_UINT as is); a float or normalised one is read as its bits, not converted.
+// Raw surface operations use unsigned views (UE4 ClearUAV passes float or integer register bits).
+// Sampled TLD buffer reads retain the original format: half floats and normalized values must be converted.
 static VkFormat uint_view_format(VkFormat f, uint32_t nvn_format) {
     switch (f) {
     case VK_FORMAT_R32_SFLOAT: case VK_FORMAT_R32_SINT: return VK_FORMAT_R32_UINT;
@@ -2668,23 +2700,26 @@ static VkFormat uint_view_format(VkFormat f, uint32_t nvn_format) {
 static VkBufferView texel_view_for(int stage, ShaderInfo *si, int ti) {
     NvnTexture *t = ti < si->ntex ? shader_texture_object(stage, &si->tex[ti]) : NULL;
     bool atomic = ti < si->ntex && si->tex[ti].img_kind == 2;
-    VkFormat f = atomic || !t ? VK_FORMAT_R32_UINT : vk_texel_format(t);
-    f = uint_view_format(f, t ? t->format : 0);
+    bool raw_load = ti < si->ntex && si->tex[ti].img_kind == 5;
+    bool sampled = ti < si->ntex && !si->tex[ti].is_image;
+    VkFormat f = t ? vk_texel_format(t) : sampled ? VK_FORMAT_R32_SFLOAT : VK_FORMAT_R32_UINT;
+    if (atomic || raw_load) f = VK_FORMAT_R32_UINT;
+    if (atomic || raw_load || (ti < si->ntex && si->tex[ti].is_image)) f = uint_view_format(f, t ? t->format : 0);
     uint32_t bpb = t ? vk_texel_bytes(t) : 0;
-    if (t && bpb && ti < si->ntex && (atomic || si->tex[ti].is_image)) gpu_written_note(t->addr, (uint64_t)t->width * bpb);
+    if (t && bpb && ti < si->ntex && !raw_load && (atomic || si->tex[ti].is_image)) gpu_written_note(t->addr, (uint64_t)t->width * bpb);
     gmem_info();  // (the heap import, made on first use)
     if (t && bpb && gmem_buf && t->addr >= HEAP_BASE && t->addr - HEAP_BASE < gmem_size) {
         VkDeviceSize off = t->addr - HEAP_BASE, range = (VkDeviceSize)t->width * bpb;
         if (off + range > gmem_size) range = (gmem_size - off) & ~(VkDeviceSize)(bpb - 1);
-        if (atomic) range &= ~3ull;
+        if (atomic || raw_load) range &= ~3ull;
         if (range) {
-            vc_mark_gpu(off, off + range);
+            if (!raw_load) vc_mark_gpu(off, off + range);
             return texel_view(gmem_buf, off, range, f);
         }
     }
     if (t && bpb && g_vk.host_import && t->addr) {  // elsewhere in guest memory (the engine's own mappings): imported on its own
         VkDeviceSize range = (VkDeviceSize)t->width * bpb;
-        if (atomic) range &= ~3ull;
+        if (atomic || raw_load) range &= ~3ull;
         VkBufferView v = range ? texel_import(t->addr, range, f) : VK_NULL_HANDLE;
         if (v) return v;
     }
@@ -2693,7 +2728,7 @@ static VkBufferView texel_view_for(int stage, ShaderInfo *si, int ti) {
                          t ? (unsigned long long)t->addr : 0ull, bpb, (unsigned long long)HEAP_BASE, (unsigned long long)gmem_size);
     static uint32_t zero[64];
     VkSpan s = vk_transient_copy(zero, sizeof zero, 256);
-    return texel_view(s.buf, s.off, sizeof zero, VK_FORMAT_R32_UINT);
+    return texel_view(s.buf, s.off, sizeof zero, sampled ? f : VK_FORMAT_R32_UINT);
 }
 
 // Global memory outside the guest heap window (the engine's own mappings): each bound storage buffer there is imported on its own
@@ -3055,6 +3090,12 @@ static void draw_(CmdRec *r, bool indexed) {
     vkey.glsl = fkey.glsl = 1;
     vkey.flip_y = fkey.flip_y = nvn_window_origin() == 0;
     vkey.depth_minus_one = nvn_depth_mode() == 0;
+    if (st.program->stages[STAGE_GEOMETRY].code_addr) {
+        VkPrimitiveTopology gt; uint8_t gc;
+        if (!g_vk.geometry_shader) { SKIP(SKIP_NO_PROGRAM); return; }
+        topology((uint32_t)r->x[0], &gt, &gc);
+        vkey.geometry_input = gc + 1;
+    }
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
     Prog *pr = get_program(st.program, &vkey, &fkey);
@@ -3304,10 +3345,12 @@ static void draw_(CmdRec *r, bool indexed) {
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);
     if (prof) prof_sets += SDL_GetTicksNS() - prof_t1_;
-    VkDescriptorSet sets[2] = {vset, fset};
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pr->layout, 0, 2, sets, 0, NULL);  // (always new sets)
+    VkDescriptorSet sets[3] = {vset, fset};
+    if (pr->gi) sets[2] = stage_set(pr, pr->set_layout[2], 2, 2, pr->gi, rs0, NULL, 0, 0, 0, NULL);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pr->layout, 0, pr->gi ? 3 : 2, sets, 0, NULL);  // (always new sets)
     if (pr->vi->uses_gmem_store) vc_mark_sbufs(0);
     if (pr->fi->uses_gmem_store) vc_mark_sbufs(1);
+    if (pr->gi && pr->gi->uses_gmem_store) vc_mark_sbufs(2);
 
     uint64_t prof_t2_ = prof ? SDL_GetTicksNS() : 0;
     // ---- indices (copied; the largest index bounds the vertex data copied below)
@@ -3471,13 +3514,74 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             LOG("\n");
         }
     }
-    for (int i = 0; i < pr->fi->ntex && i < 64; i++) {  // fragment textures: guest size / format, allocation, scale
-        NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+    if (getenv("PICRECOMP_DEBUG_DATA") && (pr->fi->cbuf_mask & 2)) {
+        NvnShaderStage *fs = &st.program->stages[1];
+        const float *u = (const float *)(uintptr_t)(fs->code_addr + fs->const_offset);
+        LOG("[draw]   fconst:");
+        for (unsigned i = 0; i < 4; i++) LOG(" %.9g", u[i]);
+        LOG("\n");
+    }
+    ShaderInfo *infos[] = {pr->vi, pr->fi};
+    for (unsigned stage = 0; stage < 2; stage++) for (int i = 0; i < infos[stage]->ntex && i < 64; i++) {
+        NvnTexture *t = shader_texture_object(stage, &infos[stage]->tex[i]);
         const TexBackend *b = t ? (const TexBackend *)t->backend : NULL;
-        if (!t) { LOG("[draw]   tex%d: none\n", i); continue; }
-        LOG("[draw]   tex%d: %p %ux%u f%#x lv %u -> %ux%u scale %.4f %.4f%s\n", i, (void *)t, t->width, t->height, t->format,
+        const char *dump = getenv("PICRECOMP_DEBUG_TEXTURE"); // WxH filter, alongside PICRECOMP_DEBUG_FRAME
+        unsigned dw = 0, dh = 0;
+        if (t && b && dump && sscanf(dump, "%ux%u", &dw, &dh) == 2 && t->width == dw && t->height == dh) {
+            char path[160];
+            snprintf(path, sizeof path, "build/texture_%llx.png", (unsigned long long)(uintptr_t)t);
+            LOG("[draw]   dumped texture target %u flags %#x addr %llx label %s gpu_owned %d uploaded %d storage %d stride %llu\n",
+                t->target, t->flags, (unsigned long long)t->addr, t->label, b->gpu_owned, b->uploaded, b->storage, (unsigned long long)t->stride);
+            renderer_save_texture_tex((TexBackend *)b, path);
+        }
+        if (!t) { LOG("[draw]   stage %u tex%d: none\n", stage, i); continue; }
+        LOG("[draw]   stage %u tex%d: %p %ux%u f%#x lv %u -> %ux%u scale %.4f %.4f%s\n", stage, i, (void *)t, t->width, t->height, t->format,
             b ? b->levels : 0, b ? b->width : 0, b ? b->height : 0, b ? b->sx : 0, b ? b->sy : 0, b && b->scalable ? " scalable" : "");
     }
+}
+
+// Indirect records are consumed when the command executes, after earlier GPU writes have completed. Resolve
+// them to the existing draw path, which needs CPU-visible counts to bound vertex/index uploads. In particular,
+// zero instances must stay a no-op (the non-instanced command recorder supplies one explicitly).
+static bool expand_indirect(const CmdRec *r, const uint32_t *a, CmdRec *out) {
+    memset(out, 0, sizeof *out);
+    out->size = sizeof *out;
+    if (r->op == CMD_DISPATCH_INDIRECT) {
+        out->op = CMD_DISPATCH;
+        for (unsigned i = 0; i < 3; i++) out->x[i] = a[i];
+        return a[0] && a[1] && a[2];
+    }
+    if (!a[0] || !a[1]) return false;
+    out->x[0] = r->x[0];
+    if (r->op == CMD_DRAW_ELEMENTS_INDIRECT) {
+        unsigned type = (unsigned)r->x[1];
+        if (type > 2) return false;
+        out->op = CMD_DRAW_ELEMENTS;
+        out->x[1] = type;
+        out->x[2] = a[0];
+        out->x[3] = r->x[2] + (uint64_t)a[2] * (1u << type);
+        out->x[4] = (uint64_t)(int64_t)(int32_t)a[3];
+        out->x[5] = a[4];
+        out->x[6] = a[1];
+    } else {
+        out->op = CMD_DRAW_ARRAYS;
+        out->x[1] = a[2]; out->x[2] = a[0]; out->x[3] = a[3]; out->x[4] = a[1];
+    }
+    return true;
+}
+
+static void indirect(CmdRec *r) {
+    uint64_t addr = r->op == CMD_DRAW_ELEMENTS_INDIRECT ? r->x[3] : r->op == CMD_DRAW_ARRAYS_INDIRECT ? r->x[1] : r->x[0];
+    if (!addr) return;
+    vk_end_pass();
+    wait_why = "indirect arguments";
+    renderer_flush();
+    uint32_t args[5] = {0};
+    memcpy(args, (const void *)(uintptr_t)addr, r->op == CMD_DISPATCH_INDIRECT ? 12 : r->op == CMD_DRAW_ARRAYS_INDIRECT ? 16 : 20);
+    CmdRec direct;
+    if (!expand_indirect(r, args, &direct)) return;
+    if (direct.op == CMD_DISPATCH) dispatch_compute((uint32_t)direct.x[0], (uint32_t)direct.x[1], (uint32_t)direct.x[2]);
+    else draw(&direct, direct.op == CMD_DRAW_ELEMENTS);
 }
 
 // ================================================================== texture copies
@@ -4218,6 +4322,7 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_DISPATCH: dispatch_compute((uint32_t)r->x[0], (uint32_t)r->x[1], (uint32_t)r->x[2]); break;
         case CMD_DRAW_ARRAYS: draw(r, false); break;
         case CMD_DRAW_ELEMENTS: draw(r, true); break;
+        case CMD_DRAW_ARRAYS_INDIRECT: case CMD_DRAW_ELEMENTS_INDIRECT: case CMD_DISPATCH_INDIRECT: indirect(r); break;
         case CMD_UPDATE_UNIFORM_BUFFER:
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
             guest_copy_flush();  // (cbuf copies shared within the submission are stale now)

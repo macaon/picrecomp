@@ -84,6 +84,7 @@ typedef struct {
     // GLSL (fields kept last: the MSL path's layout, including its out-of-range reg_used writes, is unchanged)
     bool glsl;               // emit Vulkan GLSL: dialect-specific constructs here, the rest via glsl_rewrite()
     bool uses_gmem_store;    // STG present: the gmem buffer is not readonly
+    unsigned geom_vertices, geom_invocations, geom_topology;
     uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)
 } Ctx;
 
@@ -230,6 +231,20 @@ static void icmp_expr(char *out, int op, const char *a, const char *b, bool is_s
 // 0x2FC vertex id, 0x3FC front facing, 0x6C point size.
 static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
     char e[256];
+    if (c->glsl && c->stage == STAGE_GEOMETRY) {
+        if (!idx) { fail(c, "geometry input without a vertex handle"); return; }
+        if (addr >= 0x70 && addr < 0x80)
+            snprintf(e, sizeof e, "as_type<uint>(gl_in[int(%s)].gl_Position[%u])", idx, (addr >> 2) & 3);
+        else if (addr >= 0x80 && addr < 0x280) {
+            unsigned a = (addr - 0x80) >> 4;
+            if (c->key && (c->key->vs_out_mask & (1u << a))) {
+                c->in_attr_mask |= 1u << a;
+                snprintf(e, sizeof e, "as_type<uint>(gs_v%u[int(%s)][%u])", a, idx, (addr >> 2) & 3);
+            } else strcpy(e, (addr & 15) == 12 ? "0x3f800000u" : "0u");
+        } else { fail(c, "geometry input attribute %#x", addr); return; }
+        set_reg(c, dst, e);
+        return;
+    }
     if (idx) { fail(c, "indexed attribute load"); return; }
     if (c->stage == STAGE_VERTEX) {
         if (addr >= 0x80 && addr < 0x280) {
@@ -284,7 +299,7 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
 static void attr_store(Ctx *c, int src, uint32_t addr) {
     char b[16];
     const char *v = reg(c, src, b);
-    if (c->glsl && c->stage != STAGE_VERTEX) {  // no vertex outputs in this stage (MSL: undeclared `out`)
+    if (c->glsl && c->stage != STAGE_VERTEX && c->stage != STAGE_GEOMETRY) {  // no vertex outputs in this stage (MSL: undeclared `out`)
         if (addr >= 0x80 && addr < 0x280) c->out_attr_mask |= 1u << ((addr - 0x80) >> 4);
         if (addr == 0x6C) c->info->writes_point_size = true;
         sp(&c->body, "    /* store attr %#x */\n", addr);
@@ -296,6 +311,9 @@ static void attr_store(Ctx *c, int src, uint32_t addr) {
         int a = (addr - 0x80) >> 4;
         c->out_attr_mask |= 1u << a;
         sp(&c->body, "    out.v%d[%d] = as_type<float>(%s);\n", a, (addr >> 2) & 3, v);
+    } else if (addr == 0x64 && c->glsl) {
+        c->info->writes_layer = true;
+        sp(&c->body, "    gl_Layer = int(%s);\n", v);
     } else if (addr == 0x6C) {
         c->info->writes_point_size = true;
         sp(&c->body, "    out.psize = as_type<float>(%s);\n", v);
@@ -520,7 +538,6 @@ static const char *tex_type_name(int t) {
 // Write texture results: component mask selects which of r,g,b,a go to consecutive registers.
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
     bool integer = c->glsl && c->key && slot >= 0 && slot < 64 &&
-        c->info->tex[slot].type != TEXTYPE_BUFFER &&
         (((c->key->uint_tex_mask | c->key->sint_tex_mask) >> slot) & 1);
     // Integer sampling writes integer register bits, including sign extension, without a float conversion.
     if (integer) sp(&c->body, "    { uvec4 t = uvec4(%s);\n", call);
@@ -1035,7 +1052,7 @@ static void emit_tld(Ctx *c, uint64_t w, uint32_t pc, bool bindless) {
     if (array) { char ra[16]; snprintf(layer, sizeof layer, "int(%s & 0xffffu)", reg(c, a, ra)); }
     switch (target) {
     case 0:
-        if (buf) sprintf(call, "uintBitsToFloat(texelFetch(t%d, int(%s)%s))", slot, X, "");  // (the registers get the bits)
+        if (buf) sprintf(call, "texelFetch(t%d, int(%s))", slot, X);
         else if (aoffi) sprintf(call, "texelFetch(t%d, int(%s) + (int(%s << 28) >> 28), %s)", slot, X, off, lodv);
         else sprintf(call, "texelFetch(t%d, int(%s), %s)", slot, X, lodv);
         break;
@@ -1174,7 +1191,8 @@ static bool image_handle_slot(Ctx *c, uint32_t pc, unsigned reg, unsigned *k) {
 static int image_slot(Ctx *c, uint32_t pc, unsigned hreg, int kind) {
     unsigned k;
     if (!image_handle_slot(c, pc, hreg, &k)) { fail(c, "unresolved image handle at %#x", pc); return -1; }
-    int slot = tex_slot(c, 4000 + k, kind == 3 ? TEXTYPE_2D : kind == 4 ? TEXTYPE_3D : TEXTYPE_BUFFER, false, false);
+    // A raw load may share a handle with a formatted store: separate descriptors allow its R32_UINT view.
+    int slot = tex_slot(c, 4000 + k + (kind == 5 ? 16 : 0), kind == 3 ? TEXTYPE_2D : kind == 4 ? TEXTYPE_3D : TEXTYPE_BUFFER, false, false);
     ShaderTexture *t = &c->info->tex[slot];
     if (t->img_kind && t->img_kind != kind) { fail(c, "image %u used as a store and as an atomic", k); return -1; }
     t->img_kind = (uint8_t)kind;
@@ -1213,6 +1231,32 @@ static void emit_sust(Ctx *c, uint64_t w, uint32_t pc) {
     else sprintf(coords, "ivec3(int(%s), int(%s), int(%s))", reg(c, a, i[0]), reg(c, a == RZ ? RZ : a + 1, i[1]), reg(c, a == RZ ? RZ : a + 2, i[2]));
     sp(&c->body, integer ? "    imageStore(t%d, %s, uvec4(%s, %s, %s, %s));\n" : "    imageStore(t%d, %s, uintBitsToFloat(uvec4(%s, %s, %s, %s)));\n",
        slot, coords, v0, v1, v2, v3);
+}
+
+// SULD.B.1D: byte-addressed raw U32/U64/U128 loads (Rune Factory's structured buffers). The descriptor's format
+// does not convert the data: read an R32_UINT view, one word per destination register. Capture the address before
+// writing destinations: the game's U128 load into R0..R3 uses R3 as its byte address.
+static void emit_suld(Ctx *c, uint64_t w, uint32_t pc) {
+    unsigned size = (unsigned)bits(w, 20, 4);
+    if (!c->glsl || bits(w, 33, 3) != 1 || !bits(w, 52, 1) || bits(w, 51, 1) || bits(w, 49, 2) ||
+        bits(w, 24, 2) > 1 || size < 2 || size > 4) {
+        fail(c, "suld form %#llx", (unsigned long long)w);
+        return;
+    }
+    int slot = image_slot(c, pc, (unsigned)bits(w, 39, 8), 5);
+    if (slot < 0) return;
+    int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), n = 1 << (size - 2);
+    if (d != RZ && d + n > RZ) { fail(c, "suld destination range"); return; }
+    char coord[16];
+    sp(&c->body, "    { uint su_addr = %s >> 2u; uvec4 su = uvec4(0u);\n", reg(c, a, coord));
+    for (int i = 0; i < n; i++)
+        sp(&c->body, "      if (su_addr + %du < uint(textureSize(t%d))) su[%d] = texelFetch(t%d, int(su_addr + %du)).x;\n", i, slot, i, slot, i);
+    if (d != RZ) for (int i = 0; i < n; i++) {
+        char value[32];
+        snprintf(value, sizeof value, "su[%d]", i);
+        set_reg(c, d + i, value);
+    }
+    sp(&c->body, "    }\n");
 }
 
 // SUATOM on a 1D buffer image, 32-bit unsigned (bits: dest 0, coordinate 8, operand 20, op 29 (4), type 33, bindless
@@ -1335,15 +1379,65 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         attr_load(c, d, addr, NULL);
         c->ipa_mode = -1;
         if (bits(w, 51, 1) && d != RZ) sp(&c->body, "    r%d = as_type<uint>(saturate(as_type<float>(r%d)));\n", d, d);
+    } else if (c->glsl && c->stage == STAGE_GEOMETRY && OPM(0xefd0000000000000ull, 0xfff8000000000000ull)) { // ISBERD: input vertex handle
+        if (bits(w, 31, 4) || bits(w, 47, 2)) fail(c, "isberd mode/shift");
+        set_reg(c, d, R(a));
+    } else if (c->glsl && c->stage == STAGE_GEOMETRY && OPM(0x5f00000000000000ull, 0xff00000000000000ull)) { // VMAD
+        if (bits(w, 47, 1) || bits(w, 51, 5)) fail(c, "vmad cc/scale/neg/sat");
+        char av[128], bv[128], imm[32];
+        vmnmx_operand(R(a), (int)bits(w, 36, 3), bits(w, 48, 1), av);
+        if (bits(w, 50, 1)) vmnmx_operand(R((int)bits(w, 20, 8)), (int)bits(w, 28, 3), bits(w, 49, 1), bv);
+        else {
+            snprintf(imm, sizeof imm, "%uu", (unsigned)bits(w, 20, 16));
+            vmnmx_operand(imm, 4, bits(w, 49, 1), bv);
+        }
+        snprintf(t, sizeof t, "(uint(%s) * uint(%s) + %s)", av, bv, R((int)bits(w, 39, 8)));
+        set_reg(c, d, t);
+    } else if (c->glsl && c->stage == STAGE_GEOMETRY && OPM(0x50f0000000000000ull, 0xfff8000000000000ull)) { // VSETP
+        char av[128], bv[128], imm[32], cmp[512];
+        vmnmx_operand(R(a), (int)bits(w, 36, 3), bits(w, 48, 1), av);
+        if (bits(w, 50, 1)) vmnmx_operand(R((int)bits(w, 20, 8)), (int)bits(w, 28, 3), bits(w, 49, 1), bv);
+        else {
+            snprintf(imm, sizeof imm, "%uu", (unsigned)bits(w, 20, 16));
+            vmnmx_operand(imm, 4, bits(w, 49, 1), bv);
+        }
+        static const char *ops[32] = {[1]="<", [2]="==", [3]="<=", [16]=">", [17]="!=", [18]=">="};
+        int op = (int)bits(w, 43, 5), bo = (int)bits(w, 45, 2);
+        if (op == 0 || op == 19) strcpy(cmp, op ? "true" : "false");
+        else if (ops[op]) snprintf(cmp, sizeof cmp, "(%s(%s) %s %s(%s))", bits(w,49,1)?"int":"uint", av, ops[op], bits(w,49,1)?"int":"uint", bv);
+        else { fail(c, "vsetp compare %d", op); strcpy(cmp,"false"); }
+        if (bo > 2) fail(c, "vsetp boolean op");
+        sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n", cmp, P((int)bits(w,39,3),bits(w,42,1)));
+        int pa = (int)bits(w,3,3), pb = (int)bits(w,0,3);
+        if (pa != PT) { c->pred_used[pa]=1; sp(&c->body, "      p%d = cmp %s pp;\n", pa, bool_op(bo)); }
+        if (pb != PT) { c->pred_used[pb]=1; sp(&c->body, "      p%d = !cmp %s pp;\n", pb, bool_op(bo)); }
+        sp(&c->body, "    }\n");
+    } else if (c->glsl && c->stage == STAGE_GEOMETRY && OPM(0xfbe0000000000000ull, 0xfff8000000000000ull)) { // OUT (register), stream zero
+        if ((int)bits(w,20,8) != RZ) fail(c, "geometry output stream register");
+        if (bits(w,39,1)) {
+            sp(&c->body, "    gl_Position = gs_pos;\n");
+            if (c->key && c->key->flip_y) sp(&c->body, "    gl_Position.y = -gl_Position.y;\n");
+            if (c->key && c->key->flip_x) sp(&c->body, "    gl_Position.x = -gl_Position.x;\n");
+            if (c->key && c->key->depth_minus_one) sp(&c->body, "    gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5f;\n");
+            sp(&c->body, "    EmitVertex();\n");
+        }
+        if (bits(w,40,1)) sp(&c->body, "    EndPrimitive();\n");
+        set_reg(c, d, "0u");
     } else if (OPM(0xefd8000000000000ull, 0xfff8000000000000ull)) {  // LD attribute
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
         int ia = (int)bits(w, 8, 8);
         if (ia != RZ) { fail(c, "indexed ld a[]"); }
-        for (int i = 0; i < n; i++) attr_load(c, d + i, addr + 4 * i, NULL);
+        char vb[16];
+        const char *vertex = c->glsl && c->stage == STAGE_GEOMETRY ? reg(c, (int)bits(w, 39, 8), vb) : NULL;
+        if (c->glsl && c->stage == STAGE_GEOMETRY && (bits(w, 31, 2))) fail(c, "geometry ald patch/output");
+        if (vertex) sp(&c->body, "    { uint gv = %s;\n", vertex);
+        for (int i = 0; i < n; i++) attr_load(c, d + i, addr + 4 * i, vertex ? "gv" : NULL);
+        if (vertex) sp(&c->body, "    }\n");
     } else if (OPM(0xeff0000000000000ull, 0xfff8000000000000ull)) {  // ST attribute
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
+        if (c->glsl && c->stage == STAGE_GEOMETRY && (a != RZ || bits(w, 31, 1))) fail(c, "geometry ast indexed/patch");
         for (int i = 0; i < n; i++) attr_store(c, d + i, addr + 4 * i);
     } else if (OPM(0xef90000000000000ull, 0xfff8000000000000ull)) {  // LD c[idx][reg + imm]
         int idx = (int)bits(w, 36, 5);
@@ -1371,6 +1465,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         emit_tld(c, w, pc, true);
     } else if (OPM(0xeb20000000000000ull, 0xffe0000000000000ull)) {  // SUST
         emit_sust(c, w, pc);
+    } else if (c->glsl && OPM(0xeb00000000000000ull, 0xffe0000000000000ull)) {  // SULD
+        emit_suld(c, w, pc);
     } else if (OPM(0xea00000000000000ull, 0xff80000000000000ull)) {  // SUATOM
         emit_suatom(c, w, pc);
     } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {  // VMNMX
@@ -1783,6 +1879,17 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xf0c8000000000000ull, 0xfff8000000000000ull)) {  // S2R
         int sr = (int)bits(w, 20, 8);
         switch (sr) {
+        case 0x11:
+            if (c->glsl && c->stage == STAGE_GEOMETRY) set_reg(c, d, "uint(gl_InvocationID)");
+            else set_reg(c, d, "0u /* sr 0x11 */");
+            break;
+        case 0x1d: // number of vertices in this primitive; host vertex handles are zero-based
+            if (c->glsl && c->stage == STAGE_GEOMETRY) {
+                snprintf(t, sizeof t, "%uu", (unsigned)c->key->geometry_input << 16);
+                set_reg(c, d, t);
+            }
+            else set_reg(c, d, "0u /* sr 0x1d */");
+            break;
         case 0x12: set_reg(c, d, "0xbf800000u"); break;  // y_direction: -1 (lower-left)
         case 0x21: set_reg(c, d, "tid.x"); break;
         case 0x22: set_reg(c, d, "tid.y"); break;
@@ -2365,7 +2472,7 @@ static void glsl_rewrite(Ctx *c, Str *o, const char *src) {
             while (id_char(*me)) me++;
             char mem[32];
             snprintf(mem, sizeof mem, "%.*s", (int)(me - m), m);
-            if (!strcmp(mem, "pos")) sp(o, c->stage == STAGE_FRAGMENT ? "gl_FragCoord" : "gl_Position");
+            if (!strcmp(mem, "pos")) sp(o, c->stage == STAGE_FRAGMENT ? "gl_FragCoord" : c->stage == STAGE_GEOMETRY ? "gs_pos" : "gl_Position");
             else if (!strcmp(mem, "psize")) sp(o, "gl_PointSize");
             else sp(o, "%s", mem);  // a<i> (vertex input), v<i> (varying)
             p = me;
@@ -2459,10 +2566,14 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     if (info->cbuf_mask >> 18) fail(c, "cbuf index out of range");
     for (int i = 0; i < info->ntex; i++)
         if (info->tex[i].shadow && info->tex[i].type == TEXTYPE_3D) fail(c, "3d shadow texture");
+    if (stage == STAGE_GEOMETRY && info->ntex) fail(c, "geometry texture resources");
     if (c->fail) { free(body.buf); free(c->body.buf); free(c); return info; }
-    int set = stage == STAGE_FRAGMENT ? 1 : 0;
+    int set = stage == STAGE_FRAGMENT ? 1 : stage == STAGE_GEOMETRY ? 2 : 0;
     Str s = {0};
-    sp(&s, "%s", glsl_prelude);
+    if (info->writes_layer && stage == STAGE_VERTEX) {
+        const char *line = strchr(glsl_prelude, '\n');
+        sp(&s, "%.*s\n#extension GL_ARB_shader_viewport_layer_array : require\n%s", (int)(line-glsl_prelude), glsl_prelude, line+1);
+    } else sp(&s, "%s", glsl_prelude);
     for (int i = 0; i < 18; i++) {
         if (!(info->cbuf_mask & (1u << i))) continue;
         uint32_t n = info->cbuf_size[i] / 16;
@@ -2503,13 +2614,15 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     }
     for (int i = 0; i < info->ntex; i++) {
         ShaderTexture *t = &info->tex[i];
-        if (t->type == TEXTYPE_BUFFER && !t->is_image) {  // a buffer texture sampled with TLD (integer bits)
-            sp(&s, "layout(set = %d, binding = %d) uniform usamplerBuffer t%d;\n", set, 32 + i, i);
+        if (t->type == TEXTYPE_BUFFER && !t->is_image) { // TLD performs the buffer view's format conversion
+            const char *prefix = key && ((key->uint_tex_mask >> i) & 1) ? "u" : key && ((key->sint_tex_mask >> i) & 1) ? "i" : "";
+            sp(&s, "layout(set = %d, binding = %d) uniform %ssamplerBuffer t%d;\n", set, 32 + i, prefix, i);
             sp(&s, "ivec3 tsize%d(int l) { return ivec3(textureSize(t%d), 1, 1); }\n", i, i);
             continue;
         }
         if (t->is_image) {  // (buffer image: no tsize)
-            if (t->img_kind == 2) sp(&s, "layout(set = %d, binding = %d, r32ui) uniform uimageBuffer t%d;\n", set, 32 + i, i);
+            if (t->img_kind == 5) sp(&s, "layout(set = %d, binding = %d) uniform usamplerBuffer t%d;\n", set, 32 + i, i);
+            else if (t->img_kind == 2) sp(&s, "layout(set = %d, binding = %d, r32ui) uniform uimageBuffer t%d;\n", set, 32 + i, i);
             else if (t->img_kind == 3 || t->img_kind == 4)  // (format-less: shaderStorageImageWriteWithoutFormat)
                 sp(&s, "layout(set = %d, binding = %d) uniform writeonly %simage%s t%d;\n", set, 32 + i,
                    (key && ((key->buf_mask >> i) & 1)) ? "u" : "", t->img_kind == 3 ? "2D" : "3D", i);
@@ -2540,6 +2653,15 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         sp(&s, "invariant gl_Position;\nprecise gl_Position;\n");
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "layout(location = %d) out vec4 v%d;\n", i, i);
+    } else if (stage == STAGE_GEOMETRY) {
+        static const char *inputs[] = {"", "points", "lines", "triangles"};
+        const char *output = c->geom_topology == 1 ? "points" : c->geom_topology == 6 ? "line_strip" : "triangle_strip";
+        sp(&s, "layout(%s, invocations = %u) in;\nlayout(%s, max_vertices = %u) out;\nvec4 gs_pos;\n",
+           inputs[key->geometry_input], c->geom_invocations, output, c->geom_vertices);
+        for (int i = 0; i < 32; i++) {
+            if (c->in_attr_mask & (1u << i)) sp(&s, "layout(location = %d) in vec4 gs_v%d[];\n", i, i);
+            if (c->out_attr_mask & (1u << i)) sp(&s, "layout(location = %d) out vec4 v%d;\n", i, i);
+        }
     } else if (stage == STAGE_FRAGMENT) {
         for (int i = 0; i < 32; i++) {
             if (!(c->in_attr_mask & (1u << i))) continue;
@@ -2557,8 +2679,10 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         if (c->uses_shared) sp(&s, "shared uint smem[%d];\n", SMEM_WORDS);
     }
     sp(&s, "void main() {\n");
+    if (stage == STAGE_GEOMETRY) sp(&s, "  gs_pos = vec4(0, 0, 0, 1);\n");
     if (stage == STAGE_VERTEX) {
         sp(&s, "  gl_Position = vec4(0, 0, 0, 1);\n");
+        if (info->writes_layer) sp(&s, "  gl_Layer = 0;\n");
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "  v%d = vec4(0, 0, 0, 1);\n", i);
         if (info->writes_point_size) sp(&s, "  gl_PointSize = 0.0f;\n");
@@ -2585,7 +2709,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         sp(&s, "  do {\n%s  } while (false);\n", body.buf ? body.buf : "");
     }
     free(body.buf);
-    if (stage == STAGE_VERTEX) {
+    if (stage == STAGE_VERTEX && (!key || !key->geometry_input)) {
         if (key && key->flip_y) sp(&s, "  gl_Position.y = -gl_Position.y;\n");
         if (key && key->flip_x) sp(&s, "  gl_Position.x = -gl_Position.x;\n");
         if (key && key->depth_minus_one) sp(&s, "  gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5f;\n");
@@ -2643,6 +2767,14 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     // (SDK 16.2): a 0x100-byte header starting with the magic 0x12345679 (graphics: 0x12345678).
     if (stage == STAGE_COMPUTE) code = *(const uint32_t *)blob == 0x12345679u ? blob + 0x100 : blob;
     c->code = code;
+    if (c->glsl && stage == STAGE_GEOMETRY) {
+        c->geom_invocations = sph[11];
+        c->geom_topology = sph[15] & 15;
+        c->geom_vertices = *(const uint32_t *)(sph + 16) & 0xfff;
+        if (!key->geometry_input || key->geometry_input > 3 || !c->geom_invocations || !c->geom_vertices ||
+            (c->geom_topology != 1 && c->geom_topology != 6 && c->geom_topology != 7))
+            fail(c, "geometry header/input topology");
+    }
     if (stage == STAGE_FRAGMENT) {
         c->omap_target = *(const uint32_t *)(sph + 0x48);
         c->omap_depth = (*(const uint32_t *)(sph + 0x4C) >> 1) & 1;
